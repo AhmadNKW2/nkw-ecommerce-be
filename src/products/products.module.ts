@@ -26,6 +26,7 @@ import { ProductSlugRedirect } from './entities/product-slug-redirect.entity';
 import { SpecificationsModule } from '../specifications/specifications.module';
 import { ProductImportService } from './product-import.service';
 import { ProductMediaBackfillService } from './product-media-backfill.service';
+import { BrandsModule } from '../brands/brands.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { ProductMediaBackfillService } from './product-media-backfill.service';
     AttributesModule,
     SpecificationsModule,
     MediaModule,
+    forwardRef(() => BrandsModule),
     forwardRef(() => SearchModule),
   ],
   controllers: [ProductsController],

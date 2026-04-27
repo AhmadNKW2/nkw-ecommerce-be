@@ -3,12 +3,14 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
+import { appendFile, mkdir } from 'fs/promises';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { extname } from 'path';
+import { dirname, extname, isAbsolute, resolve as resolvePath } from 'path';
 import { Readable } from 'stream';
 import { AttributesService } from '../attributes/attributes.service';
 import { Attribute } from '../attributes/entities/attribute.entity';
+import { BrandsService } from '../brands/brands.service';
 import { MediaService } from '../media/media.service';
 import { Brand, BrandStatus } from '../brands/entities/brand.entity';
 import { Specification } from '../specifications/entities/specification.entity';
@@ -22,6 +24,11 @@ const NUMERIC_TOKEN_REGEX = /\d+(?:\.\d+)?/g;
 const LOOKUP_TOKEN_REGEX = /[\p{L}\p{N}]+/gu;
 const DEFINITION_MATCH_THRESHOLD = 0.78;
 const MISSING_VALUE_MARKERS = new Set(['', '-', '--', 'n/a', 'na', 'none', 'null']);
+const DEFAULT_OPENAI_LOG_PATH = resolvePath(
+  process.cwd(),
+  'logs',
+  'import_product_openai.jsonl',
+);
 
 interface ImportDefinitionValue {
   id?: number | null;
@@ -44,6 +51,7 @@ interface ParsedImportRequest {
   categoryId: number;
   vendorId: number;
   model: string;
+  sourceFile: string | null;
 }
 
 interface NormalizedImportPayload {
@@ -124,6 +132,7 @@ export class ProductImportService {
     private readonly specificationsService: SpecificationsService,
     private readonly attributesService: AttributesService,
     private readonly mediaService: MediaService,
+    private readonly brandsService: BrandsService,
   ) {}
 
   async importFromRequest(
@@ -148,6 +157,7 @@ export class ProductImportService {
         specifications,
         attributes,
         request.model,
+        request.sourceFile,
       );
       const enforcedSpecifications = this.enforceRequiredSpecifications(
         request.payload,
@@ -159,16 +169,27 @@ export class ProductImportService {
         aiResult.attributes ?? [],
         attributes,
       );
-      const { brandId } = this.resolveOptionalBrand(
+      const { brandId, brandName, brandCreated } = await this.resolveOrCreateBrand(
         brands,
         request.payload,
         aiResult.brand_name,
       );
+      if (brandId !== null && brandName) {
+        this.logger.log(
+          `${brandCreated ? 'Created' : 'Resolved'} brand '${brandName}' -> id=${brandId}`,
+        );
+      } else {
+        this.logger.log(
+          'No brand resolved from source data or AI; creating product without brand_id.',
+        );
+      }
       const specificationsPayload = await this.resolveSpecifications(
         enforcedSpecifications,
+        specifications,
       );
       const attributesPayload = await this.resolveAttributes(
         enforcedAttributes,
+        attributes,
       );
       const media = await this.buildMedia(request.payload);
       const pricing = this.resolvePricing(request.payload);
@@ -286,6 +307,10 @@ export class ProductImportService {
       this.requireOptionalString(rawPayload.model) ??
       process.env.PRODUCT_IMPORT_OPENAI_MODEL?.trim() ??
       'gpt-5.4';
+    const sourceFile =
+      this.requireOptionalString(body.source_file) ??
+      this.requireOptionalString(rawPayload.source_file) ??
+      null;
 
     if (!categoryId) {
       throw new BadRequestException(
@@ -304,6 +329,7 @@ export class ProductImportService {
       categoryId,
       vendorId,
       model,
+      sourceFile,
     };
   }
 
@@ -399,6 +425,7 @@ export class ProductImportService {
     specifications: Specification[],
     attributes: Attribute[],
     model: string,
+    sourceFile: string | null,
   ): Promise<ImportAiResult> {
     const openaiKey = process.env.OPENAI_API_KEY?.trim();
 
@@ -408,53 +435,103 @@ export class ProductImportService {
       );
     }
 
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${openaiKey}`,
+    const openaiInput = [
+      {
+        role: 'system',
+        content: this.buildSystemPrompt(brands, specifications, attributes),
       },
-      body: JSON.stringify({
-        model,
-        input: [
+      {
+        role: 'user',
+        content: JSON.stringify(
           {
-            role: 'system',
-            content: this.buildSystemPrompt(brands, specifications, attributes),
+            brand: payload.brand,
+            title: payload.title,
+            description: payload.description,
+            specification: payload.specification,
+            attributes: payload.attributes,
           },
-          {
-            role: 'user',
-            content: JSON.stringify(
-              {
-                brand: payload.brand,
-                title: payload.title,
-                description: payload.description,
-                specification: payload.specification,
-                attributes: payload.attributes,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      }),
-    });
+          null,
+          2,
+        ),
+      },
+    ] satisfies Array<{ role: string; content: string }>;
 
-    if (!response.ok) {
-      throw new BadRequestException(
-        `OpenAI error ${response.status}: ${await response.text()}`,
-      );
-    }
-
-    const body = (await response.json()) as Record<string, unknown>;
-    const rawText = this.extractOpenAiText(body);
-    const cleaned = this.stripCodeFences(rawText);
+    let openAiResponse: unknown = null;
+    let rawOutputText: string | null = null;
 
     try {
-      return JSON.parse(cleaned) as ImportAiResult;
+      const response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          input: openaiInput,
+        }),
+      });
+
+      const responseText = await response.text();
+      openAiResponse = this.tryParseJson(responseText) ?? responseText;
+
+      if (!response.ok) {
+        throw new BadRequestException(
+          `OpenAI error ${response.status}: ${responseText}`,
+        );
+      }
+
+      const body = this.getObject(openAiResponse);
+      if (!body) {
+        throw new BadRequestException(
+          'OpenAI response was not a JSON object.',
+        );
+      }
+
+      rawOutputText = this.stripCodeFences(this.extractOpenAiText(body));
+      const parsedOutput = JSON.parse(rawOutputText) as ImportAiResult;
+
+      await this.appendOpenAiLog(
+        this.buildOpenAiLogEntry({
+          model,
+          openAiInput: openaiInput,
+          rawProductInput: payload,
+          sourceFile,
+          openAiResponse,
+          rawOutputText,
+          parsedOutput,
+        }),
+      );
+
+      return parsedOutput;
     } catch (error) {
+      await this.appendOpenAiLog(
+        this.buildOpenAiLogEntry({
+          model,
+          openAiInput: openaiInput,
+          rawProductInput: payload,
+          sourceFile,
+          openAiResponse,
+          rawOutputText,
+          errorMessage: getErrorMessage(error),
+        }),
+      );
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
       throw new BadRequestException(
         `OpenAI returned invalid JSON: ${getErrorMessage(error)}`,
       );
+    }
+  }
+
+  private tryParseJson(value: string): unknown | null {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return null;
     }
   }
 
@@ -530,6 +607,67 @@ export class ProductImportService {
       brandId: null,
       brandName: null,
     };
+  }
+
+  private async resolveOrCreateBrand(
+    brands: Brand[],
+    payload: NormalizedImportPayload,
+    aiBrandName: unknown,
+  ): Promise<{
+    brandId: number | null;
+    brandName: string | null;
+    brandCreated: boolean;
+  }> {
+    const resolvedBrand = this.resolveOptionalBrand(brands, payload, aiBrandName);
+
+    if (resolvedBrand.brandId !== null) {
+      return {
+        ...resolvedBrand,
+        brandCreated: false,
+      };
+    }
+
+    const sourceBrandName = this.requireOptionalString(payload.brand);
+    if (!sourceBrandName) {
+      return {
+        brandId: null,
+        brandName: null,
+        brandCreated: false,
+      };
+    }
+
+    try {
+      const createdBrand = await this.brandsService.create({
+        name_en: sourceBrandName,
+        name_ar: sourceBrandName,
+      });
+      brands.push(createdBrand);
+
+      return {
+        brandId: createdBrand.id,
+        brandName: createdBrand.name_en?.trim() || sourceBrandName,
+        brandCreated: true,
+      };
+    } catch (error) {
+      const refreshedBrands = await this.brandsRepository.find({
+        where: { status: BrandStatus.ACTIVE },
+        order: { name_en: 'ASC' },
+      });
+      const refreshedBrand = this.resolveOptionalBrand(
+        refreshedBrands,
+        payload,
+        aiBrandName,
+      );
+
+      if (refreshedBrand.brandId !== null) {
+        return {
+          ...refreshedBrand,
+          brandCreated: false,
+        };
+      }
+
+      throw error;
+    }
   }
 
   private detectBrandNameFromText(
@@ -913,6 +1051,71 @@ export class ProductImportService {
     return this.dedupeNonEmptyStrings(candidates);
   }
 
+  private analyzeApproximateMatch(
+    rawCandidates: string[],
+    matchedCandidates: string[],
+  ): {
+    shouldReplace: boolean;
+    reason: string;
+  } {
+    const normalizedMatchedCandidates = new Set(
+      matchedCandidates
+        .map((candidate) => this.normalizeLookupText(candidate))
+        .filter(Boolean),
+    );
+    const matchedNumericSignatures = new Set(
+      matchedCandidates
+        .map((candidate) => this.extractNumericSignature(candidate).join('|'))
+        .filter(Boolean),
+    );
+
+    let hasMeasurableRawValue = false;
+
+    for (const rawCandidate of rawCandidates) {
+      const normalizedRawCandidate = rawCandidate.trim();
+      if (!normalizedRawCandidate) {
+        continue;
+      }
+
+      if (
+        normalizedMatchedCandidates.has(
+          this.normalizeLookupText(normalizedRawCandidate),
+        )
+      ) {
+        return {
+          shouldReplace: false,
+          reason: 'raw value matches an existing database value after normalization',
+        };
+      }
+
+      const rawNumericSignature = this.extractNumericSignature(
+        normalizedRawCandidate,
+      ).join('|');
+      if (rawNumericSignature) {
+        hasMeasurableRawValue = true;
+        if (matchedNumericSignatures.has(rawNumericSignature)) {
+          return {
+            shouldReplace: false,
+            reason: 'raw value matches an existing database numeric signature',
+          };
+        }
+      }
+    }
+
+    if (hasMeasurableRawValue) {
+      return {
+        shouldReplace: true,
+        reason:
+          'raw measurable value differs from all existing unit-based database values',
+      };
+    }
+
+    return {
+      shouldReplace: false,
+      reason: 'raw value has no measurable token; approximate numeric safeguard not applied',
+    };
+  }
+
   private valuesOverlap(
     sourceValues: string[],
     candidateValues: string[],
@@ -1142,12 +1345,19 @@ export class ProductImportService {
 
   private async resolveSpecifications(
     aiSpecifications: ImportAiSpecification[],
+    availableSpecifications: Specification[],
   ): Promise<
     Array<{
       specification_id: number;
       specification_value_ids: number[];
     }>
   > {
+    const specificationLookup = new Map(
+      availableSpecifications.map((specification) => [
+        specification.id,
+        specification,
+      ]),
+    );
     const specificationMap = new Map<number, Set<number>>();
 
     for (const specification of aiSpecifications) {
@@ -1159,15 +1369,69 @@ export class ProductImportService {
         continue;
       }
 
+      if (!specificationLookup.has(specificationId)) {
+        this.logger.log(
+          `Skipping unknown specification id=${specificationId} returned by AI.`,
+        );
+        continue;
+      }
+
       if (!specificationMap.has(specificationId)) {
         specificationMap.set(specificationId, new Set<number>());
       }
 
+      const matchedSpecification = specificationLookup.get(specificationId);
+      if (!matchedSpecification) {
+        continue;
+      }
+
+      const valueLookup = this.buildExistingValueMap(matchedSpecification);
+
       for (const value of specification.values ?? []) {
         let matchedValueId = this.extractPositiveInteger(value.matched_value_id);
+        let shouldCreateValue = this.isNotExist(value.matched_value_id);
+        const localizedValue = this.extractLocalizedValue(value.original_value);
 
-        if (!matchedValueId && this.isNotExist(value.matched_value_id)) {
-          const localizedValue = this.extractLocalizedValue(value.original_value);
+        if (matchedValueId) {
+          const matchedValue = valueLookup.get(matchedValueId);
+
+          if (!matchedValue) {
+            this.logger.log(
+              `Specification ${specificationId}: AI returned unknown value id=${matchedValueId} for '${localizedValue.name_en}'; creating new value.`,
+            );
+            matchedValueId = null;
+            shouldCreateValue = true;
+          } else if (this.hasDefinedUnit(matchedSpecification)) {
+            const matchDecision = this.analyzeApproximateMatch(
+              [localizedValue.name_en, localizedValue.name_ar],
+              this.buildDefinitionValueCandidates(
+                matchedSpecification,
+                matchedValue,
+              ),
+            );
+
+            if (matchDecision.shouldReplace) {
+              this.logger.log(
+                `Specification ${specificationId}: rejecting approximate match id=${matchedValueId} for raw value '${localizedValue.name_en}'; creating exact value (${matchDecision.reason}).`,
+              );
+              matchedValueId = null;
+              shouldCreateValue = true;
+            } else {
+              this.logger.log(
+                `Specification ${specificationId}: keeping matched value id=${matchedValueId} for raw value '${localizedValue.name_en}' (${matchDecision.reason}).`,
+              );
+            }
+          } else {
+            this.logger.log(
+              `Specification ${specificationId}: keeping matched value id=${matchedValueId} for raw value '${localizedValue.name_en}' (no unit defined; approximate numeric safeguard not applied).`,
+            );
+          }
+        }
+
+        if (!matchedValueId && shouldCreateValue) {
+          this.logger.log(
+            `Specification ${specificationId}: creating missing value '${localizedValue.name_en}'.`,
+          );
           matchedValueId = (
             await this.specificationsService.addValue(
               specificationId,
@@ -1175,6 +1439,9 @@ export class ProductImportService {
               localizedValue.name_ar,
             )
           ).id;
+          this.logger.log(
+            `Specification ${specificationId}: created value id=${matchedValueId}`,
+          );
         }
 
         if (matchedValueId) {
@@ -1193,12 +1460,16 @@ export class ProductImportService {
 
   private async resolveAttributes(
     aiAttributes: ImportAiAttribute[],
+    availableAttributes: Attribute[],
   ): Promise<
     Array<{
       attribute_id: number;
       attribute_value_ids: number[];
     }>
   > {
+    const attributeLookup = new Map(
+      availableAttributes.map((attribute) => [attribute.id, attribute]),
+    );
     const attributeMap = new Map<number, Set<number>>();
 
     for (const attribute of aiAttributes) {
@@ -1210,15 +1481,66 @@ export class ProductImportService {
         continue;
       }
 
+      if (!attributeLookup.has(attributeId)) {
+        this.logger.log(
+          `Skipping unknown attribute id=${attributeId} returned by AI.`,
+        );
+        continue;
+      }
+
       if (!attributeMap.has(attributeId)) {
         attributeMap.set(attributeId, new Set<number>());
       }
 
+      const matchedAttribute = attributeLookup.get(attributeId);
+      if (!matchedAttribute) {
+        continue;
+      }
+
+      const valueLookup = this.buildExistingValueMap(matchedAttribute);
+
       for (const value of attribute.values ?? []) {
         let matchedValueId = this.extractPositiveInteger(value.matched_value_id);
+        let shouldCreateValue = this.isNotExist(value.matched_value_id);
+        const rawValue = this.extractSimpleText(value.original_value);
 
-        if (!matchedValueId && this.isNotExist(value.matched_value_id)) {
-          const rawValue = this.extractSimpleText(value.original_value);
+        if (matchedValueId) {
+          const matchedValue = valueLookup.get(matchedValueId);
+
+          if (!matchedValue) {
+            this.logger.log(
+              `Attribute ${attributeId}: AI returned unknown value id=${matchedValueId} for '${rawValue}'; creating new value.`,
+            );
+            matchedValueId = null;
+            shouldCreateValue = true;
+          } else if (this.hasDefinedUnit(matchedAttribute)) {
+            const matchDecision = this.analyzeApproximateMatch(
+              [rawValue],
+              this.buildDefinitionValueCandidates(matchedAttribute, matchedValue),
+            );
+
+            if (matchDecision.shouldReplace) {
+              this.logger.log(
+                `Attribute ${attributeId}: rejecting approximate match id=${matchedValueId} for raw value '${rawValue}'; creating exact value (${matchDecision.reason}).`,
+              );
+              matchedValueId = null;
+              shouldCreateValue = true;
+            } else {
+              this.logger.log(
+                `Attribute ${attributeId}: keeping matched value id=${matchedValueId} for raw value '${rawValue}' (${matchDecision.reason}).`,
+              );
+            }
+          } else {
+            this.logger.log(
+              `Attribute ${attributeId}: keeping matched value id=${matchedValueId} for raw value '${rawValue}' (no unit defined; approximate numeric safeguard not applied).`,
+            );
+          }
+        }
+
+        if (!matchedValueId && shouldCreateValue) {
+          this.logger.log(
+            `Attribute ${attributeId}: creating missing value '${rawValue}'.`,
+          );
           matchedValueId = (
             await this.attributesService.addValue(
               attributeId,
@@ -1226,6 +1548,9 @@ export class ProductImportService {
               rawValue,
             )
           ).id;
+          this.logger.log(
+            `Attribute ${attributeId}: created value id=${matchedValueId}`,
+          );
         }
 
         if (matchedValueId) {
@@ -1658,132 +1983,143 @@ export class ProductImportService {
         })),
     }));
 
-    return `You are an expert ecommerce data entry specialist and SEO optimizer.
-
-Your job is to receive a raw product and return a fully optimized, clean product ready for publishing.
-
-DATABASE BRANDS:
-${JSON.stringify(brandsCatalog, null, 2)}
-
-DATABASE SPECIFICATIONS:
-${JSON.stringify(specificationsCatalog, null, 2)}
-
-DATABASE ATTRIBUTES:
-${JSON.stringify(attributesCatalog, null, 2)}
-
-Instructions:
-
-0. BRAND:
-    - The source brand may be missing.
-    - Use DATABASE BRANDS plus the title/description to infer the correct brand when possible.
-    - Return brand_name as the exact English brand name from DATABASE BRANDS.
-    - If no confident brand match exists, return null.
-
-1. TITLE:
-    - Rewrite the title to be SEO-friendly, clear, and concise.
-    - Translate the optimized title to Arabic.
-
-2. DESCRIPTION:
-    - Rewrite the description to be engaging, informative, and SEO-optimized.
-    - Format it as clean HTML using tags like <ul>, <li>, <strong> with no inline styles and no classes.
-    - Structure it as a bullet list.
-    - If any specification has no match in the database (specification_id = "not_exist"), append it naturally into the HTML description.
-    - If any attribute has no match in the database (attribute_id = "not_exist"), append it naturally into the HTML description.
-    - Translate the full HTML description to Arabic while keeping the HTML tags.
-
-3. SPECIFICATIONS:
-    STEP 1 - EXTRACT:
-        - Read the product title word by word. Pull out every measurable or descriptive value.
-        - Read the product description sentence by sentence. Pull out every measurable or descriptive value.
-        - Read every raw specification key-value pair.
-        - Combine all extracted values into a single master list.
-
-    STEP 2 - CLASSIFY AND MATCH:
-        - Go through the DATABASE SPECIFICATIONS list from top to bottom.
-        - Pay strict attention to allow_ai_inference for each specification.
-        - If allow_ai_inference is false, the metric must exist in the source data. You may match synonyms, typos, and slight naming variations.
-        - If allow_ai_inference is true, you must deduce the value based on the available evidence.
-      - If a category specification has an explicit source value, you must include it in the output and must not omit it.
-      - If a category specification has no explicit source value and allow_ai_inference is false, omit it.
-      - If a category specification has no explicit source value and allow_ai_inference is true, you must infer it and include it.
-
-    STEP 3 - BUILD the specifications array:
-        - For every found or inferred specification:
-            * If the exact value exists in DB, return matched_value_id as the integer id.
-            * If the exact value does not exist in DB, return matched_value_id as "not_exist" and put the raw string in original_value.name_en.
-        - Skip only the specifications that are truly not found.
-
-4. ATTRIBUTES:
-    STEP 1 - EXTRACT:
-        - Read the product title and description for color, size, material, language, or variant.
-        - Read every raw attribute field.
-
-    STEP 2 - CLASSIFY AND MATCH:
-        - Go through the DATABASE ATTRIBUTES list from top to bottom.
-        - Pay strict attention to allow_ai_inference for each attribute.
-        - If allow_ai_inference is false, the value must exist in the source data. You may match synonyms, typos, and slight naming variations.
-        - If allow_ai_inference is true, you may infer applicable values from context.
-      - If a category attribute has an explicit source value, you must include it in the output and must not omit it.
-      - If a category attribute has no explicit source value and allow_ai_inference is false, omit it.
-      - If a category attribute has no explicit source value and allow_ai_inference is true, you must infer it and include it.
-
-    STEP 3 - BUILD the attributes array:
-        - Attributes can have multiple values.
-        - If the exact value exists in DB, return matched_value_id as the integer id.
-        - If the exact value does not exist in DB, return matched_value_id as "not_exist" and put the raw string in original_value.
-        - Skip only the attributes that are truly not found.
-
-5. META DESCRIPTION must be 160 characters or fewer.
-6. META TITLE must be 70 characters or fewer.
-7. SHORT DESCRIPTION must be the 4 most important points as clean HTML bullet list.
-
-STRICT RULES:
-    1. Output JSON only.
-    2. No markdown.
-    3. No comments.
-
-Respond only with a JSON object in this exact format:
-{
-  "brand_name": "<exact english brand name from database> or null",
-  "title_en": "<seo optimized title in english>",
-  "title_ar": "<seo optimized title in arabic>",
-  "meta_title_en": "<meta seo optimized title in english>",
-  "meta_title_ar": "<meta seo optimized title in arabic>",
-  "short_description_en": "<4 most important points as HTML bullet list in english>",
-  "short_description_ar": "<4 most important points as HTML bullet list in arabic>",
-  "description_en": "<full HTML formatted description in english>",
-  "description_ar": "<full HTML formatted description in arabic>",
-  "meta_description_en": "<meta seo optimized description in english, max 160 chars>",
-  "meta_description_ar": "<meta seo optimized description in arabic, max 160 chars>",
-  "specifications": [
-    {
-      "specification_id": 1,
-      "values": [
-        {
-          "original_value": {
-            "name_en": "<raw extracted value in english>",
-            "name_ar": "<arabic translation if text, same as name_en if technical>"
-          },
-          "matched_value_id": 10
-        }
-      ]
-    }
-  ],
-  "attributes": [
-    {
-      "attribute": {
-        "original_value": "<string>",
-        "attribute_id": 1
-      },
-      "values": [
-        {
-          "original_value": "<raw extracted value string>",
-          "matched_value_id": 10
-        }
-      ]
-    }
-  ]
-}`;
+    return [
+      'You are an expert ecommerce data entry specialist and SEO optimizer.',
+      '',
+      'Your job is to receive a raw product and return a fully optimized, clean product ready for publishing.',
+      '',
+      'DATABASE BRANDS:',
+      JSON.stringify(brandsCatalog, null, 2),
+      '',
+      'DATABASE SPECIFICATIONS:',
+      JSON.stringify(specificationsCatalog, null, 2),
+      '',
+      'DATABASE ATTRIBUTES:',
+      JSON.stringify(attributesCatalog, null, 2),
+      '',
+      'Instructions:',
+      '',
+      '0. BRAND:',
+      '    - The source brand may be missing.',
+      '    - Use DATABASE BRANDS plus the title/description to infer the correct brand when possible.',
+      '    - Return brand_name as the exact English brand name from DATABASE BRANDS.',
+      '    - If no confident brand match exists, return null.',
+      '',
+      '1. TITLE:',
+      '    - Rewrite the title to be SEO-friendly, clear, and concise.',
+      '    - Translate the optimized title to Arabic.',
+      '',
+      '2. DESCRIPTION:',
+      '    - Rewrite the description to be engaging, informative, and SEO-optimized.',
+      '    - Format it as clean HTML using tags like <ul>, <li>, <strong> - NO inline styles, NO classes.',
+      '    - Structure it as a bullet list.',
+      '    - If any specification has no match in the database (specification_id = "not_exist"), append it naturally into the HTML description.',
+      '    - If any attribute has no match in the database (attribute_id = "not_exist"), append it naturally into the HTML description.',
+      '    - Translate the full HTML description to Arabic (keep HTML tags, translate only the text inside them).',
+      '',
+      '3. SPECIFICATIONS:',
+      '    STEP 1 - EXTRACT (do this first, before any matching):',
+      '        - Read the product title word by word. Pull out every measurable or descriptive value.',
+      '        - Read the product description sentence by sentence. Pull out every measurable or descriptive value.',
+      '        - Read every raw specification key-value pair.',
+      '        - Combine all extracted values into a single master list.',
+      '        - DO NOT skip this step.',
+      '',
+      '    STEP 2 - CLASSIFY AND MATCH (CRITICAL RULE):',
+      '        - Go through the DATABASE SPECIFICATIONS list from top to bottom.',
+      '        - Pay STRICT attention to the "allow_ai_inference" flag for each specification:',
+      '            * If allow_ai_inference is FALSE: The metric MUST exist in the source data. You ARE EXPLICITLY ALLOWED to match synonyms, typos, and slight naming variations (e.g., source "Response Time" maps to DB "Responsive Time"). This is NOT considered guessing. If the spec name exists in the source but its specific value (e.g., "4ms") is missing from the DB values list, DO NOT skip the specification.',
+      '            * If allow_ai_inference is TRUE: You MUST deduce the value based on other specifications, even if the exact word is not explicitly written in the source text.',
+      '        - If a category specification has an explicit source value, you MUST include it in the output and MUST NOT omit it.',
+      '        - If a category specification has no explicit source value and allow_ai_inference is FALSE, omit it.',
+      '        - If a category specification has no explicit source value and allow_ai_inference is TRUE, you MUST infer it and include it.',
+      '        - Mark each DB spec as: FOUND, INFERRED, or NOT FOUND.',
+      '',
+      '    STEP 3 - BUILD the specifications array:',
+      '        - For every FOUND or INFERRED DB spec:',
+      '            * If the exact value exists in DB -> matched_value_id = <int id>.',
+      '            * If the exact value does NOT exist in DB -> matched_value_id = "not_exist", and put the raw string in original_value.name_en.',
+      '            * YOU MUST NOT drop a specification just because its value is missing from the DB. Use "not_exist".',
+      '            * ONLY when the specification has a unit such as inch, Hz, ms, or GB, NEVER choose the nearest or closest existing database value for measurable data. If the source says "25 inch" and the database has only "24.5 inch", you MUST return "not_exist" and preserve "25 inch" as the original value.',
+      '        - For every NOT FOUND DB spec -> skip it entirely.',
+      '',
+      '4. ATTRIBUTES:',
+      '    STEP 1 - EXTRACT:',
+      '        - Read the product title/description for color, size, material, language, or variant.',
+      '        - Read every raw attribute field.',
+      '        - Combine all extracted values into a single master list.',
+      '',
+      '    STEP 2 - CLASSIFY AND MATCH (CRITICAL RULE):',
+      '        - Go through the DATABASE ATTRIBUTES list from top to bottom.',
+      '        - Pay STRICT attention to the "allow_ai_inference" flag for each attribute:',
+      '            * If allow_ai_inference is FALSE: The value MUST exist in the source data. You ARE EXPLICITLY ALLOWED to match synonyms, typos, and slight naming variations. This is NOT considered guessing. If the attribute exists in the source but its specific value is missing from the DB values list, DO NOT skip the attribute.',
+      '            * If allow_ai_inference is TRUE: You MUST deduce ALL applicable values based on context (e.g., if a monitor has "Game Mode" and is a "Business Monitor", you MUST infer BOTH "Gaming" and "Office" usages).',
+      '        - If a category attribute has an explicit source value, you MUST include it in the output and MUST NOT omit it.',
+      '        - If a category attribute has no explicit source value and allow_ai_inference is FALSE, omit it.',
+      '        - If a category attribute has no explicit source value and allow_ai_inference is TRUE, you MUST infer it and include it.',
+      '        - Mark each DB attribute as: FOUND, INFERRED, or NOT FOUND.',
+      '',
+      '    STEP 3 - BUILD the attributes array:',
+      '        - For every FOUND or INFERRED DB attribute:',
+      '            * An attribute can have MULTIPLE values. If multiple values apply (like multiple Usages or multiple Ports), include ALL of them as separate objects inside the "values" array.',
+      '            * If the exact value exists in DB -> matched_value_id = <int id>.',
+      '            * If the exact value does NOT exist in DB -> matched_value_id = "not_exist", and put the raw string in original_value.name_en.',
+      '            * YOU MUST NOT drop an attribute just because its value is missing from the DB. Use "not_exist".',
+      '            * ONLY when the attribute has a unit such as inch, Hz, ms, or GB, NEVER choose the nearest or closest existing database value for measurable data. If the exact raw value is missing, return "not_exist" and preserve the raw value.',
+      '            * If the attribute has no unit, do normal text/value matching and do not force a new value based only on this numeric safeguard.',
+      '        - For every NOT FOUND DB attribute -> skip it entirely.',
+      '',
+      '5. META DESCRIPTION: Must be 160 characters or fewer.',
+      '6. META TITLE: Must be 70 characters or fewer.',
+      '7. SHORT DESCRIPTION: The 4 most important points as clean HTML bullet list.',
+      '',
+      'STRICT RULES:',
+      '    1. DO NOT explain anything.',
+      '    2. Output JSON ONLY. No markdown. No comments. No code fences.',
+      '',
+      'Respond ONLY with a JSON object in this exact format:',
+      '{',
+      '"brand_name": "<exact english brand name from database> or null",',
+      '"title_en": "<seo optimized title in english>",',
+      '"title_ar": "<seo optimized title in arabic>",',
+      '"meta_title_en": "<meta seo optimized title in english>",',
+      '"meta_title_ar": "<meta seo optimized title in arabic>",',
+      '"short_description_en": "<4 most important points as HTML bullet list in english>",',
+      '"short_description_ar": "<4 most important points as HTML bullet list in arabic>",',
+      '"description_en": "<full HTML formatted description in english>",',
+      '"description_ar": "<full HTML formatted description in arabic>",',
+      '"meta_description_en": "<meta seo optimized description in english, max 160 chars>",',
+      '"meta_description_ar": "<meta seo optimized description in arabic, max 160 chars>",',
+      '"specifications": [',
+      '    {',
+      '    "specification_id": <int>,',
+      '    "values": [',
+      '        {',
+      '            "original_value": {',
+      '                "name_en": "<raw extracted value in english>",',
+      '                "name_ar": "<arabic translation if text, same as name_en if numeric/technical>"',
+      '            },',
+      '            "matched_value_id": <int> or "not_exist"',
+      '        }',
+      '    ]',
+      '    }',
+      '],',
+      '"attributes": [',
+      '    {',
+      '        "attribute": {',
+      '            "original_value": "<string>",',
+      '            "attribute_id": <int>',
+      '        },',
+      '        "values": [',
+      '            {',
+      '            "original_value": "<raw extracted value string>",',
+      '            "matched_value_id": <int> or "not_exist"',
+      '            }',
+      '        ]',
+      '    }',
+      ']',
+      '}',
+    ].join('\n');
   }
 
   private getObject(value: unknown): Record<string, unknown> | null {
@@ -1813,6 +2149,53 @@ Respond only with a JSON object in this exact format:
     }
 
     return undefined;
+  }
+
+  private getOpenAiLogPath(): string {
+    const configuredPath = process.env.PRODUCT_IMPORT_OPENAI_LOG_PATH?.trim();
+
+    if (!configuredPath) {
+      return DEFAULT_OPENAI_LOG_PATH;
+    }
+
+    return isAbsolute(configuredPath)
+      ? configuredPath
+      : resolvePath(process.cwd(), configuredPath);
+  }
+
+  private buildOpenAiLogEntry(input: {
+    model: string;
+    openAiInput: Array<{ role: string; content: string }>;
+    rawProductInput: NormalizedImportPayload;
+    sourceFile: string | null;
+    openAiResponse?: unknown;
+    rawOutputText?: string | null;
+    parsedOutput?: ImportAiResult;
+    errorMessage?: string;
+  }): Record<string, unknown> {
+    return {
+      timestamp: new Date().toISOString(),
+      source_file: input.sourceFile,
+      model: input.model,
+      raw_product_input: input.rawProductInput,
+      openai_input: input.openAiInput,
+      openai_response: input.openAiResponse ?? null,
+      raw_output_text: input.rawOutputText ?? null,
+      parsed_output: input.parsedOutput ?? null,
+      error: input.errorMessage ?? null,
+    };
+  }
+
+  private async appendOpenAiLog(entry: Record<string, unknown>): Promise<void> {
+    try {
+      const logPath = this.getOpenAiLogPath();
+      await mkdir(dirname(logPath), { recursive: true });
+      await appendFile(logPath, `${JSON.stringify(entry)}\n`, 'utf8');
+    } catch (error) {
+      this.logger.warn(
+        `Failed to append OpenAI import log: ${getErrorMessage(error)}`,
+      );
+    }
   }
 
   private requireString(value: unknown, fieldName: string): string {
