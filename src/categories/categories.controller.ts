@@ -163,11 +163,12 @@ export class CategoriesController {
     type: CreateCategoryUrlDto,
     examples: {
       vendor_category_url: {
-        summary: 'Map one vendor to one category URL',
+        summary: 'Add one URL for a vendor/category pair',
         value: {
           url: 'https://vendor.example.com/monitors/gaming-monitors',
           category_id: 9,
           vendor_id: 2,
+          sort_order: 0,
         },
       },
     },
@@ -177,7 +178,8 @@ export class CategoriesController {
     type: ApiErrorResponseDto,
   })
   @ApiConflictResponse({
-    description: 'A category URL already exists for this category and vendor.',
+    description:
+      'The same category, vendor, and URL mapping already exists.',
     type: ApiErrorResponseDto,
   })
   @ApiNotFoundResponse({
@@ -246,6 +248,12 @@ export class CategoriesController {
           vendor_id: 5,
         },
       },
+      update_sort_order: {
+        summary: 'Reorder the URL mapping',
+        value: {
+          sort_order: 1,
+        },
+      },
     },
   })
   @ApiBadRequestResponse({
@@ -253,7 +261,8 @@ export class CategoriesController {
     type: ApiErrorResponseDto,
   })
   @ApiConflictResponse({
-    description: 'A category URL already exists for this category and vendor.',
+    description:
+      'The same category, vendor, and URL mapping already exists.',
     type: ApiErrorResponseDto,
   })
   @ApiNotFoundResponse({

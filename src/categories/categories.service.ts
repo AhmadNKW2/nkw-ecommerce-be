@@ -157,20 +157,36 @@ export class CategoriesService {
   private async ensureCategoryUrlPairIsUnique(
     categoryId: number,
     vendorId: number,
+    url: string,
     currentId?: number,
   ): Promise<void> {
     const existing = await this.categoryUrlsRepository.findOne({
       where: {
         category_id: categoryId,
         vendor_id: vendorId,
+        url,
       },
     });
 
     if (existing && existing.id !== currentId) {
       throw new ConflictException(
-        'A category URL already exists for this category and vendor',
+        'A category URL already exists for this category, vendor, and URL',
       );
     }
+  }
+
+  private async getNextCategoryUrlSortOrder(
+    categoryId: number,
+    vendorId: number,
+  ): Promise<number> {
+    const maxSortOrder = await this.categoryUrlsRepository
+      .createQueryBuilder('categoryUrl')
+      .select('MAX(categoryUrl.sort_order)', 'max')
+      .where('categoryUrl.category_id = :categoryId', { categoryId })
+      .andWhere('categoryUrl.vendor_id = :vendorId', { vendorId })
+      .getRawOne<{ max: string | number | null }>();
+
+    return Number(maxSortOrder?.max ?? -1) + 1;
   }
 
   async createCategoryUrl(
@@ -183,9 +199,20 @@ export class CategoriesService {
     await this.ensureCategoryUrlPairIsUnique(
       createCategoryUrlDto.category_id,
       createCategoryUrlDto.vendor_id,
+      createCategoryUrlDto.url,
     );
 
-    const categoryUrl = this.categoryUrlsRepository.create(createCategoryUrlDto);
+    const sort_order =
+      createCategoryUrlDto.sort_order ??
+      (await this.getNextCategoryUrlSortOrder(
+        createCategoryUrlDto.category_id,
+        createCategoryUrlDto.vendor_id,
+      ));
+
+    const categoryUrl = this.categoryUrlsRepository.create({
+      ...createCategoryUrlDto,
+      sort_order,
+    });
     const savedCategoryUrl = await this.categoryUrlsRepository.save(categoryUrl);
 
     return this.findOneCategoryUrl(savedCategoryUrl.id);
@@ -198,7 +225,8 @@ export class CategoriesService {
       .createQueryBuilder('categoryUrl')
       .leftJoinAndSelect('categoryUrl.category', 'category')
       .leftJoinAndSelect('categoryUrl.vendor', 'vendor')
-      .orderBy('categoryUrl.id', 'ASC');
+      .orderBy('categoryUrl.sort_order', 'ASC')
+      .addOrderBy('categoryUrl.id', 'ASC');
 
     if (filterDto?.category_id !== undefined) {
       queryBuilder.andWhere('categoryUrl.category_id = :categoryId', {
@@ -255,13 +283,22 @@ export class CategoriesService {
     const nextCategoryId =
       updateCategoryUrlDto.category_id ?? categoryUrl.category_id;
     const nextVendorId = updateCategoryUrlDto.vendor_id ?? categoryUrl.vendor_id;
+    const nextUrl = updateCategoryUrlDto.url ?? categoryUrl.url;
+    const nextSortOrder = updateCategoryUrlDto.sort_order ?? categoryUrl.sort_order;
 
     await this.validateCategoryUrlReferences(nextCategoryId, nextVendorId);
-    await this.ensureCategoryUrlPairIsUnique(nextCategoryId, nextVendorId, id);
+    await this.ensureCategoryUrlPairIsUnique(
+      nextCategoryId,
+      nextVendorId,
+      nextUrl,
+      id,
+    );
 
     Object.assign(categoryUrl, updateCategoryUrlDto, {
       category_id: nextCategoryId,
       vendor_id: nextVendorId,
+      url: nextUrl,
+      sort_order: nextSortOrder,
     });
 
     await this.categoryUrlsRepository.save(categoryUrl);
