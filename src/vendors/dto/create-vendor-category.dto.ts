@@ -51,11 +51,11 @@ export class CreateVendorCategoryDto {
 
   @ApiProperty({
     example: 'https://vendor.example.com/collections/gaming-monitors',
-    description: 'Vendor-specific category URL or path.',
+    description: 'Vendor-specific category reference link or path.',
   })
   @IsString()
   @IsNotEmpty()
-  url: string;
+  reference_link: string;
 
   @ApiPropertyOptional({
     example: [9, 11, 14],

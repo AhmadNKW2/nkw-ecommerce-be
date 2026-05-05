@@ -38,7 +38,7 @@ import { UpdateVendorCategoryDto } from './dto/update-vendor-category.dto';
 
 interface NormalizedVendorCategoryTreeNode {
   title: string;
-  url: string;
+  reference_link: string;
   category_ids: number[];
   children: NormalizedVendorCategoryTreeNode[];
 }
@@ -46,7 +46,7 @@ interface NormalizedVendorCategoryTreeNode {
 export interface SerializedVendorCategory {
   id: number;
   title: string;
-  url: string;
+  reference_link: string;
   vendor_id: number;
   parent_id: number | null;
   category_ids: number[];
@@ -115,23 +115,26 @@ export class VendorsService {
     const normalizedNodes = nodes.map((node, index) => {
       const path = `${pathPrefix}[${index}]`;
       const title = typeof node.title === 'string' ? node.title.trim() : '';
-      const url = typeof node.url === 'string' ? node.url.trim() : '';
+      const referenceLink =
+        typeof node.reference_link === 'string'
+          ? node.reference_link.trim()
+          : '';
 
       if (!title) {
         throw new BadRequestException(`${path}.title is required`);
       }
 
-      if (!url) {
-        throw new BadRequestException(`${path}.url is required`);
+      if (!referenceLink) {
+        throw new BadRequestException(`${path}.reference_link is required`);
       }
 
-      if (seenUrls.has(url)) {
+      if (seenUrls.has(referenceLink)) {
         throw new ConflictException(
-          `Vendor category URL '${url}' is duplicated in the tree payload`,
+          `Vendor category reference_link '${referenceLink}' is duplicated in the tree payload`,
         );
       }
 
-      seenUrls.add(url);
+      seenUrls.add(referenceLink);
 
       const normalizedCategoryIds = this.normalizeVendorCategoryIds(
         node.category_ids,
@@ -147,7 +150,7 @@ export class VendorsService {
 
       return {
         title,
-        url,
+        reference_link: referenceLink,
         category_ids: normalizedCategoryIds,
         children: childResult.nodes,
       };
@@ -176,19 +179,19 @@ export class VendorsService {
     }
   }
 
-  private async ensureVendorCategoryUrlIsUnique(
+  private async ensureVendorCategoryReferenceLinkIsUnique(
     vendorId: number,
-    url: string,
+    referenceLink: string,
     currentId?: number,
   ): Promise<void> {
     const existing = await this.vendorCategoryRepository.findOne({
-      where: { vendor_id: vendorId, url },
+      where: { vendor_id: vendorId, reference_link: referenceLink },
       select: ['id'],
     });
 
     if (existing && existing.id !== currentId) {
       throw new ConflictException(
-        'Vendor category with this URL already exists for this vendor',
+        'Vendor category with this reference_link already exists for this vendor',
       );
     }
   }
@@ -292,7 +295,7 @@ export class VendorsService {
       const vendorCategory = vendorCategoryRepository.create({
         vendor_id: vendorId,
         title: node.title,
-        url: node.url,
+        reference_link: node.reference_link,
         parent_id: parentId,
         sort_order: index,
       });
@@ -356,7 +359,7 @@ export class VendorsService {
     return {
       id: vendorCategory.id,
       title: vendorCategory.title,
-      url: vendorCategory.url,
+      reference_link: vendorCategory.reference_link,
       vendor_id: vendorCategory.vendor_id,
       parent_id: vendorCategory.parent_id,
       category_ids: categories.map((category) => category.id),
@@ -626,13 +629,16 @@ export class VendorsService {
       createVendorCategoryDto.parent_id ?? null,
     );
 
-    const url = createVendorCategoryDto.url.trim();
-    await this.ensureVendorCategoryUrlIsUnique(vendorId, url);
+    const referenceLink = createVendorCategoryDto.reference_link.trim();
+    await this.ensureVendorCategoryReferenceLinkIsUnique(
+      vendorId,
+      referenceLink,
+    );
 
     const vendorCategory = this.vendorCategoryRepository.create({
       vendor_id: vendorId,
       title: createVendorCategoryDto.title.trim(),
-      url,
+      reference_link: referenceLink,
       parent_id: createVendorCategoryDto.parent_id ?? null,
       sort_order:
         createVendorCategoryDto.sort_order ??
@@ -737,11 +743,17 @@ export class VendorsService {
         : vendorCategory.parent_id;
     await this.ensureVendorCategoryParent(vendorId, nextParentId, vendorCategoryId);
 
-    const nextUrl = (updateVendorCategoryDto.url ?? vendorCategory.url).trim();
-    await this.ensureVendorCategoryUrlIsUnique(vendorId, nextUrl, vendorCategoryId);
+    const nextReferenceLink = (
+      updateVendorCategoryDto.reference_link ?? vendorCategory.reference_link
+    ).trim();
+    await this.ensureVendorCategoryReferenceLinkIsUnique(
+      vendorId,
+      nextReferenceLink,
+      vendorCategoryId,
+    );
 
     vendorCategory.title = (updateVendorCategoryDto.title ?? vendorCategory.title).trim();
-    vendorCategory.url = nextUrl;
+    vendorCategory.reference_link = nextReferenceLink;
     vendorCategory.parent_id = nextParentId ?? null;
     vendorCategory.sort_order =
       updateVendorCategoryDto.sort_order ?? vendorCategory.sort_order;

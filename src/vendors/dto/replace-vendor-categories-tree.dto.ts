@@ -40,29 +40,29 @@ export const replaceVendorCategoriesTreeSwaggerExample = {
   categories: [
     {
       title: 'Components',
-      url: '/components',
+      reference_link: '/components',
       category_ids: [42],
       children: [
         {
           title: 'Desktop RAM',
-          url: '/components/desktop-ram',
+          reference_link: '/components/desktop-ram',
           category_ids: [48],
           children: [],
         },
         {
           title: 'CPU Coolers',
-          url: '/components/cpu-coolers',
+          reference_link: '/components/cpu-coolers',
           children: [],
         },
       ],
     },
     {
       title: 'Peripherals',
-      url: '/peripherals',
+      reference_link: '/peripherals',
       children: [
         {
           title: 'Keyboards',
-          url: '/peripherals/keyboards',
+          reference_link: '/peripherals/keyboards',
           category_ids: [10],
         },
       ],
@@ -81,11 +81,11 @@ export class ReplaceVendorCategoryTreeNodeDto {
 
   @ApiProperty({
     example: '/gaming-monitors',
-    description: 'Vendor-specific category URL or path.',
+    description: 'Vendor-specific category reference link or path.',
   })
   @IsString()
   @IsNotEmpty()
-  url: string;
+  reference_link: string;
 
   @ApiPropertyOptional({
     example: [9, 11, 14],

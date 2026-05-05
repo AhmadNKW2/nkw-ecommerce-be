@@ -152,7 +152,7 @@ export class VendorsController {
           {
             id: 1,
             title: 'Components',
-            url: '/components',
+            reference_link: '/components',
             vendor_id: 2,
             parent_id: null,
             category_ids: [42],
@@ -168,7 +168,7 @@ export class VendorsController {
               {
                 id: 2,
                 title: 'Desktop RAM',
-                url: '/components/desktop-ram',
+                reference_link: '/components/desktop-ram',
                 vendor_id: 2,
                 parent_id: 1,
                 category_ids: [48],
@@ -187,7 +187,7 @@ export class VendorsController {
               {
                 id: 3,
                 title: 'CPU Coolers',
-                url: '/components/cpu-coolers',
+                reference_link: '/components/cpu-coolers',
                 vendor_id: 2,
                 parent_id: 1,
                 category_ids: [],
@@ -204,7 +204,7 @@ export class VendorsController {
           {
             id: 4,
             title: 'Peripherals',
-            url: '/peripherals',
+            reference_link: '/peripherals',
             vendor_id: 2,
             parent_id: null,
             category_ids: [],
@@ -214,7 +214,7 @@ export class VendorsController {
               {
                 id: 5,
                 title: 'Keyboards',
-                url: '/peripherals/keyboards',
+                reference_link: '/peripherals/keyboards',
                 vendor_id: 2,
                 parent_id: 4,
                 category_ids: [10],
@@ -245,7 +245,7 @@ export class VendorsController {
     type: ApiErrorResponseDto,
   })
   @ApiConflictResponse({
-    description: 'Duplicate vendor category URL exists in the payload or vendor tree.',
+    description: 'Duplicate vendor category reference link exists in the payload or vendor tree.',
     type: ApiErrorResponseDto,
   })
   @ApiNotFoundResponse({

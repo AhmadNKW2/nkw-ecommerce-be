@@ -101,7 +101,7 @@ describe('VendorsService vendor categories', () => {
       {
         id: 7,
         title: 'Vendor Landing',
-        url: '/vendor-landing',
+        reference_link: '/vendor-landing',
         vendor_id: 5,
         parent_id: null,
         sort_order: 0,
@@ -113,13 +113,13 @@ describe('VendorsService vendor categories', () => {
 
     const result = await service.createVendorCategory(5, {
       title: 'Vendor Landing',
-      url: '/vendor-landing',
+      reference_link: '/vendor-landing',
     });
 
     expect(vendorCategoryRepository.create).toHaveBeenCalledWith({
       vendor_id: 5,
       title: 'Vendor Landing',
-      url: '/vendor-landing',
+      reference_link: '/vendor-landing',
       parent_id: null,
       sort_order: 0,
     });
@@ -136,7 +136,7 @@ describe('VendorsService vendor categories', () => {
       {
         id: 1,
         title: 'Displays',
-        url: '/displays',
+        reference_link: '/displays',
         vendor_id: 5,
         parent_id: null,
         sort_order: 0,
@@ -150,7 +150,7 @@ describe('VendorsService vendor categories', () => {
       {
         id: 2,
         title: 'OLED',
-        url: '/displays/oled',
+        reference_link: '/displays/oled',
         vendor_id: 5,
         parent_id: 1,
         sort_order: 0,
@@ -182,7 +182,7 @@ describe('VendorsService vendor categories', () => {
       {
         id: 101,
         title: 'Displays',
-        url: '/displays',
+        reference_link: '/displays',
         vendor_id: 5,
         parent_id: null,
         sort_order: 0,
@@ -196,7 +196,7 @@ describe('VendorsService vendor categories', () => {
       {
         id: 102,
         title: 'OLED',
-        url: '/displays/oled',
+        reference_link: '/displays/oled',
         vendor_id: 5,
         parent_id: 101,
         sort_order: 0,
@@ -207,7 +207,7 @@ describe('VendorsService vendor categories', () => {
       {
         id: 103,
         title: 'Peripherals',
-        url: '/peripherals',
+        reference_link: '/peripherals',
         vendor_id: 5,
         parent_id: null,
         sort_order: 1,
@@ -221,19 +221,19 @@ describe('VendorsService vendor categories', () => {
       categories: [
         {
           title: 'Displays',
-          url: '/displays',
+          reference_link: '/displays',
           category_ids: [11, 9],
           children: [
             {
               title: 'OLED',
-              url: '/displays/oled',
+              reference_link: '/displays/oled',
               category_ids: [12],
             },
           ],
         },
         {
           title: 'Peripherals',
-          url: '/peripherals',
+          reference_link: '/peripherals',
         },
       ],
     });
@@ -244,21 +244,21 @@ describe('VendorsService vendor categories', () => {
     expect(transactionVendorCategoryRepository.save).toHaveBeenNthCalledWith(1, {
       vendor_id: 5,
       title: 'Displays',
-      url: '/displays',
+      reference_link: '/displays',
       parent_id: null,
       sort_order: 0,
     });
     expect(transactionVendorCategoryRepository.save).toHaveBeenNthCalledWith(2, {
       vendor_id: 5,
       title: 'OLED',
-      url: '/displays/oled',
+      reference_link: '/displays/oled',
       parent_id: 101,
       sort_order: 0,
     });
     expect(transactionVendorCategoryRepository.save).toHaveBeenNthCalledWith(3, {
       vendor_id: 5,
       title: 'Peripherals',
-      url: '/peripherals',
+      reference_link: '/peripherals',
       parent_id: null,
       sort_order: 1,
     });

@@ -16,7 +16,7 @@ import { Category } from '../../categories/entities/category.entity';
 import { Vendor } from './vendor.entity';
 
 @Entity('vendor_categories')
-@Unique('uq_vendor_categories_vendor_url', ['vendor_id', 'url'])
+@Unique('uq_vendor_categories_vendor_url', ['vendor_id', 'reference_link'])
 @Index('idx_vendor_categories_vendor_id', ['vendor_id'])
 @Index('idx_vendor_categories_parent_id', ['parent_id'])
 @Index('idx_vendor_categories_sort_order', ['sort_order'])
@@ -27,8 +27,8 @@ export class VendorCategory {
   @Column({ type: 'varchar', length: 255 })
   title: string;
 
-  @Column({ type: 'text' })
-  url: string;
+  @Column({ name: 'url', type: 'text' })
+  reference_link: string;
 
   @ManyToOne(() => Vendor, (vendor) => vendor.vendor_categories, {
     onDelete: 'CASCADE',
