@@ -15,6 +15,7 @@ import {
   ParseIntPipe,
 } from '@nestjs/common';
 import {
+  ApiExtraModels,
   ApiBadRequestResponse,
   ApiBody,
   ApiConflictResponse,
@@ -22,6 +23,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  getSchemaPath,
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -124,6 +126,7 @@ export class VendorsController {
   @Put(':id/categories/tree')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @ApiExtraModels(ReplaceVendorCategoriesTreeDto)
   @ApiOperation({
     summary: 'Replace the full vendor category tree in one payload',
   })
@@ -133,14 +136,11 @@ export class VendorsController {
     description: 'Vendor id.',
   })
   @ApiBody({
-    type: ReplaceVendorCategoriesTreeDto,
     description:
       'Replaces the current vendor category tree for this vendor. Existing vendor categories are removed and recreated from this nested payload. Array order is used as sibling order.',
-    examples: {
-      full_tree: {
-        summary: 'Replace the full vendor category tree',
-        value: replaceVendorCategoriesTreeSwaggerExample,
-      },
+    schema: {
+      allOf: [{ $ref: getSchemaPath(ReplaceVendorCategoriesTreeDto) }],
+      example: replaceVendorCategoriesTreeSwaggerExample,
     },
   })
   @ApiOkResponse({
