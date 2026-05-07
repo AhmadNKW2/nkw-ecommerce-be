@@ -110,6 +110,100 @@ export class VendorsController {
   }
 
   @Get(':id/categories')
+  @ApiOperation({
+    summary:
+      'Get vendor categories as a flat leaf-first list with assigned categories',
+  })
+  @ApiParam({
+    name: 'id',
+    example: 2,
+    description: 'Vendor id.',
+  })
+  @ApiOkResponse({
+    description:
+      'Vendor categories returned as a flat list ordered from deepest children to parents.',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id: 3,
+            title: 'QD-OLED',
+            reference_link: '/displays/oled/qd-oled',
+            vendor_id: 2,
+            parent_id: 2,
+            category_ids: [13],
+            categories: [
+              {
+                id: 13,
+                name_en: 'QD-OLED Monitors',
+                slug: 'qd-oled-monitors',
+              },
+            ],
+            created_at: '2026-05-05T08:00:00.000Z',
+            updated_at: '2026-05-05T08:00:00.000Z',
+          },
+          {
+            id: 2,
+            title: 'OLED',
+            reference_link: '/displays/oled',
+            vendor_id: 2,
+            parent_id: 1,
+            category_ids: [12],
+            categories: [
+              {
+                id: 12,
+                name_en: 'OLED Monitors',
+                slug: 'oled-monitors',
+              },
+            ],
+            created_at: '2026-05-05T08:00:00.000Z',
+            updated_at: '2026-05-05T08:00:00.000Z',
+          },
+          {
+            id: 4,
+            title: 'LCD',
+            reference_link: '/displays/lcd',
+            vendor_id: 2,
+            parent_id: 1,
+            category_ids: [14],
+            categories: [
+              {
+                id: 14,
+                name_en: 'LCD Monitors',
+                slug: 'lcd-monitors',
+              },
+            ],
+            created_at: '2026-05-05T08:00:00.000Z',
+            updated_at: '2026-05-05T08:00:00.000Z',
+          },
+          {
+            id: 1,
+            title: 'Displays',
+            reference_link: '/displays',
+            vendor_id: 2,
+            parent_id: null,
+            category_ids: [9],
+            categories: [
+              {
+                id: 9,
+                name_en: 'Monitors',
+                slug: 'monitors',
+              },
+            ],
+            created_at: '2026-05-05T08:00:00.000Z',
+            updated_at: '2026-05-05T08:00:00.000Z',
+          },
+        ],
+        message: 'Success',
+        time: '2026-05-05T08:00:00.000Z',
+      },
+    },
+  })
+  @ApiNotFoundResponse({
+    description: 'Vendor not found.',
+    type: ApiErrorResponseDto,
+  })
   findCategories(
     @Param('id', ParseIntPipe) id: number,
   ): Promise<SerializedVendorCategoryListItem[]> {

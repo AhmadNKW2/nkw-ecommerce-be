@@ -59,7 +59,7 @@ export interface SerializedVendorCategory {
 
 export type SerializedVendorCategoryListItem = Omit<
   SerializedVendorCategory,
-  'children'
+  'children' | 'sort_order'
 >;
 
 @Injectable()
@@ -379,6 +379,54 @@ export class VendorsService {
     return roots;
   }
 
+  private serializeVendorCategoryListItem(
+    vendorCategory: SerializedVendorCategory,
+  ): SerializedVendorCategoryListItem {
+    return {
+      id: vendorCategory.id,
+      title: vendorCategory.title,
+      reference_link: vendorCategory.reference_link,
+      vendor_id: vendorCategory.vendor_id,
+      parent_id: vendorCategory.parent_id,
+      category_ids: vendorCategory.category_ids,
+      categories: vendorCategory.categories,
+      created_at: vendorCategory.created_at,
+      updated_at: vendorCategory.updated_at,
+    };
+  }
+
+  private flattenVendorCategoryTreeByDepth(
+    vendorCategories: SerializedVendorCategory[],
+  ): SerializedVendorCategoryListItem[] {
+    const categoriesByDepth = new Map<number, SerializedVendorCategoryListItem[]>();
+    let maxDepth = 0;
+
+    const visit = (
+      vendorCategory: SerializedVendorCategory,
+      depth: number,
+    ): void => {
+      maxDepth = Math.max(maxDepth, depth);
+      const bucket = categoriesByDepth.get(depth) ?? [];
+      bucket.push(this.serializeVendorCategoryListItem(vendorCategory));
+      categoriesByDepth.set(depth, bucket);
+
+      for (const child of vendorCategory.children) {
+        visit(child, depth + 1);
+      }
+    };
+
+    for (const vendorCategory of vendorCategories) {
+      visit(vendorCategory, 0);
+    }
+
+    const flattenedCategories: SerializedVendorCategoryListItem[] = [];
+    for (let depth = maxDepth; depth >= 0; depth -= 1) {
+      flattenedCategories.push(...(categoriesByDepth.get(depth) ?? []));
+    }
+
+    return flattenedCategories;
+  }
+
   private findVendorCategoryNode(
     vendorCategories: SerializedVendorCategory[],
     vendorCategoryId: number,
@@ -631,11 +679,9 @@ export class VendorsService {
     await this.ensureVendorExists(vendorId);
 
     const vendorCategories = await this.loadVendorCategoryEntities([vendorId]);
-    return vendorCategories.map((vendorCategory) => {
-      const { children, ...serialized } = this.serializeVendorCategory(vendorCategory);
-      void children;
-      return serialized;
-    });
+    return this.flattenVendorCategoryTreeByDepth(
+      this.buildVendorCategoryTree(vendorCategories),
+    );
   }
 
   async findVendorCategoriesTree(

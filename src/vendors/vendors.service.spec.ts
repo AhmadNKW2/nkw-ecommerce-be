@@ -175,6 +175,82 @@ describe('VendorsService vendor categories', () => {
     });
   });
 
+  it('lists vendor categories from deepest children to parents without sort_order', async () => {
+    vendorRepository.findOne.mockResolvedValue({ id: 5, name_en: 'Vendor 5' });
+    vendorCategoryRepository.find.mockResolvedValue([
+      {
+        id: 1,
+        title: 'Displays',
+        reference_link: '/displays',
+        vendor_id: 5,
+        parent_id: null,
+        sort_order: 0,
+        created_at: new Date('2026-05-04T00:00:00.000Z'),
+        updated_at: new Date('2026-05-04T00:00:00.000Z'),
+        categories: [{ id: 9, name_en: 'Monitors' }],
+      },
+      {
+        id: 2,
+        title: 'OLED',
+        reference_link: '/displays/oled',
+        vendor_id: 5,
+        parent_id: 1,
+        sort_order: 0,
+        created_at: new Date('2026-05-04T00:00:00.000Z'),
+        updated_at: new Date('2026-05-04T00:00:00.000Z'),
+        categories: [{ id: 12, name_en: 'OLED Monitors' }],
+      },
+      {
+        id: 3,
+        title: 'QD-OLED',
+        reference_link: '/displays/oled/qd-oled',
+        vendor_id: 5,
+        parent_id: 2,
+        sort_order: 0,
+        created_at: new Date('2026-05-04T00:00:00.000Z'),
+        updated_at: new Date('2026-05-04T00:00:00.000Z'),
+        categories: [{ id: 13, name_en: 'QD-OLED Monitors' }],
+      },
+      {
+        id: 4,
+        title: 'LCD',
+        reference_link: '/displays/lcd',
+        vendor_id: 5,
+        parent_id: 1,
+        sort_order: 1,
+        created_at: new Date('2026-05-04T00:00:00.000Z'),
+        updated_at: new Date('2026-05-04T00:00:00.000Z'),
+        categories: [{ id: 14, name_en: 'LCD Monitors' }],
+      },
+      {
+        id: 5,
+        title: 'Peripherals',
+        reference_link: '/peripherals',
+        vendor_id: 5,
+        parent_id: null,
+        sort_order: 1,
+        created_at: new Date('2026-05-04T00:00:00.000Z'),
+        updated_at: new Date('2026-05-04T00:00:00.000Z'),
+        categories: [],
+      },
+    ]);
+
+    const result = await service.findVendorCategories(5);
+
+    expect(result.map((item) => item.id)).toEqual([3, 2, 4, 1, 5]);
+    expect(result[0]).toMatchObject({
+      id: 3,
+      reference_link: '/displays/oled/qd-oled',
+      category_ids: [13],
+    });
+    expect(result[0]).not.toHaveProperty('sort_order');
+    expect(result[3]).toMatchObject({
+      id: 1,
+      reference_link: '/displays',
+      category_ids: [9],
+    });
+  });
+
   it('replaces the full vendor category tree from one nested payload', async () => {
     vendorRepository.findOne.mockResolvedValue({ id: 5, name_en: 'Vendor 5' });
     categoriesRepository.find.mockResolvedValue([{ id: 9 }, { id: 11 }, { id: 12 }]);
