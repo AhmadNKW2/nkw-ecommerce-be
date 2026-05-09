@@ -1943,6 +1943,7 @@ export class ProductsService {
             name_ar: pa.attribute.name_ar,
             unit_en: pa.attribute.unit_en,
             unit_ar: pa.attribute.unit_ar,
+            is_color: pa.attribute.is_color,
             list_separately: pa.attribute.list_separately,
             values: {},
           };
@@ -1957,6 +1958,7 @@ export class ProductsService {
           attributesMap[attrId].values[String(pav.attribute_value.id)] = {
             name_en: pav.attribute_value.value_en,
             name_ar: pav.attribute_value.value_ar,
+            color_code: pav.attribute_value.color_code,
           };
         }
       }

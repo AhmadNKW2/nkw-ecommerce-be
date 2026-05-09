@@ -1,9 +1,15 @@
+import { NotFoundException } from '@nestjs/common';
 import { Brand } from '../brands/entities/brand.entity';
 import { ProductImportService } from './product-import.service';
 
 describe('ProductImportService', () => {
   let service: ProductImportService;
-  let productInputJsonRepository: { create: jest.Mock; save: jest.Mock };
+  let productInputJsonRepository: {
+    create: jest.Mock;
+    save: jest.Mock;
+    findOne: jest.Mock;
+  };
+  let productsService: { create: jest.Mock; update: jest.Mock };
   let specificationsService: { addValue: jest.Mock };
   let attributesService: { addValue: jest.Mock };
   let brandsService: { create: jest.Mock };
@@ -12,6 +18,11 @@ describe('ProductImportService', () => {
     productInputJsonRepository = {
       create: jest.fn((value) => value),
       save: jest.fn(),
+      findOne: jest.fn(),
+    };
+    productsService = {
+      create: jest.fn(),
+      update: jest.fn(),
     };
     specificationsService = {
       addValue: jest.fn(),
@@ -26,7 +37,7 @@ describe('ProductImportService', () => {
     service = new ProductImportService(
       { find: jest.fn() } as never,
       productInputJsonRepository as never,
-      { create: jest.fn() } as never,
+      productsService as never,
       specificationsService as never,
       attributesService as never,
       { uploadAndCreate: jest.fn() } as never,
@@ -54,17 +65,7 @@ describe('ProductImportService', () => {
       },
       message: 'Product created successfully.',
     };
-    const createMock = jest.fn().mockResolvedValue(createdProduct);
-
-    service = new ProductImportService(
-      { find: jest.fn() } as never,
-      productInputJsonRepository as never,
-      { create: createMock } as never,
-      specificationsService as never,
-      attributesService as never,
-      { uploadAndCreate: jest.fn() } as never,
-      brandsService as never,
-    );
+    const createMock = productsService.create.mockResolvedValue(createdProduct);
 
     jest
       .spyOn(service as any, 'parseRequest')
@@ -125,6 +126,59 @@ describe('ProductImportService', () => {
       input_json: inputBody,
     });
     expect(result).toBe(createdProduct);
+  });
+
+  it('re-imports an existing product from its stored input_json payload', async () => {
+    const storedInputBody = {
+      payload: {
+        title: 'Imported Monitor',
+        description: 'Imported description',
+        new_price: '99.99',
+      },
+      category_id: 9,
+      vendor_id: 2,
+    };
+    const updateProductDto = {
+      name_en: 'Imported Monitor',
+      name_ar: 'شاشة مستوردة',
+    };
+    const updatedProduct = {
+      product: {
+        id: 321,
+      },
+      message: 'Product updated successfully.',
+    };
+
+    productInputJsonRepository.findOne.mockResolvedValue({
+      product_id: 321,
+      input_json: storedInputBody,
+    });
+    productsService.update.mockResolvedValue(updatedProduct);
+    jest
+      .spyOn(service as any, 'buildImportedProductDto')
+      .mockResolvedValue(updateProductDto);
+
+    const result = await service.reimportByProductId(321);
+
+    expect(productInputJsonRepository.findOne).toHaveBeenCalledWith({
+      where: { product_id: 321 },
+    });
+    expect((service as any).buildImportedProductDto).toHaveBeenCalledWith(
+      storedInputBody,
+    );
+    expect(productsService.update).toHaveBeenCalledWith(321, updateProductDto);
+    expect(productInputJsonRepository.create).not.toHaveBeenCalled();
+    expect(productInputJsonRepository.save).not.toHaveBeenCalled();
+    expect(result).toBe(updatedProduct);
+  });
+
+  it('throws a not found error when no stored input_json exists for re-import', async () => {
+    productInputJsonRepository.findOne.mockResolvedValue(null);
+
+    await expect(service.reimportByProductId(321)).rejects.toThrow(
+      new NotFoundException('No stored import input JSON found for product 321.'),
+    );
+    expect(productsService.update).not.toHaveBeenCalled();
   });
 
   it('prefers a corroborated payload brand over a conflicting AI brand', async () => {

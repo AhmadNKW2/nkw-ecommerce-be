@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { appendFile, mkdir } from 'fs/promises';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -12,6 +17,7 @@ import { Brand, BrandStatus } from '../brands/entities/brand.entity';
 import { Specification } from '../specifications/entities/specification.entity';
 import { SpecificationsService } from '../specifications/specifications.service';
 import { CreateProductDto } from './dto/create-product.dto';
+import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductInputJson } from './entities/product-input-json.entity';
 import { ProductStatus } from './entities/product.entity';
 import { buildProductImportSystemPrompt } from './prompts/product-import-system.prompt';
@@ -201,19 +207,7 @@ export class ProductImportService {
 
   async importFromRequest(body: Record<string, unknown>, userId?: number) {
     try {
-      const request = this.parseRequest(body);
-      const catalog = await this.loadImportCatalog(request.categoryId);
-      const aiResult = await this.callOpenAi(
-        request.payload,
-        catalog,
-        request.model,
-        request.sourceFile,
-      );
-      const createProductDto = await this.buildCreateProductDto(
-        request,
-        aiResult,
-        catalog,
-      );
+      const createProductDto = await this.buildImportedProductDto(body);
       const createdProduct = await this.productsService.create(
         createProductDto,
         userId,
@@ -241,6 +235,58 @@ export class ProductImportService {
         `Failed to import product payload: ${getErrorMessage(error)}`,
       );
     }
+  }
+
+  async reimportByProductId(productId: number) {
+    try {
+      const storedInputJson = await this.productInputJsonRepository.findOne({
+        where: { product_id: productId },
+      });
+
+      if (!storedInputJson) {
+        throw new NotFoundException(
+          `No stored import input JSON found for product ${productId}.`,
+        );
+      }
+
+      const updateProductDto = await this.buildImportedProductDto(
+        storedInputJson.input_json,
+      );
+
+      return this.productsService.update(
+        productId,
+        updateProductDto as UpdateProductDto,
+      );
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Failed to re-import product ${productId}: ${getErrorMessage(error)}`,
+      );
+      throw new BadRequestException(
+        `Failed to re-import product ${productId}: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private async buildImportedProductDto(
+    body: Record<string, unknown>,
+  ): Promise<CreateProductDto> {
+    const request = this.parseRequest(body);
+    const catalog = await this.loadImportCatalog(request.categoryId);
+    const aiResult = await this.callOpenAi(
+      request.payload,
+      catalog,
+      request.model,
+      request.sourceFile,
+    );
+
+    return this.buildCreateProductDto(request, aiResult, catalog);
   }
 
   private extractCreatedProductId(result: unknown): number | null {

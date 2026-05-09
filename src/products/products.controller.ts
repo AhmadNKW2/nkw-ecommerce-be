@@ -275,6 +275,17 @@ export class ProductsController {
     return this.productImportService.importFromRequest(body, req.user?.id);
   }
 
+  @Post(':id/reimport-ai')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @ApiOperation({
+    summary:
+      'Re-import an existing product by rerunning the AI import flow against its stored input_json payload',
+  })
+  reimportAiProduct(@Param('id', ParseIntPipe) id: number) {
+    return this.productImportService.reimportByProductId(id);
+  }
+
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
