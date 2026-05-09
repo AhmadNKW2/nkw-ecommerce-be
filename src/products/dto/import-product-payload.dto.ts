@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { OriginalVendorCategoryInputDto } from './original-vendor-category.dto';
 
 export class ImportProductPayloadDto {
   @ApiPropertyOptional({
@@ -56,6 +57,31 @@ export class ImportProductPayloadDto {
       'Vendor override. If omitted, the endpoint will try payload.vendor_id.',
   })
   vendor_id?: number;
+
+  @ApiPropertyOptional({
+    type: [OriginalVendorCategoryInputDto],
+    example: [
+      { id: 18, name: 'Gaming Monitors' },
+      { id: 24, name: 'LED Displays' },
+    ],
+    description:
+      'Optional ordered source vendor categories to persist on the imported product. Accepts the same value inside payload as original_vendor_categories or vendor_categories.',
+  })
+  original_vendor_categories?: OriginalVendorCategoryInputDto[];
+
+  @ApiPropertyOptional({
+    example: 18,
+    description:
+      'Optional primary source vendor category id to persist on the imported product. Accepts the same value inside payload as original_vendor_category_id or vendor_category_id.',
+  })
+  original_vendor_category_id?: number;
+
+  @ApiPropertyOptional({
+    example: 'Gaming Monitors',
+    description:
+      'Optional primary source vendor category name to persist on the imported product. Accepts the same value inside payload as original_vendor_category_name or vendor_category_name.',
+  })
+  original_vendor_category_name?: string;
 
   @ApiPropertyOptional({
     example: 'gpt-5.4',

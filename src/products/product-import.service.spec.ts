@@ -90,6 +90,8 @@ describe('ProductImportService', () => {
       { uploadAndCreate: jest.fn() } as never,
       brandsService as never,
     );
+
+    jest.spyOn(service as any, 'getOpenAiApiKey').mockReturnValue('test-key');
   });
 
   it('stores the raw import request body after creating the product', async () => {
@@ -173,6 +175,74 @@ describe('ProductImportService', () => {
       input_json: inputBody,
     });
     expect(result).toBe(createdProduct);
+  });
+
+  it('extracts original vendor category metadata from import payload aliases', () => {
+    const parsed = (service as any).parseRequest({
+      category_id: 9,
+      vendor_id: 2,
+      payload: {
+        title: 'Imported Monitor',
+        description: 'Imported description',
+        new_price: '99.99',
+        vendorCategories: [
+          {
+            id: 44,
+            title: 'Gaming Monitors',
+          },
+          {
+            id: 51,
+            title: 'LED Displays',
+          },
+        ],
+      },
+    });
+
+    expect(parsed.payload.original_vendor_categories).toEqual([
+      { id: 44, name: 'Gaming Monitors' },
+      { id: 51, name: 'LED Displays' },
+    ]);
+    expect(parsed.payload.original_vendor_category_id).toBe(44);
+    expect(parsed.payload.original_vendor_category_name).toBe(
+      'Gaming Monitors',
+    );
+  });
+
+  it('copies original vendor category metadata into the create dto payload metadata', () => {
+    const createProductDto: Record<string, unknown> = {};
+
+    (service as any).applyPayloadMetadata(createProductDto, {
+      title: 'Imported Monitor',
+      description: 'Imported description',
+      new_price: '99.99',
+      image: null,
+      images: [],
+      media: [],
+      specification: [],
+      attributes: [],
+      brand: null,
+      reference_link: null,
+      quantity: undefined,
+      stock: undefined,
+      sku: null,
+      record: null,
+      original_vendor_categories: [
+        { id: 44, name: 'Gaming Monitors' },
+        { id: 51, name: 'LED Displays' },
+      ],
+      original_vendor_category_id: 44,
+      original_vendor_category_name: 'Gaming Monitors',
+      raw_data: {},
+    });
+
+    expect(createProductDto).toMatchObject({
+      original_vendor_categories: [
+        { id: 44, name: 'Gaming Monitors' },
+        { id: 51, name: 'LED Displays' },
+      ],
+      original_vendor_category_id: 44,
+      original_vendor_category_name: 'Gaming Monitors',
+    });
   });
 
   it('re-imports an existing product from its stored input_json payload', async () => {

@@ -1,3 +1,5 @@
+import { Observable, timer } from 'rxjs';
+import { map, takeWhile, finalize } from 'rxjs/operators';
 import {
   Controller,
   Get,
@@ -14,6 +16,8 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  Sse,
+  MessageEvent
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import {
@@ -135,6 +139,27 @@ export class ProductsController {
     return status;
   }
 
+  @Sse('jobs/:jobId/stream')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  streamJobStatus(@Param('jobId') jobId: string): Observable<MessageEvent> {
+    const status = this.productsService.getJobStatus(jobId);
+    if (!status) {
+      throw new NotFoundException(`Job '${jobId}' not found.`);
+    }
+
+    return timer(0, 1500).pipe(
+      map(() => {
+        const currentStatus = this.productsService.getJobStatus(jobId);
+        return { data: currentStatus } as MessageEvent;
+      }),
+      takeWhile((event) => {
+        const payload = event.data as any;
+        return payload?.status === 'running';
+      }, true),
+    );
+  }
+
   @Get('import-jobs/:jobId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
@@ -151,6 +176,30 @@ export class ProductsController {
     }
 
     return status;
+  }
+
+  @Sse('import-jobs/:jobId/stream')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @ApiOperation({
+    summary: 'Stream the status of a background product import or re-import job via SSE',
+  })
+  streamImportJobStatus(@Param('jobId') jobId: string): Observable<MessageEvent> {
+    const status = this.productImportService.getJobStatus(jobId);
+    if (!status) {
+      throw new NotFoundException(`Import job '${jobId}' not found.`);
+    }
+
+    return timer(0, 1500).pipe(
+      map(() => {
+        const currentStatus = this.productImportService.getJobStatus(jobId);
+        return { data: currentStatus } as MessageEvent;
+      }),
+      takeWhile((event) => {
+        const payload = event.data as any;
+        return payload?.status === 'running';
+      }, true),
+    );
   }
 
   @Post('import-payload')
@@ -440,6 +489,20 @@ export class ProductsController {
     type: Number,
     description: 'Backward-compatible alias for vendorId',
     example: 2,
+  })
+  @ApiQuery({
+    name: 'originalVendorCategoryId',
+    required: false,
+    type: Number,
+    description: 'Preferred original source vendor-category filter parameter',
+    example: 18,
+  })
+  @ApiQuery({
+    name: 'original_vendor_category_id',
+    required: false,
+    type: Number,
+    description: 'Backward-compatible alias for originalVendorCategoryId',
+    example: 18,
   })
   @ApiQuery({
     name: 'category_ids',

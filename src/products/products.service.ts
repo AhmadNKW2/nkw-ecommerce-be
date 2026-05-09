@@ -13,6 +13,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import {
   FilterProductDto,
   getCategoryIds,
+  getOriginalVendorCategoryId,
   getSingleVendorId,
 } from './dto/filter-product.dto';
 import { ProductNamesQueryDto } from './dto/product-names-query.dto';
@@ -55,6 +56,11 @@ function getErrorMessage(error: unknown): string {
 
   return String(error);
 }
+
+type OriginalVendorCategoryReference = {
+  id?: number;
+  name?: string;
+};
 
 @Injectable()
 export class ProductsService {
@@ -245,6 +251,64 @@ export class ProductsService {
           ),
       ),
     ];
+  }
+
+  private normalizeOriginalVendorCategories(params: {
+    categories?: Array<OriginalVendorCategoryReference | null | undefined> | null;
+    legacyId?: number | null;
+    legacyName?: string | null;
+  }): OriginalVendorCategoryReference[] {
+    const orderedKeys: string[] = [];
+    const categoriesByKey = new Map<string, OriginalVendorCategoryReference>();
+    const sourceCategories = [
+      ...(params.legacyId || params.legacyName
+        ? [
+            {
+              ...(params.legacyId ? { id: Number(params.legacyId) } : {}),
+              ...(params.legacyName ? { name: params.legacyName.trim() } : {}),
+            },
+          ]
+        : []),
+      ...(params.categories ?? []),
+    ];
+
+    for (const sourceCategory of sourceCategories) {
+      const id =
+        typeof sourceCategory?.id === 'number' &&
+        Number.isInteger(sourceCategory.id) &&
+        sourceCategory.id > 0
+          ? sourceCategory.id
+          : null;
+      const name =
+        typeof sourceCategory?.name === 'string' && sourceCategory.name.trim()
+          ? sourceCategory.name.trim()
+          : null;
+
+      if (!id && !name) {
+        continue;
+      }
+
+      const key = id ? `id:${id}` : `name:${name?.toLocaleLowerCase()}`;
+
+      if (!categoriesByKey.has(key)) {
+        orderedKeys.push(key);
+        categoriesByKey.set(key, {
+          ...(id ? { id } : {}),
+          ...(name ? { name } : {}),
+        });
+        continue;
+      }
+
+      const existingCategory = categoriesByKey.get(key) ?? {};
+      categoriesByKey.set(key, {
+        ...(existingCategory.id ? { id: existingCategory.id } : {}),
+        ...(id && !existingCategory.id ? { id } : {}),
+        ...(existingCategory.name ? { name: existingCategory.name } : {}),
+        ...(name && !existingCategory.name ? { name } : {}),
+      });
+    }
+
+    return orderedKeys.map((key) => categoriesByKey.get(key) ?? {});
   }
 
   private resolveIsOutOfStock(params: {
@@ -1401,6 +1465,12 @@ export class ProductsService {
         quantity: initialQuantity,
         requestedState: dto.is_out_of_stock,
       });
+      const originalVendorCategories = this.normalizeOriginalVendorCategories({
+        categories: dto.original_vendor_categories,
+        legacyId: dto.original_vendor_category_id ?? null,
+        legacyName: dto.original_vendor_category_name ?? null,
+      });
+      const primaryOriginalVendorCategory = originalVendorCategories[0] ?? null;
 
       // 1. Create basic product (primary category is first in the list)
       const product = this.productsRepository.create({
@@ -1416,6 +1486,11 @@ export class ProductsService {
         reference_link: dto.reference_link ?? null,
         category_id: dto.category_ids?.[0],
         vendor_id: dto.vendor_id,
+        original_vendor_categories: originalVendorCategories,
+        original_vendor_category_id:
+          primaryOriginalVendorCategory?.id ?? null,
+        original_vendor_category_name:
+          primaryOriginalVendorCategory?.name ?? null,
         brand_id: dto.brand_id,
         status: dto.status ?? ProductStatus.ACTIVE,
         visible: dto.visible ?? true,
@@ -1530,6 +1605,8 @@ export class ProductsService {
     } = filterDto;
     const normalizedCategoryIds = getCategoryIds(filterDto);
     const normalizedVendorId = getSingleVendorId(filterDto);
+    const normalizedOriginalVendorCategoryId =
+      getOriginalVendorCategoryId(filterDto);
 
     // NOTE: The list view previously did a huge multi-join + getManyAndCount.
     // With relations like media/variants/stock/groups, this causes row explosion and slow COUNT.
@@ -1622,6 +1699,23 @@ export class ProductsService {
       });
     }
 
+    if (normalizedOriginalVendorCategoryId !== undefined) {
+      baseQuery.andWhere(
+        `(
+          product.original_vendor_category_id = :originalVendorCategoryId
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(product.original_vendor_categories, '[]'::jsonb)) AS original_vendor_category
+            WHERE (original_vendor_category->>'id') ~ '^[0-9]+$'
+              AND CAST(original_vendor_category->>'id' AS integer) = :originalVendorCategoryId
+          )
+        )`,
+        {
+          originalVendorCategoryId: normalizedOriginalVendorCategoryId,
+        },
+      );
+    }
+
     // Filter by single brand (backward compat)
     if (brandId) {
       baseQuery.andWhere('product.brand_id = :brandId', { brandId });
@@ -1711,7 +1805,7 @@ export class ProductsService {
     // Search by name, sku, or descriptions
     if (search) {
       baseQuery.andWhere(
-        '(product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.sku ILIKE :search OR product.short_description_en ILIKE :search OR product.long_description_en ILIKE :search)',
+        '(product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.sku ILIKE :search OR product.short_description_en ILIKE :search OR product.long_description_en ILIKE :search OR product.original_vendor_category_name ILIKE :search OR CAST(product.original_vendor_categories AS text) ILIKE :search)',
         { search: `%${search}%` },
       );
     }
@@ -2361,6 +2455,26 @@ export class ProductsService {
           requestedState: dto.is_out_of_stock,
           currentState: existingProduct.is_out_of_stock,
         });
+      }
+
+      if (
+        dto.original_vendor_categories !== undefined ||
+        dto.original_vendor_category_id !== undefined ||
+        dto.original_vendor_category_name !== undefined
+      ) {
+        const originalVendorCategories = this.normalizeOriginalVendorCategories({
+          categories: dto.original_vendor_categories,
+          legacyId: dto.original_vendor_category_id ?? null,
+          legacyName: dto.original_vendor_category_name ?? null,
+        });
+        const primaryOriginalVendorCategory =
+          originalVendorCategories[0] ?? null;
+
+        basicInfoChanges.original_vendor_categories = originalVendorCategories;
+        basicInfoChanges.original_vendor_category_id =
+          primaryOriginalVendorCategory?.id ?? null;
+        basicInfoChanges.original_vendor_category_name =
+          primaryOriginalVendorCategory?.name ?? null;
       }
 
       if (Object.keys(basicInfoChanges).length > 0) {

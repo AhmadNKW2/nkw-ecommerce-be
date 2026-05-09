@@ -176,4 +176,29 @@ describe('ProductsService detail attributes', () => {
       color_code: '#FF0000',
     });
   });
+
+  it('normalizes multiple original vendor categories while keeping order and deduping', () => {
+    const result = (
+      service as ProductsService & {
+        normalizeOriginalVendorCategories: (params: {
+          categories?: Array<{ id?: number; name?: string } | null>;
+          legacyId?: number | null;
+          legacyName?: string | null;
+        }) => Array<{ id?: number; name?: string }>;
+      }
+    ).normalizeOriginalVendorCategories({
+      categories: [
+        { id: 44, name: 'Gaming Monitors' },
+        { id: 51, name: 'LED Displays' },
+        { id: 44 },
+      ],
+      legacyId: 44,
+      legacyName: 'Gaming Monitors',
+    });
+
+    expect(result).toEqual([
+      { id: 44, name: 'Gaming Monitors' },
+      { id: 51, name: 'LED Displays' },
+    ]);
+  });
 });

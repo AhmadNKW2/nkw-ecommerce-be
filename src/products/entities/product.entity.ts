@@ -54,6 +54,7 @@ export enum ProductStatus {
 @Entity('products')
 @Index('idx_products_category_id', ['category_id'])
 @Index('idx_products_vendor_id', ['vendor_id'])
+@Index('idx_products_original_vendor_category_id', ['original_vendor_category_id'])
 @Index('idx_products_brand_id', ['brand_id'])
 @Index('idx_products_status', ['status'])
 @Index('idx_products_visible', ['visible'])
@@ -132,6 +133,15 @@ export class Product {
 
   @Column({ nullable: true })
   vendor_id: number;
+
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  original_vendor_categories: Array<{ id?: number; name?: string }>;
+
+  @Column({ type: 'int', nullable: true })
+  original_vendor_category_id: number | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  original_vendor_category_name: string | null;
 
   // Brand relationship
   @ManyToOne(() => Brand, { onDelete: 'SET NULL', nullable: true })

@@ -15,6 +15,7 @@ import { Type } from 'class-transformer';
 import { ProductStatus } from '../entities/product.entity';
 import { PreserveRawNumberInput } from '../../common/decorators/preserve-raw-number-input.decorator';
 import { ProductSpecificationInputDto } from './product-specification.dto';
+import { OriginalVendorCategoryInputDto } from './original-vendor-category.dto';
 
 import { ProductAttributeInputDto } from './product-attribute.dto';
 
@@ -106,6 +107,37 @@ export class CreateProductDto {
   @IsNumber()
   @IsOptional()
   vendor_id?: number;
+
+  @ApiPropertyOptional({
+    type: [OriginalVendorCategoryInputDto],
+    example: [
+      { id: 18, name: 'Gaming Monitors' },
+      { id: 24, name: 'LED Displays' },
+    ],
+    description: 'Ordered source vendor categories captured during import',
+  })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OriginalVendorCategoryInputDto)
+  @IsOptional()
+  original_vendor_categories?: OriginalVendorCategoryInputDto[];
+
+  @ApiPropertyOptional({
+    example: 18,
+    description: 'Primary source vendor category ID captured during import',
+  })
+  @IsNumber()
+  @IsOptional()
+  original_vendor_category_id?: number | null;
+
+  @ApiPropertyOptional({
+    example: 'Gaming Monitors',
+    description: 'Primary source vendor category name captured during import',
+  })
+  @IsString()
+  @MaxLength(255)
+  @IsOptional()
+  original_vendor_category_name?: string | null;
 
   @ApiPropertyOptional({ example: 8, description: 'Brand ID of the product' })
   @IsNumber()

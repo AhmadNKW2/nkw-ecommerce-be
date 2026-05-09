@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import {
   FilterProductDto,
   getCategoryIds,
+  getOriginalVendorCategoryId,
   getSingleVendorId,
 } from './filter-product.dto';
 
@@ -34,6 +35,20 @@ describe('FilterProductDto', () => {
 
     expect(result.vendor_id).toBe(2);
     expect(getSingleVendorId(result)).toBe(2);
+  });
+
+  it('accepts originalVendorCategoryId as the canonical query parameter', async () => {
+    const result = await transformQuery({ originalVendorCategoryId: '14' });
+
+    expect(result.originalVendorCategoryId).toBe(14);
+    expect(getOriginalVendorCategoryId(result)).toBe(14);
+  });
+
+  it('accepts original_vendor_category_id as a backward-compatible alias', async () => {
+    const result = await transformQuery({ original_vendor_category_id: '14' });
+
+    expect(result.original_vendor_category_id).toBe(14);
+    expect(getOriginalVendorCategoryId(result)).toBe(14);
   });
 
   it('accepts categories_ids as an alias for category_ids', async () => {

@@ -62,6 +62,11 @@ interface ParsedImportRequest {
   sourceFile: string | null;
 }
 
+interface OriginalVendorCategoryReference {
+  id?: number;
+  name?: string;
+}
+
 interface NormalizedImportPayload {
   title: string;
   description: string;
@@ -80,6 +85,9 @@ interface NormalizedImportPayload {
   stock?: unknown;
   sku?: string | null;
   record?: string | null;
+  original_vendor_categories: OriginalVendorCategoryReference[];
+  original_vendor_category_id?: number | null;
+  original_vendor_category_name?: string | null;
   raw_data: Record<string, unknown>;
 }
 
@@ -206,6 +214,10 @@ export class ProductImportService {
       result?: Record<string, unknown>;
       error?: string;
       cancellationRequested?: boolean;
+      progress?: number;
+      total?: number;
+      current_index?: number;
+      current_product?: string;
     }
   >();
 
@@ -273,6 +285,10 @@ export class ProductImportService {
       status: job.status,
       started_at: job.startedAt,
       finished_at: job.finishedAt ?? null,
+      progress: job.progress ?? null,
+      total: job.total ?? null,
+      current_index: job.current_index ?? null,
+      current_product: job.current_product ?? null,
       duration_seconds: job.finishedAt
         ? Math.round((job.finishedAt.getTime() - job.startedAt.getTime()) / 1000)
         : Math.round((Date.now() - job.startedAt.getTime()) / 1000),
@@ -282,6 +298,8 @@ export class ProductImportService {
   }
 
   startReimportByProductIdInBackground(productId: number): string {
+    this.getOpenAiApiKey();
+
     const jobId = this.createJob('reimport-one');
 
     this.reimportByProductId(productId)
@@ -315,6 +333,8 @@ export class ProductImportService {
     categoryId?: number,
     vendorId?: number,
   ): string {
+    this.getOpenAiApiKey();
+
     this.cancelRunningReviewJobs();
     const jobId = this.createJob('reimport-review');
 
@@ -464,7 +484,22 @@ export class ProductImportService {
         error?: string;
       }> = [];
 
-      for (const product of products) {
+      const job = jobId ? this.jobs.get(jobId) : undefined;
+      if (job) {
+        job.total = products.length;
+        job.progress = 0;
+        job.current_index = 0;
+        job.current_product = undefined;
+      }
+
+      for (let i = 0; i < products.length; i++) {
+        const product = products[i];
+        
+        if (job) {
+          job.current_index = i + 1;
+          job.current_product = product.name_en;
+        }
+        
         if (this.isReviewJobCancelled(jobId)) {
           this.logger.warn(
             `Stopping cancelled bulk review re-import job ${jobId} before processing product ${product.id}.`,
@@ -486,6 +521,10 @@ export class ProductImportService {
             status: 'failed',
             error: getErrorMessage(error),
           });
+        }
+
+        if (job) {
+          job.progress = results.length;
         }
       }
 
@@ -599,6 +638,14 @@ export class ProductImportService {
       this.requireOptionalString(body.source_file) ??
       this.requireOptionalString(rawPayload.source_file) ??
       null;
+    payload.original_vendor_categories = this.mergeOriginalVendorCategories(
+      this.extractOriginalVendorCategories(body),
+      payload.original_vendor_categories,
+    );
+    payload.original_vendor_category_id =
+      payload.original_vendor_categories[0]?.id ?? null;
+    payload.original_vendor_category_name =
+      payload.original_vendor_categories[0]?.name ?? null;
 
     if (!categoryId) {
       throw new BadRequestException(
@@ -679,6 +726,13 @@ export class ProductImportService {
       stock: mergedPayload.stock ?? mergedPayload.in_stock,
       sku: this.requireOptionalString(mergedPayload.sku),
       record: this.requireOptionalString(mergedPayload.record),
+      original_vendor_categories: this.extractOriginalVendorCategories(
+        mergedPayload,
+      ),
+      original_vendor_category_id:
+        this.extractOriginalVendorCategoryId(mergedPayload),
+      original_vendor_category_name:
+        this.extractOriginalVendorCategoryName(mergedPayload),
       raw_data: this.extractAdditionalRawData(mergedPayload),
     };
   }
@@ -712,6 +766,22 @@ export class ProductImportService {
       'in_stock',
       'sku',
       'record',
+      'original_vendor_categories',
+      'originalVendorCategories',
+      'vendor_categories',
+      'vendorCategories',
+      'original_vendor_category_id',
+      'originalVendorCategoryId',
+      'vendor_category_id',
+      'vendorCategoryId',
+      'original_vendor_category_name',
+      'originalVendorCategoryName',
+      'vendor_category_name',
+      'vendorCategoryName',
+      'original_vendor_category',
+      'originalVendorCategory',
+      'vendor_category',
+      'vendorCategory',
       'data',
       'category_id',
       'category_ids',
@@ -939,6 +1009,21 @@ export class ProductImportService {
 
     if (payload.reference_link) {
       createProductDto.reference_link = payload.reference_link;
+    }
+
+    if (payload.original_vendor_categories.length > 0) {
+      createProductDto.original_vendor_categories =
+        payload.original_vendor_categories;
+    }
+
+    if (payload.original_vendor_category_id) {
+      createProductDto.original_vendor_category_id =
+        payload.original_vendor_category_id;
+    }
+
+    if (payload.original_vendor_category_name) {
+      createProductDto.original_vendor_category_name =
+        payload.original_vendor_category_name;
     }
 
     if (sku) {
@@ -2532,6 +2617,175 @@ export class ProductImportService {
     }
 
     return null;
+  }
+
+  private firstPositiveInteger(values: unknown[]): number | null {
+    for (const value of values) {
+      const parsed = this.extractPositiveInteger(value);
+      if (parsed) {
+        return parsed;
+      }
+    }
+
+    return null;
+  }
+
+  private mergeOriginalVendorCategories(
+    ...collections: OriginalVendorCategoryReference[][]
+  ): OriginalVendorCategoryReference[] {
+    return this.normalizeOriginalVendorCategories(collections.flat());
+  }
+
+  private normalizeOriginalVendorCategories(
+    categories: OriginalVendorCategoryReference[],
+  ): OriginalVendorCategoryReference[] {
+    const orderedKeys: string[] = [];
+    const categoriesByKey = new Map<string, OriginalVendorCategoryReference>();
+
+    for (const category of categories) {
+      const id = this.extractPositiveInteger(category.id);
+      const name = this.requireOptionalString(category.name);
+
+      if (!id && !name) {
+        continue;
+      }
+
+      const key = id ? `id:${id}` : `name:${name?.toLocaleLowerCase()}`;
+
+      if (!categoriesByKey.has(key)) {
+        orderedKeys.push(key);
+        categoriesByKey.set(key, {
+          ...(id ? { id } : {}),
+          ...(name ? { name } : {}),
+        });
+        continue;
+      }
+
+      const existingCategory = categoriesByKey.get(key) ?? {};
+      categoriesByKey.set(key, {
+        ...(existingCategory.id ? { id: existingCategory.id } : {}),
+        ...(id && !existingCategory.id ? { id } : {}),
+        ...(existingCategory.name ? { name: existingCategory.name } : {}),
+        ...(name && !existingCategory.name ? { name } : {}),
+      });
+    }
+
+    return orderedKeys.map((key) => categoriesByKey.get(key) ?? {});
+  }
+
+  private normalizeOriginalVendorCategoryReference(
+    value: unknown,
+  ): OriginalVendorCategoryReference | null {
+    const valueObject = this.getObject(value);
+
+    if (valueObject) {
+      const id = this.firstPositiveInteger([
+        valueObject.id,
+        valueObject.vendor_category_id,
+        valueObject.vendorCategoryId,
+        valueObject.original_vendor_category_id,
+        valueObject.originalVendorCategoryId,
+      ]);
+      const name = this.firstNonEmptyString([
+        valueObject.title,
+        valueObject.name,
+        valueObject.name_en,
+        valueObject.original_vendor_category_name,
+        valueObject.originalVendorCategoryName,
+        valueObject.vendor_category_name,
+        valueObject.vendorCategoryName,
+      ]);
+
+      if (!id && !name) {
+        return null;
+      }
+
+      return {
+        ...(id ? { id } : {}),
+        ...(name ? { name } : {}),
+      };
+    }
+
+    const id = this.extractPositiveInteger(value);
+    if (id) {
+      return { id };
+    }
+
+    const name = this.requireOptionalString(value);
+    if (name) {
+      return { name };
+    }
+
+    return null;
+  }
+
+  private normalizeOriginalVendorCategoryCollection(
+    value: unknown,
+  ): OriginalVendorCategoryReference[] {
+    if (value === undefined || value === null) {
+      return [];
+    }
+
+    const values = Array.isArray(value) ? value : [value];
+
+    return values
+      .map((entry) => this.normalizeOriginalVendorCategoryReference(entry))
+      .filter(
+        (
+          entry,
+        ): entry is OriginalVendorCategoryReference => entry !== null,
+      );
+  }
+
+  private extractOriginalVendorCategories(
+    input: Record<string, unknown>,
+  ): OriginalVendorCategoryReference[] {
+    const legacyPrimaryCategory = this.normalizeOriginalVendorCategoryReference({
+      id: this.firstPositiveInteger([
+        input.original_vendor_category_id,
+        input.originalVendorCategoryId,
+        input.vendor_category_id,
+        input.vendorCategoryId,
+      ]),
+      name: this.firstNonEmptyString([
+        input.original_vendor_category_name,
+        input.originalVendorCategoryName,
+        input.vendor_category_name,
+        input.vendorCategoryName,
+      ]),
+    });
+
+    return this.normalizeOriginalVendorCategories([
+      ...(legacyPrimaryCategory ? [legacyPrimaryCategory] : []),
+      ...this.normalizeOriginalVendorCategoryCollection(
+        input.original_vendor_categories,
+      ),
+      ...this.normalizeOriginalVendorCategoryCollection(
+        input.originalVendorCategories,
+      ),
+      ...this.normalizeOriginalVendorCategoryCollection(input.vendor_categories),
+      ...this.normalizeOriginalVendorCategoryCollection(input.vendorCategories),
+      ...this.normalizeOriginalVendorCategoryCollection(
+        input.original_vendor_category,
+      ),
+      ...this.normalizeOriginalVendorCategoryCollection(
+        input.originalVendorCategory,
+      ),
+      ...this.normalizeOriginalVendorCategoryCollection(input.vendor_category),
+      ...this.normalizeOriginalVendorCategoryCollection(input.vendorCategory),
+    ]);
+  }
+
+  private extractOriginalVendorCategoryId(
+    input: Record<string, unknown>,
+  ): number | null {
+    return this.extractOriginalVendorCategories(input)[0]?.id ?? null;
+  }
+
+  private extractOriginalVendorCategoryName(
+    input: Record<string, unknown>,
+  ): string | null {
+    return this.extractOriginalVendorCategories(input)[0]?.name ?? null;
   }
 
   private firstDefinedValue(values: unknown[]): unknown {

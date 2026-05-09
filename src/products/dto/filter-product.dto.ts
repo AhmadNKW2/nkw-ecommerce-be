@@ -58,6 +58,16 @@ export function getSingleVendorId(filterDto: {
   return filterDto.vendorId ?? filterDto.vendor_id;
 }
 
+export function getOriginalVendorCategoryId(filterDto: {
+  originalVendorCategoryId?: number;
+  original_vendor_category_id?: number;
+}) {
+  return (
+    filterDto.originalVendorCategoryId ??
+    filterDto.original_vendor_category_id
+  );
+}
+
 export function getCategoryIds(filterDto: {
   category_ids?: number[];
   categories_ids?: number[];
@@ -210,6 +220,34 @@ export class FilterProductDto {
   @IsArray()
   @IsNumber({}, { each: true })
   vendor_ids?: number[];
+
+  /** Single original vendor category ID (backward compat). */
+  @IsOptional()
+  @Transform(({ value, obj }) => {
+    const rawValue = value ?? obj.original_vendor_category_id;
+
+    if (rawValue === undefined || rawValue === null || rawValue === '') {
+      return undefined;
+    }
+
+    const numericValue = Number(rawValue);
+    return Number.isNaN(numericValue) ? undefined : numericValue;
+  })
+  @IsNumber()
+  originalVendorCategoryId?: number;
+
+  /** Backward-compatible alias for originalVendorCategoryId. */
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const numericValue = Number(value);
+    return Number.isNaN(numericValue) ? undefined : numericValue;
+  })
+  @IsNumber()
+  original_vendor_category_id?: number;
 
   // ─── Brand filter ────────────────────────────────────
   /** Single brand ID (backward compat) */
