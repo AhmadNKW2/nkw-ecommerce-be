@@ -1,5 +1,8 @@
 import { NotFoundException } from '@nestjs/common';
 import { Brand } from '../brands/entities/brand.entity';
+import { Category } from '../categories/entities/category.entity';
+import { Vendor } from '../vendors/entities/vendor.entity';
+import { Product, ProductStatus } from './entities/product.entity';
 import { ProductImportService } from './product-import.service';
 
 describe('ProductImportService', () => {
@@ -8,17 +11,61 @@ describe('ProductImportService', () => {
     create: jest.Mock;
     save: jest.Mock;
     findOne: jest.Mock;
+    manager: { getRepository: jest.Mock };
   };
   let productsService: { create: jest.Mock; update: jest.Mock };
   let specificationsService: { addValue: jest.Mock };
   let attributesService: { addValue: jest.Mock };
   let brandsService: { create: jest.Mock };
+  let categoryRepository: { findOne: jest.Mock };
+  let vendorRepository: { findOne: jest.Mock };
+  let productQueryBuilder: {
+    select: jest.Mock;
+    where: jest.Mock;
+    andWhere: jest.Mock;
+    orderBy: jest.Mock;
+    getMany: jest.Mock;
+  };
+  let productRepository: { createQueryBuilder: jest.Mock };
 
   beforeEach(() => {
+    categoryRepository = {
+      findOne: jest.fn(),
+    };
+    vendorRepository = {
+      findOne: jest.fn(),
+    };
+    productQueryBuilder = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      getMany: jest.fn(),
+    };
+    productRepository = {
+      createQueryBuilder: jest.fn().mockReturnValue(productQueryBuilder),
+    };
     productInputJsonRepository = {
       create: jest.fn((value) => value),
       save: jest.fn(),
       findOne: jest.fn(),
+      manager: {
+        getRepository: jest.fn((entity) => {
+          if (entity === Category) {
+            return categoryRepository;
+          }
+
+          if (entity === Vendor) {
+            return vendorRepository;
+          }
+
+          if (entity === Product) {
+            return productRepository;
+          }
+
+          throw new Error(`Unexpected repository requested: ${String(entity)}`);
+        }),
+      },
     };
     productsService = {
       create: jest.fn(),
@@ -179,6 +226,215 @@ describe('ProductImportService', () => {
       new NotFoundException('No stored import input JSON found for product 321.'),
     );
     expect(productsService.update).not.toHaveBeenCalled();
+  });
+
+  it('re-imports matching review products and reports item failures without stopping the batch', async () => {
+    categoryRepository.findOne.mockResolvedValue({
+      id: 35,
+      name_en: 'Gaming',
+    });
+    vendorRepository.findOne.mockResolvedValue({
+      id: 2,
+      name_en: 'Tech Vendor',
+    });
+    productQueryBuilder.getMany.mockResolvedValue([
+      { id: 101, name_en: 'Gaming Monitor' },
+      { id: 102, name_en: 'Gaming Keyboard' },
+    ]);
+    const reimportSpy = jest
+      .spyOn(service, 'reimportByProductId')
+      .mockResolvedValueOnce({
+        product: { id: 101 },
+        message: 'Product updated successfully.',
+      })
+      .mockRejectedValueOnce(
+        new NotFoundException('No stored import input JSON found for product 102.'),
+      );
+
+    const result = await service.reimportReviewProducts(35, 2);
+
+    expect(categoryRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 35 },
+    });
+    expect(vendorRepository.findOne).toHaveBeenCalledWith({
+      where: { id: 2 },
+    });
+    expect(productRepository.createQueryBuilder).toHaveBeenCalledWith('product');
+    expect(productQueryBuilder.where).toHaveBeenCalledWith(
+      'product.status = :status',
+      { status: ProductStatus.REVIEW },
+    );
+    expect(reimportSpy).toHaveBeenNthCalledWith(1, 101);
+    expect(reimportSpy).toHaveBeenNthCalledWith(2, 102);
+    expect(result).toEqual({
+      message:
+        'Re-imported 1 of 2 review products for vendor "Tech Vendor" in category "Gaming"',
+      matched: 2,
+      reimported: 1,
+      failed: 1,
+      filters: {
+        status: ProductStatus.REVIEW,
+        category_id: 35,
+        vendor_id: 2,
+      },
+      results: [
+        {
+          product_id: 101,
+          name_en: 'Gaming Monitor',
+          status: 'reimported',
+        },
+        {
+          product_id: 102,
+          name_en: 'Gaming Keyboard',
+          status: 'failed',
+          error: 'No stored import input JSON found for product 102.',
+        },
+      ],
+    });
+  });
+
+  it('re-imports all review products when no vendor or category filters are provided', async () => {
+    productQueryBuilder.getMany.mockResolvedValue([
+      { id: 201, name_en: 'Office Monitor' },
+      { id: 202, name_en: 'Office Keyboard' },
+    ]);
+    const reimportSpy = jest
+      .spyOn(service, 'reimportByProductId')
+      .mockResolvedValue({
+        product: { id: 201 },
+        message: 'Product updated successfully.',
+      } as never);
+
+    const result = await service.reimportReviewProducts();
+
+    expect(categoryRepository.findOne).not.toHaveBeenCalled();
+    expect(vendorRepository.findOne).not.toHaveBeenCalled();
+    expect(productRepository.createQueryBuilder).toHaveBeenCalledWith('product');
+    expect(productQueryBuilder.where).toHaveBeenCalledWith(
+      'product.status = :status',
+      { status: ProductStatus.REVIEW },
+    );
+    expect(productQueryBuilder.andWhere).not.toHaveBeenCalled();
+    expect(reimportSpy).toHaveBeenNthCalledWith(1, 201);
+    expect(reimportSpy).toHaveBeenNthCalledWith(2, 202);
+    expect(result).toEqual({
+      message: 'Re-imported 2 of 2 review products',
+      matched: 2,
+      reimported: 2,
+      failed: 0,
+      filters: {
+        status: ProductStatus.REVIEW,
+        category_id: null,
+        vendor_id: null,
+      },
+      results: [
+        {
+          product_id: 201,
+          name_en: 'Office Monitor',
+          status: 'reimported',
+        },
+        {
+          product_id: 202,
+          name_en: 'Office Keyboard',
+          status: 'reimported',
+        },
+      ],
+    });
+  });
+
+  it('starts single-product re-import in background and returns a job id', async () => {
+    jest.spyOn(service, 'reimportByProductId').mockResolvedValue({
+      product: { id: 321 },
+      message: 'Product updated successfully.',
+    } as never);
+
+    const jobId = service.startReimportByProductIdInBackground(321);
+
+    expect(jobId).toMatch(/^reimport-one-/);
+    expect(service.getJobStatus(jobId)).toMatchObject({
+      job_id: jobId,
+      type: 'reimport-one',
+      status: 'running',
+    });
+
+    await Promise.resolve();
+
+    expect(service.getJobStatus(jobId)).toMatchObject({
+      job_id: jobId,
+      type: 'reimport-one',
+      status: 'done',
+      result: {
+        product: { id: 321 },
+        message: 'Product updated successfully.',
+      },
+    });
+  });
+
+  it('starts review re-import in background and returns a job id', async () => {
+    jest.spyOn(service, 'reimportReviewProducts').mockResolvedValue({
+      message: 'Re-imported 2 of 2 review products',
+      matched: 2,
+      reimported: 2,
+      failed: 0,
+      filters: {
+        status: ProductStatus.REVIEW,
+        category_id: null,
+        vendor_id: null,
+      },
+      results: [],
+    } as never);
+
+    const jobId = service.startReimportReviewProductsInBackground();
+
+    expect(jobId).toMatch(/^reimport-review-/);
+    expect(service.reimportReviewProducts).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      jobId,
+    );
+    expect(service.getJobStatus(jobId)).toMatchObject({
+      job_id: jobId,
+      type: 'reimport-review',
+      status: 'running',
+    });
+
+    await Promise.resolve();
+
+    expect(service.getJobStatus(jobId)).toMatchObject({
+      job_id: jobId,
+      type: 'reimport-review',
+      status: 'done',
+      result: {
+        message: 'Re-imported 2 of 2 review products',
+        matched: 2,
+        reimported: 2,
+        failed: 0,
+      },
+    });
+  });
+
+  it('cancels older running bulk review re-import jobs when a new one starts', () => {
+    jest
+      .spyOn(service, 'reimportReviewProducts')
+      .mockReturnValue(new Promise(() => undefined) as never);
+
+    const firstJobId = service.startReimportReviewProductsInBackground();
+    const secondJobId = service.startReimportReviewProductsInBackground(35, 2);
+
+    expect(firstJobId).toMatch(/^reimport-review-/);
+    expect(secondJobId).toMatch(/^reimport-review-/);
+    expect(firstJobId).not.toBe(secondJobId);
+    expect(service.getJobStatus(firstJobId)).toMatchObject({
+      job_id: firstJobId,
+      type: 'reimport-review',
+      status: 'cancelled',
+      error: 'Cancelled by a newer bulk review re-import job.',
+    });
+    expect(service.getJobStatus(secondJobId)).toMatchObject({
+      job_id: secondJobId,
+      type: 'reimport-review',
+      status: 'running',
+    });
   });
 
   it('prefers a corroborated payload brand over a conflicting AI brand', async () => {

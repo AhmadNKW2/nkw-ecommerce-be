@@ -28,6 +28,7 @@ import { ProductsService } from './products.service';
 import { ProductImportService } from './product-import.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { DeleteReviewProductsDto } from './dto/delete-review-products.dto';
+import { ReimportReviewProductsDto } from './dto/reimport-review-products.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { PatchProductDto } from './dto/patch-product.dto';
 import { FilterProductDto, AssignProductsDto } from './dto/filter-product.dto';
@@ -131,6 +132,24 @@ export class ProductsController {
       throw new NotFoundException(
         `Job '${jobId}' not found (may have expired after 24 h)`,
       );
+    return status;
+  }
+
+  @Get('import-jobs/:jobId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @ApiOperation({
+    summary: 'Poll the status of a background product import or re-import job',
+  })
+  getImportJobStatus(@Param('jobId') jobId: string) {
+    const status = this.productImportService.getJobStatus(jobId);
+
+    if (!status) {
+      throw new NotFoundException(
+        `Import job '${jobId}' not found (may have expired after 24 h)`,
+      );
+    }
+
     return status;
   }
 
@@ -273,17 +292,6 @@ export class ProductsController {
   })
   importPayload(@Body() body: Record<string, unknown>, @Req() req: any) {
     return this.productImportService.importFromRequest(body, req.user?.id);
-  }
-
-  @Post(':id/reimport-ai')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(...PRODUCTS_MANAGER_ROLES)
-  @ApiOperation({
-    summary:
-      'Re-import an existing product by rerunning the AI import flow against its stored input_json payload',
-  })
-  reimportAiProduct(@Param('id', ParseIntPipe) id: number) {
-    return this.productImportService.reimportByProductId(id);
   }
 
   @Post()
@@ -805,6 +813,72 @@ export class ProductsController {
       dto.category_id,
       dto.vendor_id,
     );
+  }
+
+  @Post('review/reimport-ai')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Re-import review products by category and vendor using their stored input_json payloads',
+  })
+  @ApiBody({
+    type: DeleteReviewProductsDto,
+    description:
+      'Re-imports every product whose status is review and matches both the given category and vendor.',
+    examples: {
+      filtered: {
+        summary: 'Re-import review products for one vendor/category pair',
+        value: {
+          category_id: 35,
+          vendor_id: 2,
+        },
+      },
+      allReviewProducts: {
+        summary: 'Re-import all review products',
+        value: {},
+      },
+    },
+  })
+  @ApiOkResponse({
+    description: 'Review products re-imported',
+    schema: {
+      example: {
+        job_id: 'reimport-review-1746800000000-ab123',
+        message:
+          'Review product re-import started in background. Matching review products will be processed one by one. Poll GET /products/import-jobs/:job_id to track progress.',
+      },
+    },
+  })
+  reimportReviewProducts(@Body() dto: ReimportReviewProductsDto) {
+    const jobId = this.productImportService.startReimportReviewProductsInBackground(
+      dto.category_id,
+      dto.vendor_id,
+    );
+
+    return {
+      job_id: jobId,
+      message:
+        'Review product re-import started in background. Matching review products will be processed one by one. Poll GET /products/import-jobs/:job_id to track progress.',
+    };
+  }
+
+  @Post(':id/reimport-ai')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary:
+      'Re-import an existing product by rerunning the AI import flow against its stored input_json payload',
+  })
+  reimportAiProduct(@Param('id', ParseIntPipe) id: number) {
+    const jobId = this.productImportService.startReimportByProductIdInBackground(id);
+
+    return {
+      job_id: jobId,
+      message:
+        'Product re-import started in background. Poll GET /products/import-jobs/:job_id to track progress.',
+    };
   }
 
   @Delete(':id/permanent')

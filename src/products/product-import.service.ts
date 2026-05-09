@@ -12,14 +12,16 @@ import { Readable } from 'stream';
 import { AttributesService } from '../attributes/attributes.service';
 import { Attribute } from '../attributes/entities/attribute.entity';
 import { BrandsService } from '../brands/brands.service';
+import { Category } from '../categories/entities/category.entity';
 import { MediaService } from '../media/media.service';
 import { Brand, BrandStatus } from '../brands/entities/brand.entity';
 import { Specification } from '../specifications/entities/specification.entity';
 import { SpecificationsService } from '../specifications/specifications.service';
+import { Vendor } from '../vendors/entities/vendor.entity';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductInputJson } from './entities/product-input-json.entity';
-import { ProductStatus } from './entities/product.entity';
+import { Product, ProductStatus } from './entities/product.entity';
 import { buildProductImportSystemPrompt } from './prompts/product-import-system.prompt';
 import { ProductsService } from './products.service';
 
@@ -193,6 +195,20 @@ function getErrorMessage(error: unknown): string {
 export class ProductImportService {
   private readonly logger = new Logger(ProductImportService.name);
 
+  // Kept in memory for the lifetime of the process and evicted after 24 h.
+  private readonly jobs = new Map<
+    string,
+    {
+      type: 'reimport-one' | 'reimport-review';
+      status: 'running' | 'done' | 'failed' | 'cancelled';
+      startedAt: Date;
+      finishedAt?: Date;
+      result?: Record<string, unknown>;
+      error?: string;
+      cancellationRequested?: boolean;
+    }
+  >();
+
   constructor(
     @InjectRepository(Brand)
     private readonly brandsRepository: Repository<Brand>,
@@ -204,6 +220,130 @@ export class ProductImportService {
     private readonly mediaService: MediaService,
     private readonly brandsService: BrandsService,
   ) {}
+
+  private createJob(type: 'reimport-one' | 'reimport-review'): string {
+    const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    this.jobs.set(id, {
+      type,
+      status: 'running',
+      startedAt: new Date(),
+      cancellationRequested: false,
+    });
+    setTimeout(() => this.jobs.delete(id), 24 * 60 * 60 * 1000).unref?.();
+    return id;
+  }
+
+  private cancelRunningReviewJobs(): void {
+    for (const [jobId, job] of this.jobs.entries()) {
+      if (job.type !== 'reimport-review' || job.status !== 'running') {
+        continue;
+      }
+
+      job.cancellationRequested = true;
+      job.status = 'cancelled';
+      job.finishedAt = new Date();
+      job.error = 'Cancelled by a newer bulk review re-import job.';
+
+      this.logger.warn(
+        `Cancelled running bulk review re-import job ${jobId} because a newer request was started.`,
+      );
+    }
+  }
+
+  private isReviewJobCancelled(jobId?: string): boolean {
+    if (!jobId) {
+      return false;
+    }
+
+    const job = this.jobs.get(jobId);
+
+    return !job || job.cancellationRequested === true || job.status === 'cancelled';
+  }
+
+  getJobStatus(jobId: string) {
+    const job = this.jobs.get(jobId);
+
+    if (!job) {
+      return null;
+    }
+
+    return {
+      job_id: jobId,
+      type: job.type,
+      status: job.status,
+      started_at: job.startedAt,
+      finished_at: job.finishedAt ?? null,
+      duration_seconds: job.finishedAt
+        ? Math.round((job.finishedAt.getTime() - job.startedAt.getTime()) / 1000)
+        : Math.round((Date.now() - job.startedAt.getTime()) / 1000),
+      result: job.result ?? null,
+      error: job.error ?? null,
+    };
+  }
+
+  startReimportByProductIdInBackground(productId: number): string {
+    const jobId = this.createJob('reimport-one');
+
+    this.reimportByProductId(productId)
+      .then((result) => {
+        const job = this.jobs.get(jobId);
+
+        if (job) {
+          job.status = 'done';
+          job.finishedAt = new Date();
+          job.result = result as Record<string, unknown>;
+        }
+      })
+      .catch((error: Error) => {
+        const job = this.jobs.get(jobId);
+
+        if (job) {
+          job.status = 'failed';
+          job.finishedAt = new Date();
+          job.error = error?.message ?? String(error);
+        }
+
+        this.logger.error(
+          `Background re-import failed for product ${productId}: ${error?.message ?? String(error)}`,
+        );
+      });
+
+    return jobId;
+  }
+
+  startReimportReviewProductsInBackground(
+    categoryId?: number,
+    vendorId?: number,
+  ): string {
+    this.cancelRunningReviewJobs();
+    const jobId = this.createJob('reimport-review');
+
+    this.reimportReviewProducts(categoryId, vendorId, jobId)
+      .then((result) => {
+        const job = this.jobs.get(jobId);
+
+        if (job && job.status === 'running') {
+          job.status = 'done';
+          job.finishedAt = new Date();
+          job.result = result as Record<string, unknown>;
+        }
+      })
+      .catch((error: Error) => {
+        const job = this.jobs.get(jobId);
+
+        if (job && job.status === 'running') {
+          job.status = 'failed';
+          job.finishedAt = new Date();
+          job.error = error?.message ?? String(error);
+        }
+
+        this.logger.error(
+          `Background review re-import failed for category ${categoryId} and vendor ${vendorId}: ${error?.message ?? String(error)}`,
+        );
+      });
+
+    return jobId;
+  }
 
   async importFromRequest(body: Record<string, unknown>, userId?: number) {
     try {
@@ -270,6 +410,124 @@ export class ProductImportService {
       );
       throw new BadRequestException(
         `Failed to re-import product ${productId}: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  async reimportReviewProducts(
+    categoryId?: number,
+    vendorId?: number,
+    jobId?: string,
+  ) {
+    try {
+      const entityManager = this.productInputJsonRepository.manager;
+      const categoryRepository = entityManager.getRepository(Category);
+      const vendorRepository = entityManager.getRepository(Vendor);
+      const category = categoryId
+        ? await categoryRepository.findOne({ where: { id: categoryId } })
+        : null;
+      const vendor = vendorId
+        ? await vendorRepository.findOne({ where: { id: vendorId } })
+        : null;
+
+      if (categoryId && !category) {
+        throw new NotFoundException('Category not found');
+      }
+
+      if (vendorId && !vendor) {
+        throw new NotFoundException('Vendor not found');
+      }
+
+      const queryBuilder = entityManager
+        .getRepository(Product)
+        .createQueryBuilder('product')
+        .select(['product.id', 'product.name_en'])
+        .where('product.status = :status', { status: ProductStatus.REVIEW });
+
+      if (vendorId) {
+        queryBuilder.andWhere('product.vendor_id = :vendorId', { vendorId });
+      }
+
+      if (categoryId) {
+        queryBuilder.andWhere(
+          '(product.category_id = :categoryId OR EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id = product.id AND pc.category_id = :categoryId))',
+          { categoryId },
+        );
+      }
+
+      const products = await queryBuilder.orderBy('product.id', 'ASC').getMany();
+
+      const results: Array<{
+        product_id: number;
+        name_en: string;
+        status: 'reimported' | 'failed';
+        error?: string;
+      }> = [];
+
+      for (const product of products) {
+        if (this.isReviewJobCancelled(jobId)) {
+          this.logger.warn(
+            `Stopping cancelled bulk review re-import job ${jobId} before processing product ${product.id}.`,
+          );
+          break;
+        }
+
+        try {
+          await this.reimportByProductId(product.id);
+          results.push({
+            product_id: product.id,
+            name_en: product.name_en,
+            status: 'reimported',
+          });
+        } catch (error) {
+          results.push({
+            product_id: product.id,
+            name_en: product.name_en,
+            status: 'failed',
+            error: getErrorMessage(error),
+          });
+        }
+      }
+
+      const reimported = results.filter(
+        (result) => result.status === 'reimported',
+      ).length;
+      const failed = results.length - reimported;
+
+      const messageSuffixParts = [
+        vendor ? `vendor "${vendor.name_en}"` : null,
+        category ? `category "${category.name_en}"` : null,
+      ].filter((value): value is string => Boolean(value));
+      const messageSuffix =
+        messageSuffixParts.length > 0
+          ? ` for ${messageSuffixParts.join(' in ')}`
+          : '';
+
+      return {
+        message: `Re-imported ${reimported} of ${products.length} review products${messageSuffix}`,
+        matched: products.length,
+        reimported,
+        failed,
+        filters: {
+          status: ProductStatus.REVIEW,
+          category_id: categoryId ?? null,
+          vendor_id: vendorId ?? null,
+        },
+        results,
+      };
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+
+      this.logger.error(
+        `Failed to re-import review products for category ${categoryId} and vendor ${vendorId}: ${getErrorMessage(error)}`,
+      );
+      throw new BadRequestException(
+        `Failed to re-import review products for category ${categoryId} and vendor ${vendorId}: ${getErrorMessage(error)}`,
       );
     }
   }
