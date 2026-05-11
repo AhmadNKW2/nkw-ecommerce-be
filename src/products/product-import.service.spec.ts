@@ -140,6 +140,7 @@ describe('ProductImportService', () => {
           raw_data: {},
         },
         categoryId: 9,
+        categoryIds: [9],
         vendorId: 2,
         model: 'gpt-5.4',
         sourceFile: null,
@@ -206,6 +207,78 @@ describe('ProductImportService', () => {
     expect(parsed.payload.original_vendor_category_name).toBe(
       'Gaming Monitors',
     );
+  });
+
+  it('keeps all category_ids from the import payload', () => {
+    const parsed = (service as any).parseRequest({
+      vendor_id: 2,
+      payload: {
+        title: 'Imported Monitor',
+        description: 'Imported description',
+        new_price: '99.99',
+        category_ids: [9, '12', 12, null, 'invalid', 18],
+      },
+    });
+
+    expect(parsed.categoryId).toBe(9);
+    expect(parsed.categoryIds).toEqual([9, 12, 18]);
+  });
+
+  it('builds a create dto with all imported category ids', async () => {
+    jest.spyOn(service as any, 'resolveSpecifications').mockResolvedValue([]);
+    jest.spyOn(service as any, 'resolveAttributes').mockResolvedValue([]);
+    jest.spyOn(service as any, 'buildMedia').mockResolvedValue([]);
+    jest.spyOn(service as any, 'resolveBrandForImport').mockResolvedValue(null);
+
+    const createProductDto = await (service as any).buildCreateProductDto(
+      {
+        payload: {
+          title: 'Imported Monitor',
+          description: 'Imported description',
+          new_price: '99.99',
+          old_price: undefined,
+          price: undefined,
+          sale_price: undefined,
+          brand: null,
+          image: null,
+          images: [],
+          media: [],
+          specification: [],
+          attributes: [],
+          reference_link: null,
+          quantity: undefined,
+          stock: undefined,
+          sku: null,
+          record: null,
+          original_vendor_categories: [],
+          original_vendor_category_id: null,
+          original_vendor_category_name: null,
+          raw_data: {},
+        },
+        categoryId: 9,
+        categoryIds: [9, 12, 18],
+        vendorId: 2,
+        model: 'gpt-5.4',
+        sourceFile: null,
+      },
+      {
+        title_en: 'Imported Monitor',
+        title_ar: 'شاشة مستوردة',
+        short_description_en: 'Imported short description',
+        short_description_ar: 'وصف قصير مستورد',
+        description_en: 'Imported long description',
+        description_ar: 'وصف طويل مستورد',
+        specifications: [],
+        attributes: [],
+      },
+      {
+        brands: [],
+        specifications: [],
+        attributes: [],
+      },
+    );
+
+    expect(createProductDto.category_ids).toEqual([9, 12, 18]);
   });
 
   it('copies original vendor category metadata into the create dto payload metadata', () => {

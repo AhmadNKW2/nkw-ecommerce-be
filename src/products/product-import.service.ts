@@ -57,6 +57,7 @@ interface ImportDefinition {
 interface ParsedImportRequest {
   payload: NormalizedImportPayload;
   categoryId: number;
+  categoryIds: number[];
   vendorId: number;
   model: string;
   sourceFile: string | null;
@@ -620,11 +621,8 @@ export class ProductImportService {
     const payloadCandidate = this.getObject(body.payload);
     const rawPayload = payloadCandidate ?? body;
     const payload = this.normalizePayload(rawPayload);
-    const categoryId =
-      this.extractPositiveInteger(body.category_id) ??
-      this.extractPositiveInteger(rawPayload.category_id) ??
-      this.extractFirstPositiveInteger(body.category_ids) ??
-      this.extractFirstPositiveInteger(rawPayload.category_ids);
+    const categoryIds = this.resolveCategoryIds(body, rawPayload);
+    const categoryId = categoryIds[0] ?? null;
     const vendorId =
       this.extractPositiveInteger(body.vendor_id) ??
       this.extractPositiveInteger(rawPayload.vendor_id);
@@ -662,6 +660,7 @@ export class ProductImportService {
     return {
       payload,
       categoryId,
+      categoryIds,
       vendorId,
       model,
       sourceFile,
@@ -951,7 +950,7 @@ export class ProductImportService {
         aiResult.description_ar,
         'AI description_ar',
       ),
-      category_ids: [request.categoryId],
+      category_ids: request.categoryIds,
       vendor_id: request.vendorId,
       visible: true,
       specifications: specificationsPayload,
@@ -2881,6 +2880,43 @@ export class ProductImportService {
     }
 
     return null;
+  }
+
+  private extractPositiveIntegers(value: unknown): number[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return [...new Set(value.map((item) => this.extractPositiveInteger(item)).filter((item): item is number => item !== null))];
+  }
+
+  private resolveCategoryIds(
+    body: Record<string, unknown>,
+    rawPayload: Record<string, unknown>,
+  ): number[] {
+    const bodyCategoryIds = this.extractPositiveIntegers(body.category_ids);
+    if (bodyCategoryIds.length > 0) {
+      return bodyCategoryIds;
+    }
+
+    const bodyCategoryId = this.extractPositiveInteger(body.category_id);
+    if (bodyCategoryId) {
+      return [bodyCategoryId];
+    }
+
+    const payloadCategoryIds = this.extractPositiveIntegers(
+      rawPayload.category_ids,
+    );
+    if (payloadCategoryIds.length > 0) {
+      return payloadCategoryIds;
+    }
+
+    const payloadCategoryId = this.extractPositiveInteger(rawPayload.category_id);
+    if (payloadCategoryId) {
+      return [payloadCategoryId];
+    }
+
+    return [];
   }
 
   private extractFirstPositiveInteger(value: unknown): number | null {
