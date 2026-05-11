@@ -143,6 +143,8 @@ export class CartService {
     if (cart && cart.items.length > 0) {
       await this.cartItemRepository.remove(cart.items);
     }
+
+    return this.getCart(userId);
   }
 
   private async formatCartResponse(cart: Cart) {

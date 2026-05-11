@@ -39,6 +39,11 @@ export class CartController {
     return this.cartService.updateItem(req.user.id, id, updateCartItemDto);
   }
 
+  @Delete()
+  clearCart(@Request() req) {
+    return this.cartService.clearCart(req.user.id);
+  }
+
   @Delete(':id')
   removeItem(@Request() req, @Param('id', ParseIntPipe) id: number) {
     return this.cartService.removeItem(req.user.id, id);

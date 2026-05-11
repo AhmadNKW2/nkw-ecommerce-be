@@ -4,7 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, QueryRunner } from 'typeorm';
 import {
   Order,
   OrderStatus,
@@ -22,11 +22,36 @@ import { User } from '../users/entities/user.entity';
 import { TransactionSource } from '../wallet/entities/wallet-transaction.entity';
 import { CartService } from '../cart/cart.service';
 import { ProductsService } from '../products/products.service';
+import { Address } from '../addresses/entities/address.entity';
 
 // ... imports
 
 function getErrorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
+}
+
+type StoredAddressMetadata = {
+  email?: string;
+  phone?: string;
+  buildingNumber?: string;
+  floorNumber?: string;
+  apartmentNumber?: string;
+  notes?: string;
+};
+
+function cleanOptionalText(value?: string | null): string | undefined {
+  const normalizedValue = value?.trim();
+  return normalizedValue ? normalizedValue : undefined;
+}
+
+function serializeStoredAddressMetadata(metadata: StoredAddressMetadata): string | null {
+  const entries = Object.entries(metadata).filter(([, value]) => value !== undefined);
+
+  if (entries.length === 0) {
+    return null;
+  }
+
+  return JSON.stringify(Object.fromEntries(entries));
 }
 
 @Injectable()
@@ -42,6 +67,69 @@ export class OrdersService {
     private productsService: ProductsService,
     private dataSource: DataSource,
   ) {}
+
+  private async persistUserShippingAddress(
+    userId: number,
+    shippingAddress: CreateOrderDto['shippingAddress'],
+    queryRunner: QueryRunner,
+  ) {
+    const street = shippingAddress.street.trim();
+
+    if (!street) {
+      return;
+    }
+
+    const city = shippingAddress.city.trim();
+    const country = shippingAddress.country?.trim() || 'Jordan';
+    const metadata = serializeStoredAddressMetadata({
+      email: cleanOptionalText(shippingAddress.email),
+      phone: cleanOptionalText(shippingAddress.phone),
+      buildingNumber: cleanOptionalText(shippingAddress.building),
+      floorNumber: cleanOptionalText(shippingAddress.floor),
+      apartmentNumber: cleanOptionalText(shippingAddress.apartment),
+      notes: cleanOptionalText(shippingAddress.notes),
+    });
+
+    const existingAddress = await queryRunner.manager.findOne(Address, {
+      where: {
+        userId,
+        title: 'shipping',
+        addressLine1: street,
+        city,
+        country,
+      },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    await queryRunner.manager.update(
+      Address,
+      { userId, isDefault: true },
+      { isDefault: false },
+    );
+
+    if (existingAddress) {
+      existingAddress.addressLine2 = metadata ?? '';
+      existingAddress.state = city;
+      existingAddress.zipCode = existingAddress.zipCode || '00000';
+      existingAddress.isDefault = true;
+      await queryRunner.manager.save(Address, existingAddress);
+      return;
+    }
+
+    const savedAddress = queryRunner.manager.create(Address, {
+      title: 'shipping',
+      addressLine1: street,
+      addressLine2: metadata ?? '',
+      city,
+      state: city,
+      country,
+      zipCode: '00000',
+      isDefault: true,
+      userId,
+    });
+
+    await queryRunner.manager.save(Address, savedAddress);
+  }
 
   async create(user: User, createOrderDto: CreateOrderDto) {
     const queryRunner = this.dataSource.createQueryRunner();
@@ -102,7 +190,7 @@ export class OrdersService {
 
         orderItemsToCreate.push({
           product,
-          variant: null,
+          variantId: itemDto.variantId ?? null,
           vendorId: product.vendor_id,
           quantity: itemDto.quantity,
           price: unitPrice,
@@ -196,7 +284,7 @@ export class OrdersService {
         const orderItem = this.orderItemsRepository.create({
           orderId: savedOrder.id,
           productId: itemData.product.id,
-          variantId: itemData.variant ? itemData.variant.id : null,
+          variantId: itemData.variantId,
           vendorId: itemData.vendorId,
           quantity: itemData.quantity,
           price: itemData.price,
@@ -217,6 +305,12 @@ export class OrdersService {
           queryRunner.manager,
         );
       }
+
+      await this.persistUserShippingAddress(
+        user.id,
+        createOrderDto.shippingAddress,
+        queryRunner,
+      );
 
       await queryRunner.commitTransaction();
 
@@ -309,27 +403,62 @@ export class OrdersService {
   }
 
   async updateStatus(id: number, status: OrderStatus) {
-    const order = await this.findOne(id);
+    const existingOrder = await this.findOne(id);
 
-    if (order.status === status) return order;
+    if (existingOrder.status === status) return existingOrder;
 
     // Handle Cancellation/Refund by Admin
     if (status === OrderStatus.CANCELLED || status === OrderStatus.REFUNDED) {
-      return this.processCancellation(order, status);
+      return this.processCancellation(existingOrder, status);
     }
 
-    // Handle normal transitions
-    order.status = status;
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    // If delivering, maybe handle COD payment?
-    if (
-      status === OrderStatus.DELIVERED &&
-      order.paymentMethod === PaymentMethod.COD
-    ) {
-      order.paymentStatus = PaymentStatus.PAID;
+    try {
+      const order = await queryRunner.manager.findOne(Order, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!order) {
+        throw new NotFoundException('Order not found');
+      }
+
+      order.status = status;
+
+      if (
+        status === OrderStatus.DELIVERED &&
+        order.paymentMethod === PaymentMethod.COD
+      ) {
+        order.paymentStatus = PaymentStatus.PAID;
+      }
+
+      await queryRunner.manager.save(Order, order);
+
+      if (
+        status === OrderStatus.DELIVERED &&
+        order.userId &&
+        order.paymentStatus === PaymentStatus.PAID
+      ) {
+        await this.walletService.applyCashback(
+          order.userId,
+          Number(order.totalAmount),
+          String(order.id),
+          queryRunner.manager,
+        );
+      }
+
+      await queryRunner.commitTransaction();
+
+      return this.findOne(id);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
-
-    return this.ordersRepository.save(order);
   }
 
   async updateItemsCost(orderId: number, dto: UpdateOrderItemsCostDto) {

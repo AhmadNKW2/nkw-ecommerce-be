@@ -35,6 +35,10 @@ class AddressDto {
   @IsNotEmpty()
   fullName: string;
 
+  @IsOptional()
+  @IsString()
+  email?: string;
+
   @IsString()
   @IsOptional()
   phone?: string;
@@ -53,6 +57,14 @@ class AddressDto {
   @IsOptional()
   @IsString()
   building?: string;
+
+  @IsOptional()
+  @IsString()
+  floor?: string;
+
+  @IsOptional()
+  @IsString()
+  apartment?: string;
 
   @IsOptional()
   @IsString()

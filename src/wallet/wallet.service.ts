@@ -73,13 +73,18 @@ export class WalletService {
     }
 
     try {
-      const wallet = await transactionalManager.findOne(Wallet, {
+      let wallet = await transactionalManager.findOne(Wallet, {
         where: { userId },
         lock: { mode: 'pessimistic_write' },
       });
 
       if (!wallet) {
-        throw new NotFoundException('Wallet not found');
+        wallet = transactionalManager.create(Wallet, {
+          userId,
+          balance: 0,
+          totalCashback: 0,
+        });
+        wallet = await transactionalManager.save(Wallet, wallet);
       }
 
       const newBalance = Number(wallet.balance) + Number(addFundsDto.amount);
@@ -278,32 +283,45 @@ export class WalletService {
   }
 
   async calculateCashback(orderAmount: number): Promise<number> {
-    const activeRules = await this.cashbackRuleRepository.find({
+    return this.calculateCashbackWithManager(orderAmount);
+  }
+
+  private async calculateCashbackWithManager(
+    orderAmount: number,
+    manager?: EntityManager,
+  ): Promise<number> {
+    const activeRules = await (manager
+      ? manager.find(CashbackRule, { where: { isActive: true } })
+      : this.cashbackRuleRepository.find({
       where: { isActive: true },
-    });
+      }));
 
     let bestCashback = 0;
 
     for (const rule of activeRules) {
       // Check minimum order amount
-      if (rule.minOrderAmount > 0 && orderAmount < rule.minOrderAmount) {
+      const minOrderAmount = Number(rule.minOrderAmount ?? 0);
+      const ruleValue = Number(rule.value ?? 0);
+      const maxCashbackAmount =
+        rule.maxCashbackAmount !== null && rule.maxCashbackAmount !== undefined
+          ? Number(rule.maxCashbackAmount)
+          : null;
+
+      if (minOrderAmount > 0 && orderAmount < minOrderAmount) {
         continue;
       }
 
       let currentCashback = 0;
 
       if (rule.type === CashbackType.FIXED) {
-        currentCashback = Number(rule.value);
+        currentCashback = ruleValue;
       } else if (rule.type === CashbackType.PERCENTAGE) {
-        currentCashback = (orderAmount * Number(rule.value)) / 100;
+        currentCashback = (orderAmount * ruleValue) / 100;
       }
 
       // Apply Max Cap
-      if (
-        rule.maxCashbackAmount !== null &&
-        currentCashback > rule.maxCashbackAmount
-      ) {
-        currentCashback = Number(rule.maxCashbackAmount);
+      if (maxCashbackAmount !== null && currentCashback > maxCashbackAmount) {
+        currentCashback = maxCashbackAmount;
       }
 
       // Keep the best offer for the customer
@@ -315,8 +333,34 @@ export class WalletService {
     return bestCashback;
   }
 
-  async applyCashback(userId: number, orderAmount: number, orderId: string) {
-    const cashbackAmount = await this.calculateCashback(orderAmount);
+  async applyCashback(
+    userId: number,
+    orderAmount: number,
+    orderId: string,
+    manager?: EntityManager,
+  ) {
+    const existingCashbackTransaction = manager
+      ? await manager.findOne(WalletTransaction, {
+          where: {
+            source: TransactionSource.CASHBACK,
+            referenceId: orderId,
+          },
+        })
+      : await this.transactionRepository.findOne({
+          where: {
+            source: TransactionSource.CASHBACK,
+            referenceId: orderId,
+          },
+        });
+
+    if (existingCashbackTransaction) {
+      return { message: 'Cashback already applied' };
+    }
+
+    const cashbackAmount = await this.calculateCashbackWithManager(
+      orderAmount,
+      manager,
+    );
 
     if (cashbackAmount <= 0) {
       return { message: 'No cashback applicable' };
@@ -327,6 +371,6 @@ export class WalletService {
       source: TransactionSource.CASHBACK,
       description: `Cashback for order #${orderId}`,
       referenceId: orderId,
-    });
+    }, manager);
   }
 }
