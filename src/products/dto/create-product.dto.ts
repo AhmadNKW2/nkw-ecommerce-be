@@ -235,7 +235,7 @@ export class CreateProductDto {
 
   @ApiPropertyOptional({
     type: [ProductAttributeInputDto],
-    example: [{ attribute_id: 21, attribute_value_ids: [81, 82] }, { attribute_id: 22, attribute_value_ids: [90] }],
+    example: [{ attribute_id: 21, attribute_value_ids: [81] }, { attribute_id: 22, attribute_value_ids: [90] }],
   })
   @IsArray()
   @ValidateNested({ each: true })

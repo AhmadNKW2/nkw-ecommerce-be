@@ -29,7 +29,7 @@ describe('buildProductImportSystemPrompt', () => {
       'DO NOT replace it with a different existing DATABASE BRAND.',
     );
     expect(prompt).toContain(
-      'If the product input explicitly contains a value for a database specification, you MUST return that specification with exactly ONE value object.',
+      'If the product input explicitly contains value(s) for a database specification, you MUST return ALL distinct explicit values that belong to that specification.',
     );
     expect(prompt).toContain(
       'If the product input does not explicitly contain a usable value for a database specification and allow_ai_inference is FALSE, you MUST return that specification with values: [].',
@@ -38,16 +38,16 @@ describe('buildProductImportSystemPrompt', () => {
       'Ignore is represented ONLY by values: []. You MUST NOT invent a new status such as "not_found", "missing", or "ignore" in the JSON response.',
     );
     expect(prompt).toContain(
-      'For specifications, return at most ONE value object per database specification.',
+      'For specifications, preserve ALL explicit source values that belong to the same database specification.',
     );
     expect(prompt).toContain(
-      'If the product input explicitly contains value(s) for a database attribute, you MUST return ALL explicit values that belong to that attribute.',
+      'If the product input explicitly contains a usable value for a database attribute, you MUST return exactly ONE best explicit value that belongs to that attribute.',
     );
     expect(prompt).toContain(
       'For allow_ai_inference = FALSE, if the product data does not explicitly contain this attribute, values MUST stay [] and you MUST NOT choose an existing DB value or create a new one.',
     );
     expect(prompt).toContain(
-      'For attributes, preserve ALL explicit source values that belong to the same database attribute.',
+      'For attributes, return at most ONE value object per database attribute.',
     );
     expect(prompt).toContain(
       'Example: from "Intel Core i7-12700F", CPU = "Intel", CPU Series = "Core i7", CPU Model = "12700F".',

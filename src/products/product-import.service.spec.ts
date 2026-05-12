@@ -889,4 +889,71 @@ describe('ProductImportService', () => {
       77,
     );
   });
+
+  it('keeps only the first AI attribute value for each attribute during import', async () => {
+    const result = await (
+      service as ProductImportService & {
+        resolveAttributes: (
+          aiAttributes: Array<{
+            attribute: { attribute_id: number; original_value: string };
+            values: Array<{
+              original_value: string;
+              matched_value_id: number | string;
+            }>;
+          }>,
+          availableAttributes: Array<Record<string, unknown>>,
+        ) => Promise<
+          Array<{
+            attribute_id: number;
+            attribute_value_ids: number[];
+          }>
+        >;
+      }
+    ).resolveAttributes(
+      [
+        {
+          attribute: {
+            attribute_id: 11,
+            original_value: 'Storage Type',
+          },
+          values: [
+            {
+              original_value: 'SSD',
+              matched_value_id: 77,
+            },
+            {
+              original_value: 'HDD',
+              matched_value_id: 78,
+            },
+          ],
+        },
+      ],
+      [
+        {
+          id: 11,
+          name_en: 'Storage Type',
+          level: 0,
+          values: [
+            {
+              id: 77,
+              value_en: 'SSD',
+              value_ar: 'SSD',
+            },
+            {
+              id: 78,
+              value_en: 'HDD',
+              value_ar: 'HDD',
+            },
+          ],
+        },
+      ],
+    );
+
+    expect(result).toEqual([
+      {
+        attribute_id: 11,
+        attribute_value_ids: [77],
+      },
+    ]);
+  });
 });

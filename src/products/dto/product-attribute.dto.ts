@@ -1,5 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayNotEmpty, ArrayUnique, IsArray, IsNumber, IsOptional } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  ArrayUnique,
+  IsArray,
+  IsNumber,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ProductAttributeInputDto {
@@ -13,11 +19,13 @@ export class ProductAttributeInputDto {
 
   @ApiProperty({
     type: [Number],
-    example: [81, 82],
-    description: 'One or more attribute value ids that belong to the provided attribute.',
+    example: [81],
+    description:
+      'Exactly one attribute value id that belongs to the provided attribute.',
   })
   @IsArray()
-  @ArrayNotEmpty()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(1)
   @ArrayUnique()
   @Type(() => Number)
   @IsNumber({}, { each: true })

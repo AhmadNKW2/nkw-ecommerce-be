@@ -29,6 +29,7 @@ import { ProductAttribute } from './entities/product-attribute.entity';
 import { ProductAttributeValue } from './entities/product-attribute-value.entity';
 import { ProductMedia } from './entities/product-media.entity';
 import { ProductSpecificationValue } from './entities/product-specification-value.entity';
+import { AttributeValue } from '../attributes/entities/attribute-value.entity';
 import { SpecificationValue } from '../specifications/entities/specification-value.entity';
 import { CartItem } from '../cart/entities/cart-item.entity';
 import { IndexingService, IndexableProduct } from '../search/indexing.service';
@@ -1216,6 +1217,98 @@ export class ProductsService {
     });
   }
 
+  private normalizeProductAttributes(
+    attributes: ProductAttributeInputDto[],
+  ): ProductAttributeInputDto[] {
+    const seenAttributeIds = new Set<number>();
+
+    return attributes.map((attribute) => {
+      if (seenAttributeIds.has(attribute.attribute_id)) {
+        throw new BadRequestException(
+          `Duplicate attribute_id ${attribute.attribute_id} in payload`,
+        );
+      }
+
+      seenAttributeIds.add(attribute.attribute_id);
+
+      const attributeValueIds = [
+        ...new Set((attribute.attribute_value_ids ?? []).map(Number)),
+      ];
+
+      if (attributeValueIds.length !== 1) {
+        throw new BadRequestException(
+          `Attribute ${attribute.attribute_id} must have exactly one attribute value`,
+        );
+      }
+
+      return {
+        attribute_id: attribute.attribute_id,
+        attribute_value_ids: attributeValueIds,
+      };
+    });
+  }
+
+  private async resolveProductAttributeValueIds(
+    attributes: ProductAttributeInputDto[],
+  ): Promise<number[]> {
+    const normalizedAttributes = this.normalizeProductAttributes(attributes);
+    const requestedValueIds = normalizedAttributes.map(
+      (attribute) => attribute.attribute_value_ids[0],
+    );
+
+    if (requestedValueIds.length === 0) {
+      return [];
+    }
+
+    const attributeValues = await this.dataSource
+      .getRepository(AttributeValue)
+      .find({
+        where: { id: In(requestedValueIds) },
+        relations: ['attribute'],
+      });
+
+    if (attributeValues.length !== requestedValueIds.length) {
+      throw new BadRequestException(
+        'One or more attribute values were not found',
+      );
+    }
+
+    const attributeValueMap = new Map(
+      attributeValues.map((attributeValue) => [attributeValue.id, attributeValue]),
+    );
+
+    for (const attribute of normalizedAttributes) {
+      const attributeValueId = attribute.attribute_value_ids[0];
+      const attributeValue = attributeValueMap.get(attributeValueId);
+
+      if (!attributeValue) {
+        throw new BadRequestException(
+          `Attribute value ${attributeValueId} was not found`,
+        );
+      }
+
+      if (!attributeValue.is_active) {
+        throw new BadRequestException(
+          `Attribute value ${attributeValueId} is inactive`,
+        );
+      }
+
+      if (!attributeValue.attribute?.is_active) {
+        throw new BadRequestException(
+          `Attribute ${attribute.attribute_id} is inactive`,
+        );
+      }
+
+      if (attributeValue.attribute_id !== attribute.attribute_id) {
+        throw new BadRequestException(
+          `Attribute value ${attributeValueId} does not belong to attribute ${attribute.attribute_id}`,
+        );
+      }
+    }
+
+    return requestedValueIds;
+  }
+
   private async resolveProductSpecificationValueIds(
     specifications: ProductSpecificationInputDto[],
   ): Promise<number[]> {
@@ -1379,7 +1472,10 @@ export class ProductsService {
       return;
     }
 
-    const uniqueAttributeIds = [...new Set(attributes.map(a => a.attribute_id))];
+    const normalizedAttributes = this.normalizeProductAttributes(attributes);
+    const uniqueAttributeIds = normalizedAttributes.map(
+      (attribute) => attribute.attribute_id,
+    );
     await productAttributeRepository.save(
       uniqueAttributeIds.map(attribute_id =>
         productAttributeRepository.create({
@@ -1389,8 +1485,8 @@ export class ProductsService {
       )
     );
 
-    const attributeValueIds = attributes.flatMap(a => a.attribute_value_ids || []);
-    const uniqueAttributeValueIds = [...new Set(attributeValueIds)];
+    const uniqueAttributeValueIds =
+      await this.resolveProductAttributeValueIds(normalizedAttributes);
 
     if (uniqueAttributeValueIds.length > 0) {
       await productAttributeValueRepository.save(
@@ -1457,6 +1553,14 @@ export class ProductsService {
         if (!brand) {
           throw new BadRequestException('Brand not found or inactive');
         }
+      }
+
+      if (dto.attributes && dto.attributes.length > 0) {
+        await this.resolveProductAttributeValueIds(dto.attributes);
+      }
+
+      if (dto.specifications && dto.specifications.length > 0) {
+        await this.resolveProductSpecificationValueIds(dto.specifications);
       }
 
       const slug = await this.generateUniqueSlug(dto.name_en);
@@ -2387,6 +2491,17 @@ export class ProductsService {
             throw new BadRequestException('Brand not found or inactive');
           }
         }
+      }
+
+      if (dto.attributes !== undefined && dto.attributes.length > 0) {
+        await this.resolveProductAttributeValueIds(dto.attributes);
+      }
+
+      if (
+        dto.specifications !== undefined &&
+        dto.specifications.length > 0
+      ) {
+        await this.resolveProductSpecificationValueIds(dto.specifications);
       }
 
       // 2. Update basic product information

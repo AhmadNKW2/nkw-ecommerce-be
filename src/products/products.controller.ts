@@ -397,7 +397,7 @@ export class ProductsController {
           attributes: [
             {
               attribute_id: 3,
-              attribute_value_ids: [6, 7],
+              attribute_value_ids: [6],
             },
             {
               attribute_id: 10,
@@ -717,7 +717,7 @@ export class ProductsController {
           attributes: [
             {
               attribute_id: 21,
-              attribute_value_ids: [101, 102],
+              attribute_value_ids: [101],
             },
           ],
           media: [
@@ -765,7 +765,7 @@ export class ProductsController {
           attributes: [
             {
               attribute_id: 21,
-              attribute_value_ids: [101, 102],
+              attribute_value_ids: [101],
             },
           ],
           specifications: [

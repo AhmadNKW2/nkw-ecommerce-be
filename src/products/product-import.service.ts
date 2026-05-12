@@ -2094,8 +2094,11 @@ export class ProductImportService {
   ): ImportAiAttribute[] {
     void payload;
 
+    const normalizedAiAttributes =
+      this.normalizeAiAttributesToSingleValue(aiAttributes);
+
     return this.enforceRequiredDefinitionValues(
-      aiAttributes,
+      normalizedAiAttributes,
       availableAttributes,
       {
         getDefinitionId: (attribute) =>
@@ -2178,7 +2181,10 @@ export class ProductImportService {
       attribute_value_ids: number[];
     }>
   > {
-    return this.resolveDefinitionValues(aiAttributes, availableAttributes, {
+    return this.resolveDefinitionValues(
+      this.normalizeAiAttributesToSingleValue(aiAttributes),
+      availableAttributes,
+      {
       getDefinitionId: (attribute) =>
         this.extractPositiveInteger(attribute.attribute?.attribute_id),
       getValues: (attribute) => attribute.values,
@@ -2212,7 +2218,50 @@ export class ProductImportService {
         attribute_id: attributeId,
         attribute_value_ids: valueIds,
       }),
-    });
+      },
+    );
+  }
+
+  private normalizeAiAttributesToSingleValue(
+    aiAttributes: ImportAiAttribute[],
+  ): ImportAiAttribute[] {
+    const normalizedAttributes: ImportAiAttribute[] = [];
+    const indexByAttributeId = new Map<number, number>();
+
+    for (const attribute of aiAttributes) {
+      const attributeId = this.extractPositiveInteger(
+        attribute.attribute?.attribute_id,
+      );
+      const normalizedValues = (attribute.values ?? []).slice(0, 1);
+
+      if (!attributeId) {
+        normalizedAttributes.push({
+          ...attribute,
+          values: normalizedValues,
+        });
+        continue;
+      }
+
+      const existingIndex = indexByAttributeId.get(attributeId);
+      if (existingIndex === undefined) {
+        indexByAttributeId.set(attributeId, normalizedAttributes.length);
+        normalizedAttributes.push({
+          ...attribute,
+          values: normalizedValues,
+        });
+        continue;
+      }
+
+      const existingEntry = normalizedAttributes[existingIndex];
+      if ((existingEntry.values?.length ?? 0) === 0 && normalizedValues.length) {
+        normalizedAttributes[existingIndex] = {
+          ...existingEntry,
+          values: normalizedValues,
+        };
+      }
+    }
+
+    return normalizedAttributes;
   }
 
   private isOpenAiNotExistSentinel(value: unknown): boolean {
