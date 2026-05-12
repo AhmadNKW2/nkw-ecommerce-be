@@ -59,9 +59,9 @@ export class AuthService {
     @InjectRepository(TokenBlacklist)
     private tokenBlacklistRepository: Repository<TokenBlacklist>,
   ) {
-    // Access token: 15 minutes (in seconds)
+    // Access token: 60 minutes (in seconds)
     this.accessTokenExpiresIn =
-      this.configService.get<number>('ACCESS_TOKEN_EXPIRES_IN') || 900;
+      this.configService.get<number>('ACCESS_TOKEN_EXPIRES_IN') || 3600;
     // Refresh token: 7 days (in seconds)
     this.refreshTokenExpiresIn =
       this.configService.get<number>('REFRESH_TOKEN_EXPIRES_IN') || 604800;
