@@ -576,7 +576,7 @@ export class ProductImportService {
     body: Record<string, unknown>,
   ): Promise<CreateProductDto> {
     const request = this.parseRequest(body);
-    const catalog = await this.loadImportCatalog(request.categoryId);
+    const catalog = await this.loadImportCatalog(request.categoryIds);
     const aiResult = await this.callOpenAi(
       request.payload,
       catalog,
@@ -884,12 +884,12 @@ export class ProductImportService {
   }
 
   private async loadImportCatalog(
-    categoryId: number,
+    categoryIds: number[],
   ): Promise<ProductImportCatalog> {
     const [brands, specifications, attributes] = await Promise.all([
       this.findActiveBrands(),
-      this.specificationsService.findAll([categoryId]),
-      this.attributesService.findAll([categoryId]),
+      this.specificationsService.findAll(categoryIds),
+      this.attributesService.findAll(categoryIds),
     ]);
 
     return {

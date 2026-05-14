@@ -244,6 +244,77 @@ describe('ProductImportService', () => {
     expect(parsed.categoryIds).toEqual([9, 12, 18]);
   });
 
+  it('loads the import catalog for all imported category ids', async () => {
+    const parseRequestSpy = jest.spyOn(service as any, 'parseRequest').mockReturnValue({
+      payload: {
+        title: 'Imported Monitor',
+        description: 'Imported description',
+        new_price: '99.99',
+        old_price: undefined,
+        price: undefined,
+        sale_price: undefined,
+        brand: null,
+        image: null,
+        images: [],
+        media: [],
+        specification: [],
+        attributes: [],
+        reference_link: null,
+        quantity: undefined,
+        stock: undefined,
+        sku: null,
+        record: null,
+        original_vendor_categories: [],
+        original_vendor_category_id: null,
+        original_vendor_category_name: null,
+        raw_data: {},
+      },
+      categoryId: 9,
+      categoryIds: [9, 12, 18],
+      vendorId: 2,
+      model: 'gpt-5.4',
+      sourceFile: null,
+    });
+    const loadImportCatalogSpy = jest
+      .spyOn(service as any, 'loadImportCatalog')
+      .mockResolvedValue({
+        brands: [],
+        specifications: [],
+        attributes: [],
+      });
+    const callOpenAiSpy = jest.spyOn(service as any, 'callOpenAi').mockResolvedValue({
+      title_en: 'Imported Monitor',
+      title_ar: 'شاشة مستوردة',
+      short_description_en: 'Imported short description',
+      short_description_ar: 'وصف قصير مستورد',
+      description_en: 'Imported long description',
+      description_ar: 'وصف طويل مستورد',
+      specifications: [],
+      attributes: [],
+    });
+    const buildCreateProductDtoSpy = jest
+      .spyOn(service as any, 'buildCreateProductDto')
+      .mockResolvedValue({
+        name_en: 'Imported Monitor',
+        name_ar: 'شاشة مستوردة',
+      });
+
+    await (service as any).buildImportedProductDto({
+      payload: {
+        title: 'Imported Monitor',
+        description: 'Imported description',
+        new_price: '99.99',
+      },
+      category_ids: [9, 12, 18],
+      vendor_id: 2,
+    });
+
+    expect(parseRequestSpy).toHaveBeenCalled();
+    expect(loadImportCatalogSpy).toHaveBeenCalledWith([9, 12, 18]);
+    expect(callOpenAiSpy).toHaveBeenCalled();
+    expect(buildCreateProductDtoSpy).toHaveBeenCalled();
+  });
+
   it('builds a create dto with all imported category ids', async () => {
     jest.spyOn(service as any, 'resolveSpecifications').mockResolvedValue([]);
     jest.spyOn(service as any, 'resolveAttributes').mockResolvedValue([]);
