@@ -7,6 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
+    "clear:review-original-vendor-categories": "node clear-review-original-vendor-categories.js",
     "delete:review-products": "node delete-review-products.js",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "node dist/main",
