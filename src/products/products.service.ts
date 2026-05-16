@@ -1753,8 +1753,12 @@ export class ProductsService {
         ],
       });
     } else {
-      baseQuery.where('product.status = :defaultStatus', {
-        defaultStatus: ProductStatus.ACTIVE,
+      baseQuery.where('product.status IN (:...defaultStatuses)', {
+        defaultStatuses: [
+          ProductStatus.ACTIVE,
+          ProductStatus.REVIEW,
+          ProductStatus.UPDATED,
+        ],
       });
     }
 

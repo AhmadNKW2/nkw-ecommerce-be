@@ -291,15 +291,21 @@ describe('ProductsService detail attributes', () => {
     });
   });
 
-  it('keeps public product lists limited to active products by default', async () => {
+  it('includes active, review, and updated products by default for public lists', async () => {
     const { baseQuery } = createFindAllQueryBuilderMocks();
     productsRepository.createQueryBuilder.mockReturnValue(baseQuery);
 
     await service.findAll({}, false);
 
     expect(baseQuery.where).toHaveBeenCalledWith(
-      'product.status = :defaultStatus',
-      { defaultStatus: ProductStatus.ACTIVE },
+      'product.status IN (:...defaultStatuses)',
+      {
+        defaultStatuses: [
+          ProductStatus.ACTIVE,
+          ProductStatus.REVIEW,
+          ProductStatus.UPDATED,
+        ],
+      },
     );
   });
 });
