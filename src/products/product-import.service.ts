@@ -24,6 +24,7 @@ import { ProductInputJson } from './entities/product-input-json.entity';
 import { Product, ProductStatus } from './entities/product.entity';
 import { buildProductImportSystemPrompt } from './prompts/product-import-system.prompt';
 import { ProductsService } from './products.service';
+import { SettingsService } from '../settings/settings.service';
 
 const OPEN_AI_NOT_EXIST_SENTINEL = 'not_exist';
 const INTERNAL_NEW_VALUE_MATCH = Symbol('internal_new_value_match');
@@ -232,6 +233,7 @@ export class ProductImportService {
     private readonly attributesService: AttributesService,
     private readonly mediaService: MediaService,
     private readonly brandsService: BrandsService,
+    private readonly settingsService: SettingsService,
   ) {}
 
   private createJob(type: 'reimport-one' | 'reimport-review'): string {
@@ -930,7 +932,13 @@ export class ProductImportService {
           aiResult.brand_name,
         ),
       ]);
-    const pricing = this.resolvePricing(request.payload);
+    const vendorOriginalPricing = this.resolveVendorOriginalPricing(
+      request.payload,
+    );
+    const pricing = await this.settingsService.calculateManagedProductPrices({
+      originalVendorPrice: vendorOriginalPricing.originalVendorPrice,
+      originalVendorSalePrice: vendorOriginalPricing.originalVendorSalePrice,
+    });
     const isOutOfStock = this.resolveOutOfStock(request.payload);
     const quantity = this.resolveQuantity(request.payload, isOutOfStock);
 
@@ -960,6 +968,7 @@ export class ProductImportService {
       specifications: specificationsPayload,
       attributes: attributesPayload,
       price: pricing.price,
+      original_vendor_price: vendorOriginalPricing.originalVendorPrice,
       quantity,
       is_out_of_stock: isOutOfStock,
       media,
@@ -968,7 +977,13 @@ export class ProductImportService {
 
     this.applyAiMetadata(createProductDto, aiResult);
     this.applyPayloadMetadata(createProductDto, request.payload);
-    this.applyCommercialFields(createProductDto, pricing.salePrice, brandId);
+    this.applyCommercialFields(
+      createProductDto,
+      pricing.salePrice,
+      brandId,
+      vendorOriginalPricing.originalVendorPrice,
+      vendorOriginalPricing.originalVendorSalePrice,
+    );
 
     return createProductDto;
   }
@@ -1042,9 +1057,17 @@ export class ProductImportService {
     createProductDto: CreateProductDto,
     salePrice: number | null,
     brandId: number | null,
+    originalVendorPrice: number,
+    originalVendorSalePrice: number | null,
   ): void {
     if (salePrice !== null) {
       createProductDto.sale_price = salePrice;
+    }
+
+    createProductDto.original_vendor_price = originalVendorPrice;
+
+    if (originalVendorSalePrice !== null) {
+      createProductDto.original_vendor_sale_price = originalVendorSalePrice;
     }
 
     if (brandId !== null) {
@@ -2549,9 +2572,9 @@ export class ProductImportService {
     return '.jpg';
   }
 
-  private resolvePricing(payload: NormalizedImportPayload): {
-    price: number;
-    salePrice: number | null;
+  private resolveVendorOriginalPricing(payload: NormalizedImportPayload): {
+    originalVendorPrice: number;
+    originalVendorSalePrice: number | null;
   } {
     const explicitPrice = this.firstDefinedValue([
       payload.price,
@@ -2561,22 +2584,22 @@ export class ProductImportService {
 
     if (explicitPrice !== undefined && explicitSalePrice !== undefined) {
       return {
-        price: this.normalizePriceValue(explicitPrice),
-        salePrice: this.normalizePriceValue(explicitSalePrice),
+        originalVendorPrice: this.normalizePriceValue(explicitPrice),
+        originalVendorSalePrice: this.normalizePriceValue(explicitSalePrice),
       };
     }
 
     const newPrice = this.normalizePriceValue(payload.new_price);
     if (!this.isMissingPrice(payload.old_price)) {
       return {
-        price: this.normalizePriceValue(payload.old_price),
-        salePrice: newPrice,
+        originalVendorPrice: this.normalizePriceValue(payload.old_price),
+        originalVendorSalePrice: newPrice,
       };
     }
 
     return {
-      price: newPrice,
-      salePrice: null,
+      originalVendorPrice: newPrice,
+      originalVendorSalePrice: null,
     };
   }
 

@@ -185,6 +185,18 @@ export class CreateProductDto {
   @IsOptional()
   sale_price?: number;
 
+  @ApiPropertyOptional({ example: 100, description: 'The original price from the vendor source before platform adjustments.' })
+  @PreserveRawNumberInput()
+  @IsNumber()
+  @IsOptional()
+  original_vendor_price?: number;
+
+  @ApiPropertyOptional({ example: 89.9, description: 'The original sale price from the vendor source before platform adjustments.' })
+  @PreserveRawNumberInput()
+  @IsNumber()
+  @IsOptional()
+  original_vendor_sale_price?: number;
+
   // ============== Weight & Dimensions ==============
 
   @ApiPropertyOptional({ example: 1.5, description: 'Weight in kg' })

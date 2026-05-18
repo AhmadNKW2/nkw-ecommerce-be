@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { ProductsService } from './products.service';
 import { ProductStatus } from './entities/product.entity';
@@ -77,6 +78,8 @@ describe('ProductsService detail attributes', () => {
     ],
     original_vendor_category_id: 44,
     original_vendor_category_name: null,
+    original_vendor_price: 220,
+    original_vendor_sale_price: 199.9,
     cost: 100,
     price: 150,
     sale_price: null,
@@ -96,7 +99,7 @@ describe('ProductsService detail attributes', () => {
       findOne: jest.fn().mockResolvedValue(null),
     };
 
-    repositoryByEntity = new Map([
+    repositoryByEntity = new Map<unknown, { find: jest.Mock }>([
       [ProductCategory, { find: jest.fn().mockResolvedValue([]) }],
       [ProductMedia, { find: jest.fn().mockResolvedValue([]) }],
       [ProductAttribute, { find: jest.fn().mockResolvedValue([]) }],
@@ -124,7 +127,7 @@ describe('ProductsService detail attributes', () => {
       {} as never,
       {} as never,
       {} as never,
-      dataSource as DataSource,
+      dataSource as unknown as DataSource,
       {} as never,
       {} as never,
       {} as never,
@@ -237,17 +240,28 @@ describe('ProductsService detail attributes', () => {
     expect(result).not.toHaveProperty('original_vendor_category_name');
   });
 
+  it('hides vendor original pricing fields from public product detail responses', async () => {
+    productsRepository.findOne.mockResolvedValue({ ...productBase });
+
+    const result = await service.findOne(7, false);
+
+    expect(result).not.toHaveProperty('original_vendor_price');
+    expect(result).not.toHaveProperty('original_vendor_sale_price');
+  });
+
+  it('includes vendor original pricing fields for admin product detail responses', async () => {
+    productsRepository.findOne.mockResolvedValue({ ...productBase });
+
+    const result = await service.findOne(7, true);
+
+    expect(result).toMatchObject({
+      original_vendor_price: 220,
+      original_vendor_sale_price: 199.9,
+    });
+  });
+
   it('normalizes multiple original vendor categories while keeping order and deduping', () => {
-    const result = (
-      service as ProductsService & {
-        normalizeOriginalVendorCategories: (params: {
-          categoryIds?: number[] | null;
-          categories?: Array<{ id?: number; name?: string } | null>;
-          legacyId?: number | null;
-          legacyName?: string | null;
-        }) => Array<{ id?: number; name?: string }>;
-      }
-    ).normalizeOriginalVendorCategories({
+    const result = (service as any).normalizeOriginalVendorCategories({
       categoryIds: [51, 44, 51],
       categories: [
         { id: 44, name: 'Gaming Monitors' },
@@ -306,6 +320,20 @@ describe('ProductsService detail attributes', () => {
           ProductStatus.UPDATED,
         ],
       },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.is_out_of_stock = false',
+    );
+  });
+
+  it('hides out-of-stock product details from public requests', async () => {
+    productsRepository.findOne.mockResolvedValue({
+      ...productBase,
+      is_out_of_stock: true,
+    });
+
+    await expect(service.findOne(productBase.id, false)).rejects.toBeInstanceOf(
+      NotFoundException,
     );
   });
 });

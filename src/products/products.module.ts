@@ -28,6 +28,7 @@ import { SpecificationsModule } from '../specifications/specifications.module';
 import { ProductImportService } from './product-import.service';
 import { ProductMediaBackfillService } from './product-media-backfill.service';
 import { BrandsModule } from '../brands/brands.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { BrandsModule } from '../brands/brands.module';
     AttributesModule,
     SpecificationsModule,
     MediaModule,
+    SettingsModule,
     forwardRef(() => BrandsModule),
     forwardRef(() => SearchModule),
   ],

@@ -36,6 +36,7 @@ describe('CategoriesService category URLs', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
   });
 

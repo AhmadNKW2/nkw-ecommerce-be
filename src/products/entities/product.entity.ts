@@ -184,6 +184,22 @@ export class Product {
   })
   sale_price: number | null;
 
+  @Column('decimal', {
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: decimalNumberTransformer,
+  })
+  original_vendor_price: number | null;
+
+  @Column('decimal', {
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: decimalNumberTransformer,
+  })
+  original_vendor_sale_price: number | null;
+
   // ── Weight / dimensions (flat) ────────────────────────────────
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   weight: number | null;

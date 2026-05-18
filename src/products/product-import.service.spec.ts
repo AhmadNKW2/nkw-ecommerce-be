@@ -17,6 +17,7 @@ describe('ProductImportService', () => {
   let specificationsService: { addValue: jest.Mock };
   let attributesService: { addValue: jest.Mock };
   let brandsService: { create: jest.Mock };
+  let settingsService: { calculateManagedProductPrices: jest.Mock };
   let categoryRepository: { findOne: jest.Mock };
   let vendorRepository: { findOne: jest.Mock };
   let productQueryBuilder: {
@@ -80,6 +81,12 @@ describe('ProductImportService', () => {
     brandsService = {
       create: jest.fn(),
     };
+    settingsService = {
+      calculateManagedProductPrices: jest.fn().mockResolvedValue({
+        price: 98.9,
+        salePrice: null,
+      }),
+    };
 
     service = new ProductImportService(
       { find: jest.fn() } as never,
@@ -89,6 +96,7 @@ describe('ProductImportService', () => {
       attributesService as never,
       { uploadAndCreate: jest.fn() } as never,
       brandsService as never,
+      settingsService as never,
     );
 
     jest.spyOn(service as any, 'getOpenAiApiKey').mockReturnValue('test-key');
@@ -677,19 +685,7 @@ describe('ProductImportService', () => {
       { id: 2, name_en: 'GIGABYTE', name_ar: 'جيجابايت' },
     ] as Brand[];
 
-    const result = await (
-      service as ProductImportService & {
-        resolveOrCreateBrand: (
-          brands: Brand[],
-          payload: Record<string, unknown>,
-          aiBrandName: unknown,
-        ) => Promise<{
-          brandId: number | null;
-          brandName: string | null;
-          brandCreated: boolean;
-        }>;
-      }
-    ).resolveOrCreateBrand(
+    const result = await (service as any).resolveOrCreateBrand(
       brands,
       {
         title:
@@ -719,25 +715,7 @@ describe('ProductImportService', () => {
   });
 
   it('reuses existing unit-based specification values before creating duplicates', async () => {
-    const result = await (
-      service as ProductImportService & {
-        resolveSpecifications: (
-          aiSpecifications: Array<{
-            specification_id: number;
-            values: Array<{
-              original_value: { name_en: string; name_ar: string };
-              matched_value_id: string;
-            }>;
-          }>,
-          availableSpecifications: Array<Record<string, unknown>>,
-        ) => Promise<
-          Array<{
-            specification_id: number;
-            specification_value_ids: number[];
-          }>
-        >;
-      }
-    ).resolveSpecifications(
+    const result = await (service as any).resolveSpecifications(
       [
         {
           specification_id: 9,
@@ -779,25 +757,7 @@ describe('ProductImportService', () => {
   it('creates new unit-based specification values without persisting the unit text', async () => {
     specificationsService.addValue.mockResolvedValue({ id: 901 });
 
-    const result = await (
-      service as ProductImportService & {
-        resolveSpecifications: (
-          aiSpecifications: Array<{
-            specification_id: number;
-            values: Array<{
-              original_value: { name_en: string; name_ar: string };
-              matched_value_id: string;
-            }>;
-          }>,
-          availableSpecifications: Array<Record<string, unknown>>,
-        ) => Promise<
-          Array<{
-            specification_id: number;
-            specification_value_ids: number[];
-          }>
-        >;
-      }
-    ).resolveSpecifications(
+    const result = await (service as any).resolveSpecifications(
       [
         {
           specification_id: 9,
@@ -837,25 +797,7 @@ describe('ProductImportService', () => {
   it('creates child specification values with the configured parent_value_id', async () => {
     specificationsService.addValue.mockResolvedValue({ id: 990 });
 
-    const result = await (
-      service as ProductImportService & {
-        resolveSpecifications: (
-          aiSpecifications: Array<{
-            specification_id: number;
-            values: Array<{
-              original_value: { name_en: string; name_ar: string };
-              matched_value_id: string;
-            }>;
-          }>,
-          availableSpecifications: Array<Record<string, unknown>>,
-        ) => Promise<
-          Array<{
-            specification_id: number;
-            specification_value_ids: number[];
-          }>
-        >;
-      }
-    ).resolveSpecifications(
+    const result = await (service as any).resolveSpecifications(
       [
         {
           specification_id: 19,
@@ -895,25 +837,7 @@ describe('ProductImportService', () => {
   it('creates child attribute values using the resolved parent value when parent_value_id is not fixed', async () => {
     attributesService.addValue.mockResolvedValue({ id: 880 });
 
-    const result = await (
-      service as ProductImportService & {
-        resolveAttributes: (
-          aiAttributes: Array<{
-            attribute: { attribute_id: number; original_value: string };
-            values: Array<{
-              original_value: string;
-              matched_value_id: number | string;
-            }>;
-          }>,
-          availableAttributes: Array<Record<string, unknown>>,
-        ) => Promise<
-          Array<{
-            attribute_id: number;
-            attribute_value_ids: number[];
-          }>
-        >;
-      }
-    ).resolveAttributes(
+    const result = await (service as any).resolveAttributes(
       [
         {
           attribute: {
@@ -983,25 +907,7 @@ describe('ProductImportService', () => {
 
   it('rejects AI attributes that return more than one value for the same attribute', async () => {
     await expect(
-      (
-      service as ProductImportService & {
-        resolveAttributes: (
-          aiAttributes: Array<{
-            attribute: { attribute_id: number; original_value: string };
-            values: Array<{
-              original_value: string;
-              matched_value_id: number | string;
-            }>;
-          }>,
-          availableAttributes: Array<Record<string, unknown>>,
-        ) => Promise<
-          Array<{
-            attribute_id: number;
-            attribute_value_ids: number[];
-          }>
-        >;
-      }
-      ).resolveAttributes(
+      (service as any).resolveAttributes(
         [
           {
             attribute: {
@@ -1039,7 +945,7 @@ describe('ProductImportService', () => {
             ],
           },
         ],
-      )
+      ),
     ).rejects.toThrow(
       'AI returned multiple values for attribute 11. Exactly one value is required per attribute.',
     );

@@ -1623,6 +1623,9 @@ export class ProductsService {
         cost: dto.cost ?? 0,
         price: dto.price ?? 0,
         sale_price: dto.sale_price ?? null,
+        original_vendor_price: dto.original_vendor_price ?? dto.price ?? null,
+        original_vendor_sale_price:
+          dto.original_vendor_sale_price ?? dto.sale_price ?? null,
         weight: dto.weight ?? null,
         length: dto.length ?? null,
         width: dto.width ?? null,
@@ -1902,12 +1905,16 @@ export class ProductsService {
     }
 
     // Filter by stock
-    if (in_stock !== undefined) {
-      if (in_stock) {
-        baseQuery.andWhere('product.is_out_of_stock = false');
-      } else {
-        baseQuery.andWhere('product.is_out_of_stock = true');
+    if (isAdmin) {
+      if (in_stock !== undefined) {
+        if (in_stock) {
+          baseQuery.andWhere('product.is_out_of_stock = false');
+        } else {
+          baseQuery.andWhere('product.is_out_of_stock = true');
+        }
       }
+    } else {
+      baseQuery.andWhere('product.is_out_of_stock = false');
     }
 
     // Filter by date range — dates from the client are in Amman local time (UTC+3).
@@ -2275,6 +2282,8 @@ export class ProductsService {
       original_vendor_categories: rawOriginalVendorCategories,
       original_vendor_category_id,
       original_vendor_category_name,
+      original_vendor_price,
+      original_vendor_sale_price,
       archived_at,
       archived_by,
       deleted_at,
@@ -2295,6 +2304,8 @@ export class ProductsService {
       attributes: attributesMap,
       specifications: specificationsMap,
       media: mediaList,
+      ...(isAdmin && { original_vendor_price }),
+      ...(isAdmin && { original_vendor_sale_price }),
       ...(isAdmin && { cost: cleanRest.cost }),
       ...(isAdmin && { quantity: cleanRest.quantity }),
       is_out_of_stock: cleanRest.is_out_of_stock,
@@ -2347,6 +2358,10 @@ export class ProductsService {
     ]);
 
     if (!productBase) {
+      throw new NotFoundException('Product not found');
+    }
+
+    if (!isAdmin && productBase.is_out_of_stock) {
       throw new NotFoundException('Product not found');
     }
 
@@ -2407,7 +2422,7 @@ export class ProductsService {
    * - Include mediaGroup object in each media item (remove media_group_id)
    * - Transform productCategories to categories array
    */
-  private transformProductResponse(product: Product): any {
+  private transformProductResponse(product: Product, isAdmin = false): any {
     hydrateProductMedia(product, true);
 
     const {
@@ -2418,6 +2433,8 @@ export class ProductsService {
       original_vendor_categories: rawOriginalVendorCategories,
       original_vendor_category_id,
       original_vendor_category_name,
+      original_vendor_price,
+      original_vendor_sale_price,
       ...rest
     } = product as any;
 
@@ -2475,6 +2492,8 @@ export class ProductsService {
       original_vendor_categories_ids: this.normalizeOriginalVendorCategoryIds(
         originalVendorCategories,
       ),
+      ...(isAdmin && { original_vendor_price }),
+      ...(isAdmin && { original_vendor_sale_price }),
       brand: brandInfo,
       categories,
       media: transformedMedia,
@@ -2577,6 +2596,8 @@ export class ProductsService {
         'cost',
         'price',
         'sale_price',
+        'original_vendor_price',
+        'original_vendor_sale_price',
         'weight',
         'length',
         'width',

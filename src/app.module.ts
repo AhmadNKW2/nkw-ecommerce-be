@@ -34,6 +34,7 @@ import { LoggingMiddleware } from './common/middleware/logging.middleware';
 import { NotesModule } from './notes/notes.module';
 import { PartnersModule } from './partners/partners.module';
 import { SpecificationsModule } from './specifications/specifications.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
@@ -94,6 +95,7 @@ import { SpecificationsModule } from './specifications/specifications.module';
     NotesModule,
     PartnersModule,
     SpecificationsModule,
+    SettingsModule,
   ],
 })
 export class AppModule implements NestModule {
