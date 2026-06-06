@@ -53,6 +53,7 @@ describe('ProductsService detail attributes', () => {
   let groupProductsRepository: { findOne: jest.Mock };
   let dataSource: { getRepository: jest.Mock };
   let repositoryByEntity: Map<unknown, { find: jest.Mock }>;
+  let settingsService: { getSeoSettings: jest.Mock };
 
   const productBase = {
     id: 7,
@@ -118,6 +119,10 @@ describe('ProductsService detail attributes', () => {
       }),
     };
 
+    settingsService = {
+      getSeoSettings: jest.fn().mockResolvedValue({ show_sale_pricing: true }),
+    };
+
     service = new ProductsService(
       productsRepository as never,
       {} as never,
@@ -131,6 +136,7 @@ describe('ProductsService detail attributes', () => {
       {} as never,
       {} as never,
       {} as never,
+      settingsService as never,
     );
   });
 

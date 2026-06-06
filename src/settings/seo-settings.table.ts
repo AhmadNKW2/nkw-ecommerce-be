@@ -76,6 +76,11 @@ export function createSeoSettingsTableDefinition() {
         default: true,
       },
       {
+        name: 'show_sale_pricing',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'created_at',
         type: 'timestamp',
         default: 'now()',

@@ -95,6 +95,9 @@ export class Order {
   })
   paymentMethod: PaymentMethod;
 
+  @Column('decimal', { precision: 10, scale: 2, default: 0 })
+  walletAppliedAmount: number;
+
   @Column({
     type: 'enum',
     enum: PaymentStatus,

@@ -54,6 +54,9 @@ export class SeoSettings {
   @Column({ type: 'boolean', default: true })
   robots_follow: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  show_sale_pricing: boolean;
+
   @CreateDateColumn()
   created_at: Date;
 

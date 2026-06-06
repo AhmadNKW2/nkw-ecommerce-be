@@ -2,9 +2,10 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, QueryRunner } from 'typeorm';
+import { Repository, DataSource, QueryRunner, TableColumn } from 'typeorm';
 import {
   Order,
   OrderStatus,
@@ -23,6 +24,8 @@ import { TransactionSource } from '../wallet/entities/wallet-transaction.entity'
 import { CartService } from '../cart/cart.service';
 import { ProductsService } from '../products/products.service';
 import { Address } from '../addresses/entities/address.entity';
+import { isStorefrontAvailableProduct } from '../products/utils/storefront-product-availability.util';
+import { resolveWalletPayment } from './utils/wallet-payment.util';
 
 // ... imports
 
@@ -55,7 +58,9 @@ function serializeStoredAddressMetadata(metadata: StoredAddressMetadata): string
 }
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
+  private ensureSchemaPromise: Promise<void> | null = null;
+
   constructor(
     @InjectRepository(Order)
     private ordersRepository: Repository<Order>,
@@ -67,6 +72,49 @@ export class OrdersService {
     private productsService: ProductsService,
     private dataSource: DataSource,
   ) {}
+
+  async onModuleInit() {
+    await this.ensureSchemaReady();
+  }
+
+  private async ensureSchemaReady(): Promise<void> {
+    if (this.ensureSchemaPromise) {
+      return this.ensureSchemaPromise;
+    }
+
+    this.ensureSchemaPromise = this.ensureWalletPaymentColumnsExist();
+
+    try {
+      await this.ensureSchemaPromise;
+    } finally {
+      this.ensureSchemaPromise = null;
+    }
+  }
+
+  private async ensureWalletPaymentColumnsExist(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (await queryRunner.hasColumn('orders', 'walletAppliedAmount')) {
+        return;
+      }
+
+      await queryRunner.addColumn(
+        'orders',
+        new TableColumn({
+          name: 'walletAppliedAmount',
+          type: 'decimal',
+          precision: 10,
+          scale: 2,
+          default: 0,
+        }),
+      );
+    } finally {
+      await queryRunner.release();
+    }
+  }
 
   private async persistUserShippingAddress(
     userId: number,
@@ -132,6 +180,8 @@ export class OrdersService {
   }
 
   async create(user: User, createOrderDto: CreateOrderDto) {
+    await this.ensureSchemaReady();
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -165,7 +215,7 @@ export class OrdersService {
         }
 
         // Check availability
-        if (!product.visible || product.status !== 'active') {
+        if (!isStorefrontAvailableProduct(product)) {
           throw new BadRequestException(
             `Product #${product.name_en} is not available`,
           );
@@ -244,19 +294,21 @@ export class OrdersService {
         throw new BadRequestException('Total amount cannot be negative');
 
       // 4. Payment
-      let paymentStatus = PaymentStatus.PENDING;
+      const walletPayment = resolveWalletPayment({
+        totalAmount,
+        paymentMethod: createOrderDto.paymentMethod,
+        walletAppliedAmount: createOrderDto.walletAppliedAmount,
+      });
 
-      if (createOrderDto.paymentMethod === PaymentMethod.WALLET) {
-        // Check/Deduct wallet
+      if (walletPayment.walletAppliedAmount > 0) {
         await this.walletService.deductFunds(
           user.id,
-          totalAmount,
+          walletPayment.walletAppliedAmount,
           TransactionSource.PURCHASE,
           'Order Payment',
           undefined,
           queryRunner.manager,
         );
-        paymentStatus = PaymentStatus.PAID;
       }
 
       // 5. Create Order
@@ -272,8 +324,9 @@ export class OrdersService {
         shippingAddress: createOrderDto.shippingAddress,
         billingAddress:
           createOrderDto.billingAddress || createOrderDto.shippingAddress,
-        paymentMethod: createOrderDto.paymentMethod,
-        paymentStatus: paymentStatus,
+        paymentMethod: walletPayment.paymentMethod,
+        paymentStatus: walletPayment.paymentStatus,
+        walletAppliedAmount: walletPayment.walletAppliedAmount,
         notes: createOrderDto.notes,
       });
 
@@ -506,20 +559,22 @@ export class OrdersService {
       }
 
       // Refund Wallet
-      if (
-        order.paymentMethod === PaymentMethod.WALLET &&
-        order.paymentStatus === PaymentStatus.PAID
-      ) {
+      const walletAppliedAmount = Number(order.walletAppliedAmount ?? 0);
+
+      if (walletAppliedAmount > 0) {
         await this.walletService.addFunds(
           order.userId,
           {
-            amount: order.totalAmount,
+            amount: walletAppliedAmount,
             source: TransactionSource.REFUND,
             description: `Refund for Order #${order.id}`,
           },
           queryRunner.manager,
         );
-        order.paymentStatus = PaymentStatus.REFUNDED;
+
+        if (walletAppliedAmount >= Number(order.totalAmount)) {
+          order.paymentStatus = PaymentStatus.REFUNDED;
+        }
       }
 
       order.status = newStatus;

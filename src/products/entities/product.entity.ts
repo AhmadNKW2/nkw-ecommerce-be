@@ -51,6 +51,17 @@ export enum ProductStatus {
   REVIEW = 'review',
 }
 
+export enum ProductWeightUnit {
+  GRAM = 'g',
+  KILOGRAM = 'kg',
+}
+
+export enum ProductDimensionUnit {
+  MILLIMETER = 'mm',
+  CENTIMETER = 'cm',
+  METER = 'm',
+}
+
 @Entity('products')
 @Index('idx_products_category_id', ['category_id'])
 @Index('idx_products_vendor_id', ['vendor_id'])
@@ -204,6 +215,13 @@ export class Product {
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   weight: number | null;
 
+  @Column({
+    type: 'varchar',
+    length: 10,
+    default: ProductWeightUnit.KILOGRAM,
+  })
+  weight_unit: ProductWeightUnit;
+
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   length: number | null;
 
@@ -212,6 +230,13 @@ export class Product {
 
   @Column('decimal', { precision: 10, scale: 2, nullable: true })
   height: number | null;
+
+  @Column({
+    type: 'varchar',
+    length: 10,
+    default: ProductDimensionUnit.CENTIMETER,
+  })
+  dimension_unit: ProductDimensionUnit;
 
   // ── Stock (flat) ──────────────────────────────────────────────
   @Column({ type: 'int', default: 0 })

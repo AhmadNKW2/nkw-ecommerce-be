@@ -53,4 +53,8 @@ export class UpdateSeoSettingsDto {
   @IsOptional()
   @IsBoolean()
   robots_follow?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  show_sale_pricing?: boolean;
 }

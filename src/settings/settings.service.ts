@@ -7,7 +7,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, TableColumn } from 'typeorm';
-import { Product } from '../products/entities/product.entity';
+import {
+  Product,
+  ProductDimensionUnit,
+  ProductWeightUnit,
+} from '../products/entities/product.entity';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
@@ -248,8 +252,10 @@ export class SettingsService implements OnModuleInit {
 
   private async createMissingSchemaArtifacts(): Promise<void> {
     await this.ensureSeoSettingsTableExists();
+    await this.ensureSeoSettingsColumnsExist();
     await this.ensureProductPriceRulesTableExists();
     await this.ensureProductVendorPriceColumnsExist();
+    await this.ensureProductMeasurementUnitColumnsExist();
     await this.seedDefaultProductPriceRule();
   }
 
@@ -266,6 +272,36 @@ export class SettingsService implements OnModuleInit {
       }
 
       await queryRunner.createTable(createSeoSettingsTableDefinition(), true);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureSeoSettingsColumnsExist(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasTable('seo_settings'))) {
+        return;
+      }
+
+      const missingColumns: TableColumn[] = [];
+
+      if (!(await queryRunner.hasColumn('seo_settings', 'show_sale_pricing'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'show_sale_pricing',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (missingColumns.length > 0) {
+        await queryRunner.addColumns('seo_settings', missingColumns);
+      }
     } finally {
       await queryRunner.release();
     }
@@ -322,6 +358,44 @@ export class SettingsService implements OnModuleInit {
             precision: 10,
             scale: 2,
             isNullable: true,
+          }),
+        );
+      }
+
+      if (missingColumns.length > 0) {
+        await queryRunner.addColumns('products', missingColumns);
+      }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureProductMeasurementUnitColumnsExist(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      const missingColumns: TableColumn[] = [];
+
+      if (!(await queryRunner.hasColumn('products', 'weight_unit'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'weight_unit',
+            type: 'varchar',
+            length: '10',
+            default: `'${ProductWeightUnit.KILOGRAM}'`,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('products', 'dimension_unit'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'dimension_unit',
+            type: 'varchar',
+            length: '10',
+            default: `'${ProductDimensionUnit.CENTIMETER}'`,
           }),
         );
       }

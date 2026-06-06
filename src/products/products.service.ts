@@ -36,6 +36,8 @@ import { IndexingService, IndexableProduct } from '../search/indexing.service';
 import { SynonymConceptService } from '../search/synonym-concept.service';
 import { TagsService } from '../search/tags.service';
 import { Tag } from '../search/entities/tag.entity';
+import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
+import { SettingsService } from '../settings/settings.service';
 
 import { ProductSpecificationInputDto } from './dto/product-specification.dto';
 import { ProductAttributeInputDto } from './dto/product-attribute.dto';
@@ -240,7 +242,85 @@ export class ProductsService {
     private readonly indexingService: IndexingService,
     private readonly synonymConceptService: SynonymConceptService,
     private readonly tagsService: TagsService,
+    private readonly settingsService: SettingsService,
   ) {}
+
+  private async shouldShowSalePricing(): Promise<boolean> {
+    try {
+      const settings = await this.settingsService.getSeoSettings();
+      return settings.show_sale_pricing !== false;
+    } catch {
+      return true;
+    }
+  }
+
+  private resolveStorefrontPricing(
+    product: Pick<Product, 'price' | 'sale_price'>,
+    showSalePricing: boolean,
+  ): {
+    price: number;
+    salePrice: number | null;
+    effectivePrice: number;
+  } {
+    const parsedBasePrice = Number(product.price ?? 0);
+    const basePrice = Number.isFinite(parsedBasePrice) ? parsedBasePrice : 0;
+    const parsedSalePrice =
+      product.sale_price != null ? Number(product.sale_price) : null;
+    const salePrice =
+      parsedSalePrice != null && Number.isFinite(parsedSalePrice)
+        ? parsedSalePrice
+        : null;
+    const hasValidSalePrice =
+      salePrice != null && salePrice > 0 && salePrice < basePrice;
+    const effectivePrice = hasValidSalePrice ? salePrice : basePrice;
+
+    if (!showSalePricing) {
+      return {
+        price: effectivePrice,
+        salePrice: null,
+        effectivePrice,
+      };
+    }
+
+    return {
+      price: basePrice,
+      salePrice: hasValidSalePrice ? salePrice : null,
+      effectivePrice,
+    };
+  }
+
+  private transformStorefrontPriceGroups(
+    priceGroups: Record<
+      string,
+      {
+        price?: number | string | null;
+        sale_price?: number | string | null;
+      }
+    > | null | undefined,
+    showSalePricing: boolean,
+  ) {
+    if (!priceGroups) {
+      return priceGroups;
+    }
+
+    return Object.fromEntries(
+      Object.entries(priceGroups).map(([groupId, priceGroup]) => {
+        const storefrontPricing = this.resolveStorefrontPricing(
+          priceGroup as Pick<Product, 'price' | 'sale_price'>,
+          showSalePricing,
+        );
+
+        return [
+          groupId,
+          {
+            ...priceGroup,
+            price: storefrontPricing.price,
+            sale_price: storefrontPricing.salePrice,
+          },
+        ];
+      }),
+    );
+  }
 
   private normalizeProductIds(productIds: number[] | undefined): number[] {
     return [
@@ -793,6 +873,7 @@ export class ProductsService {
     generateAiConcepts = false,
   ): Promise<void> {
     try {
+      const showSalePricing = await this.shouldShowSalePricing();
       const [
         product,
         productCategories,
@@ -827,9 +908,11 @@ export class ProductsService {
       const searchTags = await this.tagsService.getSearchTermsForTags(tagIds);
 
       // ── Pricing: direct from product ────────────────────────────────────
-      const effectivePrice = parseFloat(
-        String(product.sale_price ?? product.price ?? 0),
+      const storefrontPricing = this.resolveStorefrontPricing(
+        product,
+        showSalePricing,
       );
+      const effectivePrice = storefrontPricing.effectivePrice;
 
       // ── Stock ────────────────────────────────────────────────────────────
       const totalStock = product.quantity ?? 0;
@@ -911,8 +994,7 @@ export class ProductsService {
       );
       const tags = searchTags.length > 0 ? searchTags : legacyTags;
 
-      const isAvailable =
-        product.status === ProductStatus.ACTIVE && product.visible;
+      const isAvailable = isStorefrontAvailableProduct(product);
 
       const doc: IndexableProduct = {
         // ── Identity ────────────────────────────────────────────────────
@@ -941,10 +1023,10 @@ export class ProductsService {
         category_ids: categoryIds.length ? categoryIds : undefined,
 
         // ── Pricing ─────────────────────────────────────────────────────
-        price: product.price != null ? parseFloat(String(product.price)) : 0,
+        price: storefrontPricing.price,
         sale_price:
-          product.sale_price != null
-            ? parseFloat(String(product.sale_price))
+          storefrontPricing.salePrice != null
+            ? storefrontPricing.salePrice
             : undefined,
         price_min: effectivePrice,
         price_max: effectivePrice,
@@ -2059,8 +2141,9 @@ export class ProductsService {
     });
 
     // Transform each product using the detailed view structure
+    const showSalePricing = isAdmin ? true : await this.shouldShowSalePricing();
     const transformedData = data.map((product) =>
-      this.transformProductDetail(product, isAdmin),
+      this.transformProductDetail(product, isAdmin, showSalePricing),
     );
 
     return {
@@ -2129,7 +2212,11 @@ export class ProductsService {
     };
   }
 
-  private transformProductDetail(product: Product, isAdmin = false): any {
+  private transformProductDetail(
+    product: Product,
+    isAdmin = false,
+    showSalePricing = true,
+  ): any {
     hydrateProductMedia(product, true);
 
     const {
@@ -2294,9 +2381,23 @@ export class ProductsService {
     const originalVendorCategories = Array.isArray(rawOriginalVendorCategories)
       ? rawOriginalVendorCategories
       : [];
+    const storefrontPricing = this.resolveStorefrontPricing(
+      cleanRest,
+      showSalePricing,
+    );
 
     return {
       ...cleanRest,
+      ...(isAdmin
+        ? {}
+        : {
+            price: storefrontPricing.price,
+            sale_price: storefrontPricing.salePrice,
+            price_groups: this.transformStorefrontPriceGroups(
+              (cleanRest as any).price_groups,
+              showSalePricing,
+            ),
+          }),
       original_vendor_categories: originalVendorCategories,
       ...relationIds,
       brand: brandInfo,
@@ -2370,10 +2471,11 @@ export class ProductsService {
     productBase.attributes = attributes;
     (productBase as any).attribute_values = attributeValues;
     productBase.specifications = specifications;
+    const showSalePricing = isAdmin ? true : await this.shouldShowSalePricing();
 
     // Return detailed product structure
     return {
-      ...this.transformProductDetail(productBase, isAdmin),
+      ...this.transformProductDetail(productBase, isAdmin, showSalePricing),
       ...linkedProductsState,
     };
   }

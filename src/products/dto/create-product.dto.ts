@@ -12,7 +12,11 @@ import {
   IsEnum,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ProductStatus } from '../entities/product.entity';
+import {
+  ProductDimensionUnit,
+  ProductStatus,
+  ProductWeightUnit,
+} from '../entities/product.entity';
 import { PreserveRawNumberInput } from '../../common/decorators/preserve-raw-number-input.decorator';
 import { ProductSpecificationInputDto } from './product-specification.dto';
 import { OriginalVendorCategoryInputDto } from './original-vendor-category.dto';
@@ -199,25 +203,35 @@ export class CreateProductDto {
 
   // ============== Weight & Dimensions ==============
 
-  @ApiPropertyOptional({ example: 1.5, description: 'Weight in kg' })
+  @ApiPropertyOptional({ example: 1.5, description: 'Weight value using g or kg' })
   @IsNumber()
   @IsOptional()
   weight?: number;
 
-  @ApiPropertyOptional({ example: 20, description: 'Length in cm' })
+  @ApiPropertyOptional({ enum: ProductWeightUnit, example: ProductWeightUnit.KILOGRAM })
+  @IsEnum(ProductWeightUnit)
+  @IsOptional()
+  weight_unit?: ProductWeightUnit;
+
+  @ApiPropertyOptional({ example: 20, description: 'Length value using mm, cm, or m' })
   @IsNumber()
   @IsOptional()
   length?: number;
 
-  @ApiPropertyOptional({ example: 15, description: 'Width in cm' })
+  @ApiPropertyOptional({ example: 15, description: 'Width value using mm, cm, or m' })
   @IsNumber()
   @IsOptional()
   width?: number;
 
-  @ApiPropertyOptional({ example: 5, description: 'Height in cm' })
+  @ApiPropertyOptional({ example: 5, description: 'Height value using mm, cm, or m' })
   @IsNumber()
   @IsOptional()
   height?: number;
+
+  @ApiPropertyOptional({ enum: ProductDimensionUnit, example: ProductDimensionUnit.CENTIMETER })
+  @IsEnum(ProductDimensionUnit)
+  @IsOptional()
+  dimension_unit?: ProductDimensionUnit;
 
   // ============== Stock ==============
 

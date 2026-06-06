@@ -25,6 +25,7 @@ import { Product, ProductStatus } from './entities/product.entity';
 import { buildProductImportSystemPrompt } from './prompts/product-import-system.prompt';
 import { ProductsService } from './products.service';
 import { SettingsService } from '../settings/settings.service';
+import { normalizeProductMeasurements } from './utils/product-measurements.util';
 
 const OPEN_AI_NOT_EXIST_SENTINEL = 'not_exist';
 const INTERNAL_NEW_VALUE_MATCH = Symbol('internal_new_value_match');
@@ -85,6 +86,12 @@ interface NormalizedImportPayload {
   reference_link?: string | null;
   quantity?: unknown;
   stock?: unknown;
+  weight?: unknown;
+  weight_unit?: unknown;
+  length?: unknown;
+  width?: unknown;
+  height?: unknown;
+  dimension_unit?: unknown;
   sku?: string | null;
   record?: string | null;
   original_vendor_categories: OriginalVendorCategoryReference[];
@@ -132,6 +139,12 @@ interface ImportAiResult {
   description_ar?: unknown;
   meta_description_en?: unknown;
   meta_description_ar?: unknown;
+  weight?: unknown;
+  weight_unit?: unknown;
+  length?: unknown;
+  width?: unknown;
+  height?: unknown;
+  dimension_unit?: unknown;
   specifications?: ImportAiSpecification[];
   attributes?: ImportAiAttribute[];
 }
@@ -673,9 +686,14 @@ export class ProductImportService {
     rawPayload: Record<string, unknown>,
   ): NormalizedImportPayload {
     const nestedData = this.getObject(rawPayload.data);
+    const dimensionsObject = this.getObject(rawPayload.dimensions);
     const mergedPayload = nestedData
       ? { ...rawPayload, ...nestedData }
       : { ...rawPayload };
+    const rawWeight = mergedPayload.weight ?? dimensionsObject?.weight;
+    const rawLength = mergedPayload.length ?? dimensionsObject?.length;
+    const rawWidth = mergedPayload.width ?? dimensionsObject?.width;
+    const rawHeight = mergedPayload.height ?? dimensionsObject?.height;
     const title =
       this.firstNonEmptyString([
         mergedPayload.title,
@@ -725,6 +743,23 @@ export class ProductImportService {
         this.requireOptionalString(mergedPayload.link),
       quantity: mergedPayload.quantity,
       stock: mergedPayload.stock ?? mergedPayload.in_stock,
+      weight: this.extractMeasurementValue(rawWeight),
+      weight_unit: this.firstDefinedValue([
+        mergedPayload.weight_unit,
+        mergedPayload.weightUnit,
+        this.extractMeasurementUnit(rawWeight),
+      ]),
+      length: this.extractMeasurementValue(rawLength),
+      width: this.extractMeasurementValue(rawWidth),
+      height: this.extractMeasurementValue(rawHeight),
+      dimension_unit: this.firstDefinedValue([
+        mergedPayload.dimension_unit,
+        mergedPayload.dimensionUnit,
+        dimensionsObject?.unit,
+        this.extractMeasurementUnit(rawLength),
+        this.extractMeasurementUnit(rawWidth),
+        this.extractMeasurementUnit(rawHeight),
+      ]),
       sku: this.requireOptionalString(mergedPayload.sku),
       record: this.requireOptionalString(mergedPayload.record),
       original_vendor_categories: this.extractOriginalVendorCategories(
@@ -765,6 +800,15 @@ export class ProductImportService {
       'quantity',
       'stock',
       'in_stock',
+      'weight',
+      'weight_unit',
+      'weightUnit',
+      'length',
+      'width',
+      'height',
+      'dimension_unit',
+      'dimensionUnit',
+      'dimensions',
       'sku',
       'record',
       'original_vendor_categories_ids',
@@ -974,9 +1018,35 @@ export class ProductImportService {
       media,
       linked_product_ids: [],
     };
+    const payloadMeasurements = normalizeProductMeasurements({
+      weight: request.payload.weight,
+      weight_unit: request.payload.weight_unit,
+      length: request.payload.length,
+      width: request.payload.width,
+      height: request.payload.height,
+      dimension_unit: request.payload.dimension_unit,
+    });
+    const aiMeasurements = normalizeProductMeasurements({
+      weight: aiResult.weight,
+      weight_unit: aiResult.weight_unit,
+      length: aiResult.length,
+      width: aiResult.width,
+      height: aiResult.height,
+      dimension_unit: aiResult.dimension_unit,
+    });
+    const normalizedMeasurements = {
+      weight: aiMeasurements.weight ?? payloadMeasurements.weight,
+      weight_unit: aiMeasurements.weight_unit ?? payloadMeasurements.weight_unit,
+      length: aiMeasurements.length ?? payloadMeasurements.length,
+      width: aiMeasurements.width ?? payloadMeasurements.width,
+      height: aiMeasurements.height ?? payloadMeasurements.height,
+      dimension_unit:
+        aiMeasurements.dimension_unit ?? payloadMeasurements.dimension_unit,
+    };
 
     this.applyAiMetadata(createProductDto, aiResult);
     this.applyPayloadMetadata(createProductDto, request.payload);
+    this.applyPhysicalMeasurements(createProductDto, normalizedMeasurements);
     this.applyCommercialFields(
       createProductDto,
       pricing.salePrice,
@@ -1073,6 +1143,56 @@ export class ProductImportService {
     if (brandId !== null) {
       createProductDto.brand_id = brandId;
     }
+  }
+
+  private applyPhysicalMeasurements(
+    createProductDto: CreateProductDto,
+    measurements: ReturnType<typeof normalizeProductMeasurements>,
+  ): void {
+    if (measurements.weight !== undefined) {
+      createProductDto.weight = measurements.weight;
+      createProductDto.weight_unit = measurements.weight_unit;
+    }
+
+    if (measurements.length !== undefined) {
+      createProductDto.length = measurements.length;
+    }
+
+    if (measurements.width !== undefined) {
+      createProductDto.width = measurements.width;
+    }
+
+    if (measurements.height !== undefined) {
+      createProductDto.height = measurements.height;
+    }
+
+    if (
+      measurements.length !== undefined ||
+      measurements.width !== undefined ||
+      measurements.height !== undefined
+    ) {
+      createProductDto.dimension_unit = measurements.dimension_unit;
+    }
+  }
+
+  private extractMeasurementValue(value: unknown): unknown {
+    const objectValue = this.getObject(value);
+
+    if (objectValue && 'value' in objectValue) {
+      return objectValue.value;
+    }
+
+    return value;
+  }
+
+  private extractMeasurementUnit(value: unknown): unknown {
+    const objectValue = this.getObject(value);
+
+    if (objectValue && 'unit' in objectValue) {
+      return objectValue.unit;
+    }
+
+    return undefined;
   }
 
   private async resolveBrandForImport(

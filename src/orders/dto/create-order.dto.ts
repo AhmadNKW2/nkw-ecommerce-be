@@ -96,6 +96,11 @@ export class CreateOrderDto {
   paymentMethod: PaymentMethod;
 
   @IsOptional()
+  @IsNumber()
+  @Min(0)
+  walletAppliedAmount?: number;
+
+  @IsOptional()
   @IsString()
   notes?: string;
 }
