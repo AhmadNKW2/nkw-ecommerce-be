@@ -299,6 +299,18 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('seo_settings', 'free_delivery_amount'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'free_delivery_amount',
+            type: 'decimal',
+            precision: 10,
+            scale: 2,
+            default: '50.00',
+          }),
+        );
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('seo_settings', missingColumns);
       }

@@ -57,6 +57,18 @@ export class SeoSettings {
   @Column({ type: 'boolean', default: true })
   show_sale_pricing: boolean;
 
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 50.0,
+    transformer: {
+      to: (value: number) => value,
+      from: (value: string) => parseFloat(value) || 0,
+    },
+  })
+  free_delivery_amount: number;
+
   @CreateDateColumn()
   created_at: Date;
 

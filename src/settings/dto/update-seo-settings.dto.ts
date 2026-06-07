@@ -57,4 +57,7 @@ export class UpdateSeoSettingsDto {
   @IsOptional()
   @IsBoolean()
   show_sale_pricing?: boolean;
+
+  @IsOptional()
+  free_delivery_amount?: number;
 }
