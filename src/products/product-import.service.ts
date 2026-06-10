@@ -197,6 +197,42 @@ interface OpenAiLogContext {
   errorMessage?: string;
 }
 
+interface ImportedPricingAuditSourceRow {
+  product_id: number;
+  input_json: Record<string, unknown>;
+  name_en: string | null;
+  status: ProductStatus | null;
+  current_original_vendor_price: string | number | null;
+  current_original_vendor_sale_price: string | number | null;
+  current_price: string | number | null;
+  current_sale_price: string | number | null;
+}
+
+interface ImportedPricingSnapshot {
+  original_vendor_price: number | null;
+  original_vendor_sale_price: number | null;
+  price: number | null;
+  sale_price: number | null;
+}
+
+interface ImportedPricingAuditRow {
+  product_id: number;
+  name_en: string | null;
+  status: ProductStatus | null;
+  input_shape: string;
+  input_pricing: {
+    new_price: unknown;
+    old_price: unknown;
+    price: unknown;
+    sale_price: unknown;
+  };
+  current: ImportedPricingSnapshot;
+  expected: ImportedPricingSnapshot | null;
+  mismatch_fields: string[];
+  is_mismatch: boolean;
+  error: string | null;
+}
+
 type ValueMatch =
   | { type: 'existing'; matchedValueId: number }
   | { type: 'new' };
@@ -316,6 +352,141 @@ export class ProductImportService {
     };
   }
 
+  async auditImportedPricing(params: {
+    page?: number;
+    limit?: number;
+    mismatchOnly?: boolean;
+    productIds?: number[];
+  }) {
+    const page = Math.max(1, params.page ?? 1);
+    const limit = Math.max(1, params.limit ?? 50);
+    const mismatchOnly = params.mismatchOnly ?? true;
+    const audits = await this.collectImportedPricingAudits(params.productIds);
+    const mismatchCount = audits.filter((audit) => audit.is_mismatch).length;
+    const filteredAudits = mismatchOnly
+      ? audits.filter((audit) => audit.is_mismatch || audit.error)
+      : audits;
+    const start = (page - 1) * limit;
+    const data = filteredAudits.slice(start, start + limit);
+
+    return {
+      data,
+      meta: {
+        page,
+        limit,
+        total: filteredAudits.length,
+        total_scanned: audits.length,
+        total_mismatches: mismatchCount,
+      },
+    };
+  }
+
+  async syncImportedPricing(dto: {
+    product_ids: number[];
+    dry_run?: boolean;
+  }) {
+    const productIds = Array.from(
+      new Set(
+        (dto.product_ids ?? []).filter(
+          (productId): productId is number =>
+            Number.isInteger(productId) && productId > 0,
+        ),
+      ),
+    );
+
+    if (productIds.length === 0) {
+      throw new BadRequestException(
+        'At least one valid product id is required for imported pricing sync.',
+      );
+    }
+
+    const audits = await this.collectImportedPricingAudits(productIds);
+    const auditsByProductId = new Map(
+      audits.map((audit) => [audit.product_id, audit] as const),
+    );
+    const missingProductIds = productIds.filter(
+      (productId) => !auditsByProductId.has(productId),
+    );
+    const orderedAudits = productIds
+      .map((productId) => auditsByProductId.get(productId))
+      .filter((audit): audit is ImportedPricingAuditRow => Boolean(audit));
+
+    if (dto.dry_run !== false) {
+      return {
+        dry_run: true,
+        requested_product_ids: productIds,
+        missing_product_ids: missingProductIds,
+        total_requested: productIds.length,
+        total_found: orderedAudits.length,
+        total_mismatches: orderedAudits.filter((audit) => audit.is_mismatch)
+          .length,
+        results: orderedAudits,
+      };
+    }
+
+    const results: Array<Record<string, unknown>> = [];
+    let updated = 0;
+    let failed = 0;
+    let skipped = 0;
+
+    for (const audit of orderedAudits) {
+      if (audit.error || !audit.expected) {
+        failed += 1;
+        results.push({
+          product_id: audit.product_id,
+          status: 'failed',
+          error: audit.error ?? 'Expected pricing could not be derived.',
+        });
+        continue;
+      }
+
+      if (!audit.is_mismatch) {
+        skipped += 1;
+        results.push({
+          product_id: audit.product_id,
+          status: 'skipped',
+          reason: 'already_in_sync',
+        });
+        continue;
+      }
+
+      try {
+        await this.productsService.update(audit.product_id, {
+          original_vendor_price: audit.expected.original_vendor_price as any,
+          original_vendor_sale_price:
+            audit.expected.original_vendor_sale_price as any,
+          price: audit.expected.price as any,
+          sale_price: audit.expected.sale_price as any,
+        } as UpdateProductDto);
+        updated += 1;
+        results.push({
+          product_id: audit.product_id,
+          status: 'updated',
+          mismatch_fields: audit.mismatch_fields,
+        });
+      } catch (error) {
+        failed += 1;
+        results.push({
+          product_id: audit.product_id,
+          status: 'failed',
+          error: getErrorMessage(error),
+        });
+      }
+    }
+
+    return {
+      dry_run: false,
+      requested_product_ids: productIds,
+      missing_product_ids: missingProductIds,
+      total_requested: productIds.length,
+      total_found: orderedAudits.length,
+      updated,
+      failed,
+      skipped,
+      results,
+    };
+  }
+
   startReimportByProductIdInBackground(productId: number): string {
     this.getOpenAiApiKey();
 
@@ -346,6 +517,172 @@ export class ProductImportService {
       });
 
     return jobId;
+  }
+
+  private async collectImportedPricingAudits(
+    productIds?: number[],
+  ): Promise<ImportedPricingAuditRow[]> {
+    const query = this.productInputJsonRepository
+      .createQueryBuilder('product_input_json')
+      .innerJoin('product_input_json.product', 'product')
+      .select('product_input_json.product_id', 'product_id')
+      .addSelect('product_input_json.input_json', 'input_json')
+      .addSelect('product.name_en', 'name_en')
+      .addSelect('product.status', 'status')
+      .addSelect(
+        'product.original_vendor_price',
+        'current_original_vendor_price',
+      )
+      .addSelect(
+        'product.original_vendor_sale_price',
+        'current_original_vendor_sale_price',
+      )
+      .addSelect('product.price', 'current_price')
+      .addSelect('product.sale_price', 'current_sale_price')
+      .orderBy('product_input_json.product_id', 'DESC');
+
+    if (productIds && productIds.length > 0) {
+      query.andWhere('product_input_json.product_id IN (:...productIds)', {
+        productIds,
+      });
+    }
+
+    const rows = await query.getRawMany<ImportedPricingAuditSourceRow>();
+    const audits = await Promise.all(
+      rows.map((row) => this.buildImportedPricingAuditRow(row)),
+    );
+
+    return audits;
+  }
+
+  private async buildImportedPricingAuditRow(
+    row: ImportedPricingAuditSourceRow,
+  ): Promise<ImportedPricingAuditRow> {
+    const current: ImportedPricingSnapshot = {
+      original_vendor_price: this.toFiniteNumber(
+        row.current_original_vendor_price,
+      ),
+      original_vendor_sale_price: this.toFiniteNumber(
+        row.current_original_vendor_sale_price,
+      ),
+      price: this.toFiniteNumber(row.current_price),
+      sale_price: this.toFiniteNumber(row.current_sale_price),
+    };
+
+    try {
+      const request = this.parseRequest(row.input_json);
+      const expectedOriginalPricing = this.resolveVendorOriginalPricing(
+        request.payload,
+      );
+      const expectedManagedPricing =
+        await this.settingsService.calculateManagedProductPrices({
+          originalVendorPrice: expectedOriginalPricing.originalVendorPrice,
+          originalVendorSalePrice:
+            expectedOriginalPricing.originalVendorSalePrice,
+        });
+
+      const expected: ImportedPricingSnapshot = {
+        original_vendor_price: expectedOriginalPricing.originalVendorPrice,
+        original_vendor_sale_price:
+          expectedOriginalPricing.originalVendorSalePrice,
+        price: expectedManagedPricing.price,
+        sale_price: expectedManagedPricing.salePrice,
+      };
+
+      const mismatchFields = (
+        [
+          'original_vendor_price',
+          'original_vendor_sale_price',
+          'price',
+          'sale_price',
+        ] as const
+      ).filter(
+        (field) => !this.pricingValuesEqual(current[field], expected[field]),
+      );
+
+      return {
+        product_id: Number(row.product_id),
+        name_en: row.name_en,
+        status: row.status,
+        input_shape: this.describePricingInputShape(request.payload),
+        input_pricing: {
+          new_price: request.payload.new_price ?? null,
+          old_price: request.payload.old_price ?? null,
+          price: request.payload.price ?? null,
+          sale_price: request.payload.sale_price ?? null,
+        },
+        current,
+        expected,
+        mismatch_fields: mismatchFields,
+        is_mismatch: mismatchFields.length > 0,
+        error: null,
+      };
+    } catch (error) {
+      return {
+        product_id: Number(row.product_id),
+        name_en: row.name_en,
+        status: row.status,
+        input_shape: 'unparseable',
+        input_pricing: {
+          new_price: null,
+          old_price: null,
+          price: null,
+          sale_price: null,
+        },
+        current,
+        expected: null,
+        mismatch_fields: [],
+        is_mismatch: false,
+        error: getErrorMessage(error),
+      };
+    }
+  }
+
+  private describePricingInputShape(payload: NormalizedImportPayload): string {
+    const hasNewPrice = !this.isMissingPrice(payload.new_price);
+    const hasOldPrice = !this.isMissingPrice(payload.old_price);
+    const hasPrice = !this.isMissingPrice(payload.price);
+    const hasSalePrice = !this.isMissingPrice(payload.sale_price);
+
+    if (hasPrice && hasSalePrice) {
+      return 'price+sale_price';
+    }
+
+    if (hasNewPrice && hasOldPrice) {
+      return 'new_price+old_price';
+    }
+
+    if (hasNewPrice) {
+      return 'new_price_only';
+    }
+
+    if (hasSalePrice) {
+      return 'sale_price_only';
+    }
+
+    return 'unknown';
+  }
+
+  private pricingValuesEqual(
+    left: number | null,
+    right: number | null,
+  ): boolean {
+    if (left === null || right === null) {
+      return left === right;
+    }
+
+    return Math.abs(left - right) < 0.000001;
+  }
+
+  private toFiniteNumber(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    const numericValue =
+      typeof value === 'number' ? value : Number(String(value).trim());
+
+    return Number.isFinite(numericValue) ? numericValue : null;
   }
 
   startReimportReviewProductsInBackground(

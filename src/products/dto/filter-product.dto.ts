@@ -345,6 +345,15 @@ export class FilterProductDto {
   @IsBoolean()
   in_stock?: boolean;
 
+  @IsOptional()
+  @Transform(({ obj, key }) => {
+    const value = obj[key];
+    if (value === 'false' || value === false || value === '0') return false;
+    return [true, 'true', '1', 1].includes(value);
+  })
+  @IsBoolean()
+  has_duplicate_reference_link?: boolean;
+
   // ─── Date range filter ───────────────────────────────
   /** ISO date string: only products created on or after this date */
   @IsOptional()

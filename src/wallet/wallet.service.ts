@@ -286,6 +286,16 @@ export class WalletService {
     return this.calculateCashbackWithManager(orderAmount);
   }
 
+  async previewCashback(orderAmount: number) {
+    const normalizedOrderAmount = Number.isFinite(orderAmount) && orderAmount > 0
+      ? orderAmount
+      : 0;
+
+    const amount = await this.calculateCashbackWithManager(normalizedOrderAmount);
+
+    return { amount };
+  }
+
   private async calculateCashbackWithManager(
     orderAmount: number,
     manager?: EntityManager,

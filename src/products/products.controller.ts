@@ -32,11 +32,13 @@ import { ProductsService } from './products.service';
 import { ProductImportService } from './product-import.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { DeleteReviewProductsDto } from './dto/delete-review-products.dto';
+import { ImportedPricingAuditQueryDto } from './dto/imported-pricing-audit-query.dto';
 import { ReimportReviewProductsDto } from './dto/reimport-review-products.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { PatchProductDto } from './dto/patch-product.dto';
 import { FilterProductDto, AssignProductsDto } from './dto/filter-product.dto';
 import { ProductNamesQueryDto } from './dto/product-names-query.dto';
+import { SyncImportedPricingDto } from './dto/sync-imported-pricing.dto';
 import { SyncLinkedProductsDto } from './dto/sync-linked-products.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -547,6 +549,14 @@ export class ProductsController {
     description: 'Comma separated specification value ids, e.g. 21,22',
     example: '21,22',
   })
+  @ApiQuery({
+    name: 'has_duplicate_reference_link',
+    required: false,
+    type: Boolean,
+    description:
+      'Filter products by whether their reference_link is duplicated across other products',
+    example: true,
+  })
   findAll(@Query() filterDto: FilterProductDto, @Req() req: any) {
     const isAdmin =
       req.user?.role === UserRole.ADMIN ||
@@ -925,6 +935,36 @@ export class ProductsController {
       message:
         'Review product re-import started in background. Matching review products will be processed one by one. Poll GET /products/import-jobs/:job_id to track progress.',
     };
+  }
+
+  @Get('import-pricing/audit')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @ApiOperation({
+    summary:
+      'Audit imported-product pricing by recomputing prices from product_input_jsons.input_json',
+  })
+  auditImportedPricing(
+    @Query() query: ImportedPricingAuditQueryDto,
+  ): Promise<unknown> {
+    return this.productImportService.auditImportedPricing({
+      page: query.page,
+      limit: query.limit,
+      mismatchOnly: query.mismatch_only,
+      productIds: query.product_ids,
+    });
+  }
+
+  @Post('import-pricing/sync')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Dry-run or sync imported-product pricing from product_input_jsons.input_json for selected product ids',
+  })
+  @ApiBody({ type: SyncImportedPricingDto })
+  syncImportedPricing(@Body() dto: SyncImportedPricingDto): Promise<unknown> {
+    return this.productImportService.syncImportedPricing(dto);
   }
 
   @Post(':id/reimport-ai')

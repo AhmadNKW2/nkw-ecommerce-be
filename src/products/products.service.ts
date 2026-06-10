@@ -1859,6 +1859,7 @@ export class ProductsService {
       search,
       sku,
       in_stock,
+      has_duplicate_reference_link,
       start_date,
       end_date,
       ids: filterIds,
@@ -2073,6 +2074,36 @@ export class ProductsService {
       }
     } else {
       baseQuery.andWhere('product.is_out_of_stock = false');
+    }
+
+    if (has_duplicate_reference_link !== undefined) {
+      if (has_duplicate_reference_link) {
+        baseQuery.andWhere(
+          `product.reference_link IS NOT NULL
+           AND btrim(product.reference_link) <> ''
+           AND EXISTS (
+             SELECT 1
+             FROM products duplicate_product
+             WHERE duplicate_product.id != product.id
+               AND duplicate_product.reference_link IS NOT NULL
+               AND btrim(duplicate_product.reference_link) <> ''
+               AND btrim(duplicate_product.reference_link) = btrim(product.reference_link)
+           )`,
+        );
+      } else {
+        baseQuery.andWhere(
+          `(product.reference_link IS NULL
+            OR btrim(product.reference_link) = ''
+            OR NOT EXISTS (
+              SELECT 1
+              FROM products duplicate_product
+              WHERE duplicate_product.id != product.id
+                AND duplicate_product.reference_link IS NOT NULL
+                AND btrim(duplicate_product.reference_link) <> ''
+                AND btrim(duplicate_product.reference_link) = btrim(product.reference_link)
+            ))`,
+        );
+      }
     }
 
     // Filter by date range — dates from the client are in Amman local time (UTC+3).

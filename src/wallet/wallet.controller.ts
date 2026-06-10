@@ -62,6 +62,11 @@ export class WalletController {
     return this.walletService.getWallet(req.user.id);
   }
 
+  @Get('cashback-preview')
+  previewCashback(@Query('orderAmount') orderAmount: string) {
+    return this.walletService.previewCashback(Number(orderAmount));
+  }
+
   // Filter transactions
   @Post('transactions/filter')
   filterTransactions(@Request() req, @Body() filterDto: FilterTransactionDto) {
