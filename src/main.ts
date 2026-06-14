@@ -64,18 +64,10 @@ async function bootstrap() {
 
   // Enable CORS with credentials support for cookie-based auth
   const isProduction = process.env.IS_PRODUCTION === 'true';
-  const allowedOrigins = [
-    'https://addmin.ordonsooq.com',
-    'https://api.ordonsooq.com',
-    'https://ordonsooq-public.vercel.app',
-    'https://ordonsooq.com',
-    'https://www.ordonsooq.com',
-    'https://ordonsooq-admin-fe.vercel.app',
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'https://appleid.apple.com',
-  ];
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   const isLocalDevOrigin = (origin: string) =>
     /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i.test(
       origin,
@@ -153,8 +145,8 @@ async function bootstrap() {
   });
 
   const swaggerConfig = new DocumentBuilder()
-    .setTitle('Ordonsooq API')
-    .setDescription('API documentation for the Ordonsooq backend.')
+    .setTitle('Storefront API')
+    .setDescription('API documentation for the storefront backend.')
     .setVersion(process.env.APP_VERSION ?? '0.0.1')
     .addBearerAuth(
       {
@@ -181,7 +173,7 @@ async function bootstrap() {
   });
 
   SwaggerModule.setup(swaggerUiPath, app, swaggerDocument, {
-    customSiteTitle: 'Ordonsooq API Docs',
+    customSiteTitle: 'Storefront API Docs',
     jsonDocumentUrl: 'docs-json',
     yamlDocumentUrl: 'docs-yaml',
     swaggerUrl: '/docs-json',

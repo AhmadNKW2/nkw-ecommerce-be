@@ -65,7 +65,7 @@ export class UsersController {
       regular_user: {
         summary: 'Regular user',
         value: {
-          email: 'aisha@ordonsooq.com',
+          email: 'aisha@example.com',
           firstName: 'Aisha',
           lastName: 'Khalid',
           password: 'StrongPass123',
@@ -77,12 +77,12 @@ export class UsersController {
       catalog_manager: {
         summary: 'Catalog manager',
         value: {
-          email: 'catalog@ordonsooq.com',
+          email: 'catalog@example.com',
           firstName: 'Maha',
           lastName: 'Salem',
           password: 'StrongPass123',
           role: UserRole.CATALOG_MANAGER,
-          image: 'https://cdn.ordonsooq.com/users/catalog-manager.jpg',
+          image: 'https://cdn.example.com/users/catalog-manager.jpg',
         },
       },
     },
@@ -164,7 +164,7 @@ export class UsersController {
       sync_wishlist: {
         summary: 'Sync wishlist and profile image',
         value: {
-          image: 'https://cdn.ordonsooq.com/users/42/profile-v2.jpg',
+          image: 'https://cdn.example.com/users/42/profile-v2.jpg',
           product_ids: [310, 311, 312],
         },
       },

@@ -22,7 +22,7 @@ export class SearchHitDto {
   @ApiPropertyOptional({ example: 'Premium organic dates from Al Qassim.' })
   description_ar?: string;
 
-  @ApiProperty({ example: 'Ordonsooq Farms' })
+  @ApiProperty({ example: 'Storefront Farms' })
   brand: string;
 
   @ApiPropertyOptional({ example: 12 })
@@ -78,7 +78,7 @@ export class SearchHitDto {
 
   @ApiPropertyOptional({
     type: [String],
-    example: ['https://cdn.ordonsooq.com/products/101-primary.jpg'],
+    example: ['https://cdn.example.com/products/101-primary.jpg'],
   })
   images?: string[];
 
@@ -151,7 +151,7 @@ export class AutocompleteSuggestionDto {
   name_ar: string;
 
   @ApiPropertyOptional({
-    example: 'https://cdn.ordonsooq.com/products/101-primary.jpg',
+    example: 'https://cdn.example.com/products/101-primary.jpg',
   })
   image?: string;
 

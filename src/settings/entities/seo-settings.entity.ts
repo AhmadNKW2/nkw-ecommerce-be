@@ -11,23 +11,23 @@ export class SeoSettings {
   @PrimaryGeneratedColumn('increment')
   id: number;
 
-  @Column({ type: 'varchar', length: 120, default: 'ordonsooq' })
+  @Column({ type: 'varchar', length: 120, default: 'Storefront' })
   site_name_en: string;
 
-  @Column({ type: 'varchar', length: 120, default: 'ordonsooq' })
+  @Column({ type: 'varchar', length: 120, default: 'المتجر الإلكتروني' })
   site_name_ar: string;
 
-  @Column({ type: 'varchar', length: 70, default: 'ordonsooq' })
+  @Column({ type: 'varchar', length: 70, default: 'Storefront' })
   default_meta_title_en: string;
 
-  @Column({ type: 'varchar', length: 70, default: 'ordonsooq' })
+  @Column({ type: 'varchar', length: 70, default: 'المتجر الإلكتروني' })
   default_meta_title_ar: string;
 
   @Column({
     type: 'varchar',
     length: 160,
     default:
-      'Your premier destination for online shopping - Quality products, great prices, fast delivery',
+      'A modern online shopping destination with quality products, fair prices, and reliable delivery.',
   })
   default_meta_description_en: string;
 
@@ -35,7 +35,7 @@ export class SeoSettings {
     type: 'varchar',
     length: 160,
     default:
-      'وجهتك المميزة للتسوق الإلكتروني - منتجات عالية الجودة وأسعار رائعة وتوصيل سريع',
+      'وجهة تسوق إلكترونية حديثة بمنتجات مميزة وأسعار مناسبة وتوصيل موثوق.',
   })
   default_meta_description_ar: string;
 

@@ -19,7 +19,7 @@ async function createAdmin() {
     console.log('Connected to database');
 
     // Constant token admin credentials
-    const email = process.env.CONSTANT_TOKEN_ADMIN_EMAIL || 'khaled@ordonsooq.com';
+    const email = process.env.CONSTANT_TOKEN_ADMIN_EMAIL || 'admin@example.com';
     const password = process.env.CONSTANT_TOKEN_ADMIN_PASSWORD || 'Khaled@Password';
     const firstName = process.env.CONSTANT_TOKEN_ADMIN_FIRST_NAME || 'Khaled';
     const lastName = process.env.CONSTANT_TOKEN_ADMIN_LAST_NAME || 'Admin';

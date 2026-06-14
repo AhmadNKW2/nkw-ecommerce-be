@@ -92,10 +92,10 @@ describe('SettingsService', () => {
       return tableName !== 'seo_settings';
     });
     seoSettingsRepository.findOne.mockResolvedValue(null);
-    seoSettingsRepository.create.mockReturnValue({ site_name_en: 'ordonsooq' });
+    seoSettingsRepository.create.mockReturnValue({ site_name_en: 'Storefront' });
     seoSettingsRepository.save.mockResolvedValue({
       id: 1,
-      site_name_en: 'ordonsooq',
+      site_name_en: 'Storefront',
     });
 
     const result = await service.getSeoSettings();
@@ -108,19 +108,19 @@ describe('SettingsService', () => {
     );
     expect(seoSettingsRepository.create).toHaveBeenCalledWith({});
     expect(seoSettingsRepository.save).toHaveBeenCalledWith({
-      site_name_en: 'ordonsooq',
+      site_name_en: 'Storefront',
     });
     expect(queryRunner.release).toHaveBeenCalled();
     expect(result).toEqual({
       id: 1,
-      site_name_en: 'ordonsooq',
+      site_name_en: 'Storefront',
     });
   });
 
   it('returns the existing settings row without seeding a new one', async () => {
     const existingSettings = {
       id: 7,
-      site_name_en: 'Ordonsooq',
+      site_name_en: 'Storefront',
       robots_index: true,
       robots_follow: true,
     };

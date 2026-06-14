@@ -381,8 +381,8 @@ export class ProductsController {
           quantity: 100,
           low_stock_threshold: 10,
           is_out_of_stock: false,
-          meta_title_en: 'ASD Gaming Mouse | Ordonsooq',
-          meta_title_ar: 'ماوس ألعاب ASD | أوردون سوق',
+          meta_title_en: 'ASD Gaming Mouse | Storefront',
+          meta_title_ar: 'ماوس ألعاب ASD | المتجر الإلكتروني',
           meta_description_en:
             'Shop the ASD gaming mouse with configurable variants and premium performance.',
           meta_description_ar:
@@ -673,8 +673,8 @@ export class ProductsController {
           quantity: 8,
           low_stock_threshold: 3,
           is_out_of_stock: false,
-          meta_title_en: 'LG UltraGear WOLED Gaming Monitor 39-inch | Ordonsooq',
-          meta_title_ar: 'شاشة LG UltraGear WOLED مقاس 39 بوصة | أوردون سوق',
+          meta_title_en: 'LG UltraGear WOLED Gaming Monitor 39-inch | Storefront',
+          meta_title_ar: 'شاشة LG UltraGear WOLED مقاس 39 بوصة | المتجر الإلكتروني',
           meta_description_en:
             'Buy the LG UltraGear 39-inch WOLED gaming monitor with premium display performance.',
           meta_description_ar:
@@ -719,8 +719,8 @@ export class ProductsController {
           quantity: 45,
           low_stock_threshold: 5,
           is_out_of_stock: false,
-          meta_title_en: 'Gaming Mouse Pro | Ordonsooq',
-          meta_title_ar: 'ماوس الألعاب برو | أوردون سوق',
+          meta_title_en: 'Gaming Mouse Pro | Storefront',
+          meta_title_ar: 'ماوس الألعاب برو | المتجر الإلكتروني',
           meta_description_en:
             'Upgrade to the Gaming Mouse Pro with refined specs and accessory options.',
           meta_description_ar:
@@ -808,8 +808,8 @@ export class ProductsController {
       seo_only: {
         summary: 'Update only SEO fields',
         value: {
-          meta_title_en: 'Wireless Headphones | Ordonsooq',
-          meta_title_ar: 'سماعات لاسلكية | أوردون سوق',
+          meta_title_en: 'Wireless Headphones | Storefront',
+          meta_title_ar: 'سماعات لاسلكية | المتجر الإلكتروني',
           meta_description_en:
             'Buy the best wireless headphones with ANC technology.',
           meta_description_ar:

@@ -14,7 +14,7 @@ export class CreatePartnerDto {
   full_name: string;
 
   @ApiProperty({
-    example: 'Ordonsooq Trading',
+    example: 'Storefront Trading',
     description: 'Company name associated with the partner.',
   })
   @IsString()

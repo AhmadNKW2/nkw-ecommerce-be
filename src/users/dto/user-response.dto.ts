@@ -5,7 +5,7 @@ export class UserSummaryResponseDto {
   @ApiProperty({ example: 42 })
   id: number;
 
-  @ApiProperty({ example: 'manager@ordonsooq.com' })
+  @ApiProperty({ example: 'manager@example.com' })
   email: string;
 
   @ApiProperty({ example: 'Aisha' })
@@ -53,7 +53,7 @@ export class UserResponseDto extends UserSummaryResponseDto {
   googleId?: string | null;
 
   @ApiPropertyOptional({
-    example: 'https://cdn.ordonsooq.com/users/42/profile.jpg',
+    example: 'https://cdn.example.com/users/42/profile.jpg',
     nullable: true,
   })
   image?: string | null;
@@ -92,7 +92,7 @@ export class UserWishlistItemDto {
       name_ar: 'Organic Dates',
       sku: 'OD-101',
       status: 'active',
-      image: 'https://cdn.ordonsooq.com/products/101-primary.jpg',
+      image: 'https://cdn.example.com/products/101-primary.jpg',
     },
   })
   product?: Record<string, unknown> | null;

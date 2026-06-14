@@ -17,7 +17,7 @@ import { UserRole } from '../entities/user.entity';
 
 export class CreateUserDto {
   @ApiProperty({
-    example: 'aisha@ordonsooq.com',
+    example: 'aisha@example.com',
     description: 'Unique email address for the user account.',
   })
   @IsEmail()
@@ -40,7 +40,7 @@ export class CreateUserDto {
   googleId?: string;
 
   @ApiPropertyOptional({
-    example: 'https://cdn.ordonsooq.com/users/42/profile.jpg',
+    example: 'https://cdn.example.com/users/42/profile.jpg',
     description: 'Profile image URL for the user.',
   })
   @IsString()

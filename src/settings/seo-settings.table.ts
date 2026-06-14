@@ -13,39 +13,39 @@ export function createSeoSettingsTableDefinition() {
         name: 'site_name_en',
         type: 'varchar',
         length: '120',
-        default: `'ordonsooq'`,
+        default: `'Storefront'`,
       },
       {
         name: 'site_name_ar',
         type: 'varchar',
         length: '120',
-        default: `'ordonsooq'`,
+        default: `'المتجر الإلكتروني'`,
       },
       {
         name: 'default_meta_title_en',
         type: 'varchar',
         length: '70',
-        default: `'ordonsooq'`,
+        default: `'Storefront'`,
       },
       {
         name: 'default_meta_title_ar',
         type: 'varchar',
         length: '70',
-        default: `'ordonsooq'`,
+        default: `'المتجر الإلكتروني'`,
       },
       {
         name: 'default_meta_description_en',
         type: 'varchar',
         length: '160',
         default:
-          `'Your premier destination for online shopping - Quality products, great prices, fast delivery'`,
+          `'A modern online shopping destination with quality products, fair prices, and reliable delivery.'`,
       },
       {
         name: 'default_meta_description_ar',
         type: 'varchar',
         length: '160',
         default:
-          `'وجهتك المميزة للتسوق الإلكتروني - منتجات عالية الجودة وأسعار رائعة وتوصيل سريع'`,
+          `'وجهة تسوق إلكترونية حديثة بمنتجات مميزة وأسعار مناسبة وتوصيل موثوق.'`,
       },
       {
         name: 'default_og_image',

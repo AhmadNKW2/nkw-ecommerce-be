@@ -53,7 +53,7 @@ export class R2StorageService {
       'R2_SECRET_ACCESS_KEY',
     );
     this.bucketName =
-      this.configService.get<string>('R2_BUCKET_NAME') || 'ordonsooq-media';
+      this.configService.get<string>('R2_BUCKET_NAME') || 'storefront-media';
 
     // R2 endpoint format
     const endpoint =

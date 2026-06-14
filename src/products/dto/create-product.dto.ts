@@ -320,13 +320,13 @@ export class CreateProductDto {
 
   // ============== SEO ==============
 
-  @ApiPropertyOptional({ example: 'Wireless Headphones | Ordonsooq', description: 'Meta title EN — max 70 chars. Leave empty for AI generation later.' })
+  @ApiPropertyOptional({ example: 'Wireless Headphones | Storefront', description: 'Meta title EN — max 70 chars. Leave empty for AI generation later.' })
   @IsString()
   @MaxLength(70)
   @IsOptional()
   meta_title_en?: string;
 
-  @ApiPropertyOptional({ example: 'سماعات لاسلكية | أوردون سوق', description: 'Meta title AR — max 70 chars. Leave empty for AI generation later.' })
+  @ApiPropertyOptional({ example: 'سماعات لاسلكية | المتجر الإلكتروني', description: 'Meta title AR — max 70 chars. Leave empty for AI generation later.' })
   @IsString()
   @MaxLength(70)
   @IsOptional()
