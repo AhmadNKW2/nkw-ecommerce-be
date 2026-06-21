@@ -1,0 +1,131 @@
+[
+  {
+    "name_en": "Software",
+    "name_ar": "البرمجيات",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "Antivirus & Utility", "name_ar": "برامج الحماية والأدوات المساعدة" },
+      { "name_en": "Office & Business", "name_ar": "برامج المكاتب والأعمال" },
+      { "name_en": "Operating Systems", "name_ar": "أنظمة التشغيل" }
+    ]
+  },
+  {
+    "name_en": "Tablet Accessories",
+    "name_ar": "إكسسوارات الأجهزة اللوحية",
+    "type": "category",
+    "recommended_parent": "Tablets",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Point of Sale (POS)",
+    "name_ar": "نقاط البيع",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "Barcode Scanners", "name_ar": "ماسحات الباركود" },
+      { "name_en": "Cash Drawers", "name_ar": "أدراج النقد" },
+      { "name_en": "Receipt Printers", "name_ar": "طابعات الفواتير" },
+      { "name_en": "Thermal Printers", "name_ar": "الطابعات الحرارية" }
+    ]
+  },
+  {
+    "name_en": "Sound Cards",
+    "name_ar": "كروت الصوت",
+    "type": "category",
+    "recommended_parent": "Components",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Power Protection & UPS",
+    "name_ar": "حماية الطاقة وأجهزة UPS",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "UPS", "name_ar": "أجهزة UPS" },
+      { "name_en": "Surge Protectors", "name_ar": "واقيات التيار الزائد" },
+      { "name_en": "Voltage Regulators", "name_ar": "منظمات الجهد الكهربائي" }
+    ]
+  },
+  {
+    "name_en": "Power Banks, Batteries & Chargers",
+    "name_ar": "البطاريات المحمولة والبطاريات والشواحن",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "Power Banks", "name_ar": "البطاريات المحمولة" },
+      { "name_en": "Wireless Chargers", "name_ar": "الشواحن اللاسلكية" },
+      { "name_en": "USB Chargers", "name_ar": "شواحن USB" },
+      { "name_en": "Rechargeable Batteries", "name_ar": "بطاريات قابلة للشحن" },
+      { "name_en": "Alkaline Batteries", "name_ar": "بطاريات قلوية" },
+      { "name_en": "Laptop Batteries", "name_ar": "بطاريات اللابتوب" },
+      { "name_en": "Laptop Chargers", "name_ar": "شواحن اللابتوب" }
+    ]
+  },
+  {
+    "name_en": "Smart Home",
+    "name_ar": "المنزل الذكي",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "Smart Plugs & Sensors", "name_ar": "المقابس والمستشعرات الذكية" },
+      { "name_en": "Smart Appliances", "name_ar": "الأجهزة المنزلية الذكية" },
+      { "name_en": "Smart Speakers & Streaming Devices", "name_ar": "السماعات الذكية وأجهزة البث" },
+      { "name_en": "Smart Hubs", "name_ar": "محاور التحكم الذكية" }
+    ]
+  },
+  {
+    "name_en": "Mobile & Smartphones",
+    "name_ar": "الهواتف والجوالات",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "Smartphones", "name_ar": "الهواتف الذكية" },
+      { "name_en": "Mobile Accessories", "name_ar": "إكسسوارات الجوال" }
+    ]
+  },
+  {
+    "name_en": "Webcams & Video Conferencing",
+    "name_ar": "كاميرات الويب والمؤتمرات المرئية",
+    "type": "optional",
+    "recommended_parent": "Cameras",
+    "sub_categories": [
+      { "name_en": "Webcams", "name_ar": "كاميرات الويب" },
+      { "name_en": "Conference Cameras", "name_ar": "كاميرات المؤتمرات" },
+      { "name_en": "Speakerphones", "name_ar": "سماعات المؤتمرات الصوتية" }
+    ]
+  },
+  {
+    "name_en": "Office Equipment",
+    "name_ar": "معدات المكاتب",
+    "type": "top_level",
+    "recommended_parent": null,
+    "sub_categories": [
+      { "name_en": "Paper Shredders", "name_ar": "ماكينات تقطيع الورق" },
+      { "name_en": "Office Furniture", "name_ar": "أثاث المكاتب" },
+      { "name_en": "Coffee & Beverage Makers", "name_ar": "ماكينات القهوة والمشروبات" },
+      { "name_en": "Tripods & Supports", "name_ar": "الحوامل الثلاثية والدعامات" }
+    ]
+  },
+  {
+    "name_en": "Custom Liquid Cooling",
+    "name_ar": "التبريد المائي المخصص",
+    "type": "sub_category",
+    "recommended_parent": "Components > Cooling Systems",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Projectors",
+    "name_ar": "أجهزة العرض",
+    "type": "category",
+    "recommended_parent": "Displays",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Network Cards",
+    "name_ar": "كروت الشبكة",
+    "type": "category",
+    "recommended_parent": "Networking",
+    "sub_categories": []
+  }
+]
