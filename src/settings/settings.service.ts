@@ -25,7 +25,10 @@ import {
   MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
 } from './product-pricing.util';
 import { createProductPriceRulesTableDefinition } from './product-price-rule.table';
+import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
 import { UpdateSeoSettingsDto } from './dto/update-seo-settings.dto';
+import { ProductFieldToggles } from './entities/product-field-toggles.entity';
+import { createProductFieldTogglesTableDefinition } from './product-field-toggles.table';
 import { createSeoSettingsTableDefinition } from './seo-settings.table';
 
 @Injectable()
@@ -39,6 +42,8 @@ export class SettingsService implements OnModuleInit {
     private readonly productPriceRuleRepository: Repository<ProductPriceRule>,
     @InjectRepository(Product)
     private readonly productsRepository: Repository<Product>,
+    @InjectRepository(ProductFieldToggles)
+    private readonly productFieldTogglesRepository: Repository<ProductFieldToggles>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -79,6 +84,32 @@ export class SettingsService implements OnModuleInit {
     Object.assign(settings, normalizedPatch);
 
     return this.seoSettingsRepository.save(settings);
+  }
+
+  async getProductFieldToggles(): Promise<ProductFieldToggles> {
+    await this.ensureSchemaReady();
+
+    const existingToggles = await this.productFieldTogglesRepository.findOne({
+      where: {},
+      order: { id: 'ASC' },
+    });
+
+    if (existingToggles) {
+      return existingToggles;
+    }
+
+    const defaultToggles = this.productFieldTogglesRepository.create({});
+    return this.productFieldTogglesRepository.save(defaultToggles);
+  }
+
+  async updateProductFieldToggles(
+    updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
+  ): Promise<ProductFieldToggles> {
+    const toggles = await this.getProductFieldToggles();
+
+    Object.assign(toggles, updateProductFieldTogglesDto);
+
+    return this.productFieldTogglesRepository.save(toggles);
   }
 
   async getProductPriceRules() {
@@ -253,6 +284,7 @@ export class SettingsService implements OnModuleInit {
   private async createMissingSchemaArtifacts(): Promise<void> {
     await this.ensureSeoSettingsTableExists();
     await this.ensureSeoSettingsColumnsExist();
+    await this.ensureProductFieldTogglesTableExists();
     await this.ensureProductPriceRulesTableExists();
     await this.ensureProductVendorPriceColumnsExist();
     await this.ensureProductMeasurementUnitColumnsExist();
@@ -314,6 +346,27 @@ export class SettingsService implements OnModuleInit {
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('seo_settings', missingColumns);
       }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureProductFieldTogglesTableExists(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      const hasTable = await queryRunner.hasTable('product_field_toggles');
+
+      if (hasTable) {
+        return;
+      }
+
+      await queryRunner.createTable(
+        createProductFieldTogglesTableDefinition(),
+        true,
+      );
     } finally {
       await queryRunner.release();
     }
