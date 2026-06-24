@@ -88,6 +88,11 @@ export function createSeoSettingsTableDefinition() {
         default: '50.00',
       },
       {
+        name: 'free_delivery_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'created_at',
         type: 'timestamp',
         default: 'now()',

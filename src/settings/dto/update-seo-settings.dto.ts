@@ -1,4 +1,12 @@
-import { IsBoolean, IsOptional, IsString, MaxLength, IsUrl } from 'class-validator';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 export class UpdateSeoSettingsDto {
   @IsOptional()
@@ -59,5 +67,11 @@ export class UpdateSeoSettingsDto {
   show_sale_pricing?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  free_delivery_enabled?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   free_delivery_amount?: number;
 }

@@ -57,6 +57,9 @@ export class SeoSettings {
   @Column({ type: 'boolean', default: true })
   show_sale_pricing: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  free_delivery_enabled: boolean;
+
   @Column({
     type: 'decimal',
     precision: 10,

@@ -12,6 +12,7 @@ import {
   ProductDimensionUnit,
   ProductWeightUnit,
 } from '../products/entities/product.entity';
+import { BulkUpdateProductPricingDto } from './dto/bulk-update-product-pricing.dto';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
@@ -236,6 +237,67 @@ export class SettingsService implements OnModuleInit {
     };
   }
 
+  async bulkUpdateProductPricing(dto: BulkUpdateProductPricingDto) {
+    await this.ensureSchemaReady();
+
+    const normalizedVendorIds = Array.from(
+      new Set((dto.vendor_ids ?? []).map((value) => Number(value)).filter(Number.isFinite)),
+    );
+    const percentage = dto.percentage === undefined ? undefined : Number(dto.percentage);
+
+    if (dto.action !== 'reset' && (!Number.isFinite(percentage) || percentage === undefined)) {
+      throw new BadRequestException('percentage is required for increase or decrease actions');
+    }
+
+    const updatedCount = await this.dataSource.transaction(async (manager) => {
+      const productRepository = manager.getRepository(Product);
+      const query = productRepository
+        .createQueryBuilder('product')
+        .select([
+          'product.id',
+          'product.vendor_id',
+          'product.price',
+          'product.sale_price',
+          'product.original_vendor_price',
+          'product.original_vendor_sale_price',
+        ]);
+
+      if (normalizedVendorIds.length > 0) {
+        query.andWhere('product.vendor_id IN (:...vendor_ids)', {
+          vendor_ids: normalizedVendorIds,
+        });
+      }
+
+      const products = await query.getMany();
+
+      for (const product of products) {
+        const nextPricing = this.getBulkUpdatedPricing({
+          action: dto.action,
+          percentage,
+          price: product.price,
+          salePrice: product.sale_price,
+          originalVendorPrice: product.original_vendor_price,
+          originalVendorSalePrice: product.original_vendor_sale_price,
+        });
+
+        await productRepository.update(product.id, nextPricing);
+      }
+
+      return products.length;
+    });
+
+    return {
+      action: dto.action,
+      percentage: percentage ?? null,
+      vendor_ids: normalizedVendorIds,
+      updated_count: updatedCount,
+      message:
+        dto.action === 'reset'
+          ? `Reset pricing for ${updatedCount} products to original vendor prices.`
+          : `${dto.action === 'increase' ? 'Increased' : 'Decreased'} pricing for ${updatedCount} products by ${percentage}%.`,
+    };
+  }
+
   private async ensureSchemaReady(): Promise<void> {
     if (this.ensureSchemaPromise) {
       return this.ensureSchemaPromise;
@@ -307,6 +369,16 @@ export class SettingsService implements OnModuleInit {
             precision: 10,
             scale: 2,
             default: '50.00',
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('seo_settings', 'free_delivery_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'free_delivery_enabled',
+            type: 'boolean',
+            default: true,
           }),
         );
       }
@@ -496,6 +568,38 @@ export class SettingsService implements OnModuleInit {
       originalVendorPrice: Math.max(price, salePrice),
       originalVendorSalePrice: Math.min(price, salePrice),
     };
+  }
+
+  private getBulkUpdatedPricing(input: {
+    action: 'increase' | 'decrease' | 'reset';
+    percentage?: number;
+    price: number | null;
+    salePrice: number | null;
+    originalVendorPrice: number | null;
+    originalVendorSalePrice: number | null;
+  }) {
+    if (input.action === 'reset') {
+      return {
+        price: input.originalVendorPrice ?? input.price ?? 0,
+        sale_price: input.originalVendorSalePrice ?? null,
+      };
+    }
+
+    const multiplier = input.action === 'increase'
+      ? 1 + (input.percentage ?? 0) / 100
+      : 1 - (input.percentage ?? 0) / 100;
+
+    return {
+      price: this.roundManagedPrice((input.price ?? 0) * multiplier),
+      sale_price:
+        input.salePrice === null || input.salePrice === undefined
+          ? null
+          : this.roundManagedPrice(Math.max(input.salePrice, 0) * multiplier),
+    };
+  }
+
+  private roundManagedPrice(value: number) {
+    return Math.max(0, Number(value.toFixed(2)));
   }
 
   private async assertNoOverlappingProductPriceRule(
