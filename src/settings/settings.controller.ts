@@ -15,6 +15,7 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { BulkUpdateProductPricingDto } from './dto/bulk-update-product-pricing.dto';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
+import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
 import { UpdateSeoSettingsDto } from './dto/update-seo-settings.dto';
 import { SettingsService } from './settings.service';
 
@@ -32,6 +33,22 @@ export class SettingsController {
   @Roles(UserRole.ADMIN)
   updateSeoSettings(@Body() updateSeoSettingsDto: UpdateSeoSettingsDto) {
     return this.settingsService.updateSeoSettings(updateSeoSettingsDto);
+  }
+
+  @Get('product-fields')
+  getProductFieldToggles() {
+    return this.settingsService.getProductFieldToggles();
+  }
+
+  @Patch('product-fields')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateProductFieldToggles(
+    @Body() updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
+  ) {
+    return this.settingsService.updateProductFieldToggles(
+      updateProductFieldTogglesDto,
+    );
   }
 
   @Get('pricing-rules')

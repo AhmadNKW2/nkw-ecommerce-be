@@ -254,6 +254,44 @@ export class ProductsService {
     }
   }
 
+  private async stripDisabledProductFieldsFromDto<T extends {
+    vendor_id?: unknown;
+    attributes?: unknown;
+    specifications?: unknown;
+    weight?: unknown;
+    weight_unit?: unknown;
+    length?: unknown;
+    width?: unknown;
+    height?: unknown;
+    dimension_unit?: unknown;
+  }>(dto: T): Promise<T> {
+    try {
+      const toggles = await this.settingsService.getProductFieldToggles();
+
+      if (toggles.vendors_enabled === false) {
+        dto.vendor_id = undefined;
+      }
+      if (toggles.attributes_enabled === false) {
+        dto.attributes = undefined;
+      }
+      if (toggles.specifications_enabled === false) {
+        dto.specifications = undefined;
+      }
+      if (toggles.weight_and_dimensions_enabled === false) {
+        dto.weight = undefined;
+        dto.weight_unit = undefined;
+        dto.length = undefined;
+        dto.width = undefined;
+        dto.height = undefined;
+        dto.dimension_unit = undefined;
+      }
+    } catch {
+      // If toggles can't be read, preserve existing behavior (all enabled).
+    }
+
+    return dto;
+  }
+
   private resolveStorefrontPricing(
     product: Pick<Product, 'price' | 'sale_price'>,
     showSalePricing: boolean,
@@ -1695,6 +1733,10 @@ export class ProductsService {
         }
       }
 
+      // Enforce product field toggles — silently drop disabled fields before persisting.
+      // Existing rows keep their data; only the incoming change is dropped.
+      dto = await this.stripDisabledProductFieldsFromDto(dto);
+
       if (dto.attributes && dto.attributes.length > 0) {
         await this.resolveProductAttributeValueIds(dto.attributes);
       }
@@ -2735,6 +2777,11 @@ export class ProductsService {
     if (!existingProduct) {
       throw new NotFoundException('Product not found');
     }
+
+    // Enforce product field toggles — silently drop disabled fields before persisting.
+    // Setting a field to undefined makes the per-field guards below skip it, so existing
+    // rows keep their data; only the incoming change is dropped.
+    dto = await this.stripDisabledProductFieldsFromDto(dto);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
