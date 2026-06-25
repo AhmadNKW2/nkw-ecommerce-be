@@ -72,6 +72,18 @@ export class SeoSettings {
   })
   free_delivery_amount: number;
 
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 2.0,
+    transformer: {
+      to: (value: number) => value,
+      from: (value: string) => parseFloat(value) || 0,
+    },
+  })
+  delivery_fee: number;
+
   @CreateDateColumn()
   created_at: Date;
 

@@ -9,6 +9,7 @@ import { CouponsModule } from '../coupons/coupons.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { ProductsModule } from '../products/products.module';
 import { CartModule } from '../cart/cart.module';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { CartModule } from '../cart/cart.module';
     WalletModule,
     ProductsModule,
     CartModule,
+    SettingsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

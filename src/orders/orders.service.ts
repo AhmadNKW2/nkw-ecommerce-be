@@ -26,6 +26,8 @@ import { ProductsService } from '../products/products.service';
 import { Address } from '../addresses/entities/address.entity';
 import { isStorefrontAvailableProduct } from '../products/utils/storefront-product-availability.util';
 import { resolveWalletPayment } from './utils/wallet-payment.util';
+import { SettingsService } from '../settings/settings.service';
+import { calculateOrderShippingAmount } from '../settings/delivery-fee.util';
 
 // ... imports
 
@@ -70,6 +72,7 @@ export class OrdersService implements OnModuleInit {
     private walletService: WalletService,
     private cartService: CartService,
     private productsService: ProductsService,
+    private settingsService: SettingsService,
     private dataSource: DataSource,
   ) {}
 
@@ -285,7 +288,8 @@ export class OrdersService implements OnModuleInit {
 
       // 3. Totals
       const taxAmount = 0;
-      const shippingAmount = 0;
+      const seoSettings = await this.settingsService.getSeoSettings();
+      const shippingAmount = calculateOrderShippingAmount(subtotalAmount, seoSettings);
 
       const totalAmount =
         subtotalAmount + taxAmount + shippingAmount - discountAmount;
@@ -407,7 +411,7 @@ export class OrdersService implements OnModuleInit {
   }
 
   async findAllAdmin(filterDto: FilterOrderDto) {
-    const { status, page = 1, limit = 10, search } = filterDto;
+    const { status, userId, page = 1, limit = 10, search } = filterDto;
     const skip = (page - 1) * limit;
 
     const query = this.ordersRepository
@@ -421,6 +425,10 @@ export class OrdersService implements OnModuleInit {
 
     if (status) {
       query.andWhere('order.status = :status', { status });
+    }
+
+    if (userId) {
+      query.andWhere('order.userId = :userId', { userId });
     }
 
     if (search) {

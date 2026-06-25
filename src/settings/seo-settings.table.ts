@@ -93,6 +93,13 @@ export function createSeoSettingsTableDefinition() {
         default: true,
       },
       {
+        name: 'delivery_fee',
+        type: 'decimal',
+        precision: 10,
+        scale: 2,
+        default: '2.00',
+      },
+      {
         name: 'created_at',
         type: 'timestamp',
         default: 'now()',

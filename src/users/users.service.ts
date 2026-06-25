@@ -12,6 +12,10 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { FilterUserDto } from './dto/filter-user.dto';
 import { Wishlist } from '../wishlist/entities/wishlist.entity';
 import { Product, ProductStatus } from '../products/entities/product.entity';
+import { Address } from '../addresses/entities/address.entity';
+import { Order } from '../orders/entities/order.entity';
+import { CartService } from '../cart/cart.service';
+import { WalletService } from '../wallet/wallet.service';
 import {
   getPrimaryMediaUrl,
   hydrateProductMedia,
@@ -28,6 +32,12 @@ export class UsersService {
     private wishlistRepository: Repository<Wishlist>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
+    @InjectRepository(Address)
+    private addressRepository: Repository<Address>,
+    @InjectRepository(Order)
+    private ordersRepository: Repository<Order>,
+    private cartService: CartService,
+    private walletService: WalletService,
   ) {}
 
   sanitizeUser(user: User): SanitizedUser {
@@ -230,9 +240,41 @@ export class UsersService {
     // Exclude password from response
     const userWithoutPassword = this.sanitizeUser(user);
 
+    const [addresses, cart, walletResponse, transactionsResponse, orders] =
+      await Promise.all([
+        this.addressRepository.find({
+          where: { userId: id },
+          order: { isDefault: 'DESC', createdAt: 'DESC' },
+        }),
+        this.cartService.getCart(id).catch(() => ({
+          id: null,
+          user_id: id,
+          items: [],
+          total_amount: 0,
+        })),
+        this.walletService.getWallet(id),
+        this.walletService.getTransactions(id, { page: 1, limit: 20 }),
+        this.ordersRepository.find({
+          where: { userId: id },
+          relations: ['items', 'items.product'],
+          order: { createdAt: 'DESC' },
+          take: 20,
+        }),
+      ]);
+
+    const wallet = walletResponse.data;
+
     return {
       ...userWithoutPassword,
       wishlist,
+      addresses,
+      cart,
+      wallet: {
+        balance: Number(wallet.balance),
+        totalCashback: Number(wallet.totalCashback),
+      },
+      transactions: transactionsResponse.data,
+      orders,
     };
   }
 

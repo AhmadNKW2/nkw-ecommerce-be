@@ -74,4 +74,9 @@ export class UpdateSeoSettingsDto {
   @IsNumber()
   @Min(0)
   free_delivery_amount?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  delivery_fee?: number;
 }
