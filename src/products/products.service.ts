@@ -3005,8 +3005,8 @@ export class ProductsService {
         await this.syncLinkedProducts(id, dto.linked_product_ids);
       }
 
-      // Return updated product
-      const updatedProduct = await this.findOne(id);
+      // Return updated product (admin context — out-of-stock products are hidden from public findOne)
+      const updatedProduct = await this.findOne(id, true);
 
       // Sync to Typesense (fire-and-forget)
       void this.syncProductToIndex(id);
