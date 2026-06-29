@@ -427,6 +427,16 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('seo_settings', 'low_stock_threshold'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'low_stock_threshold',
+            type: 'int',
+            default: 10,
+          }),
+        );
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('seo_settings', missingColumns);
       }

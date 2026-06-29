@@ -161,6 +161,15 @@ export class ProductsService {
     }
   }
 
+  private async getLowStockThreshold(): Promise<number> {
+    try {
+      const settings = await this.settingsService.getSeoSettings();
+      return settings.low_stock_threshold ?? 10;
+    } catch {
+      return 10;
+    }
+  }
+
   private async stripDisabledProductFieldsFromDto<T extends {
     vendor_id?: unknown;
     attributes?: unknown;
@@ -1219,6 +1228,7 @@ export class ProductsService {
       const normalizedReferenceLink = await this.ensureReferenceLinkIsUnique(
         dto.reference_link,
       );
+      const lowStockThreshold = await this.getLowStockThreshold();
 
       // 1. Create basic product (primary category is first in the list)
       const product = this.productsRepository.create({
@@ -1254,7 +1264,7 @@ export class ProductsService {
         width: dto.width ?? null,
         height: dto.height ?? null,
         quantity: initialQuantity,
-        low_stock_threshold: dto.low_stock_threshold ?? 10,
+        low_stock_threshold: lowStockThreshold,
         is_out_of_stock: initialIsOutOfStock,
         meta_title_en: dto.meta_title_en ?? null,
         meta_title_ar: dto.meta_title_ar ?? null,
@@ -2327,7 +2337,6 @@ export class ProductsService {
         'height',
         'dimension_unit',
         'quantity',
-        'low_stock_threshold',
         'meta_title_en',
         'meta_title_ar',
         'meta_description_en',

@@ -48,7 +48,7 @@ class MediaInput {
  * Current payload model is flat:
  * - Pricing uses cost, price, and sale_price
  * - Dimensions use weight, length, width, and height
- * - Stock uses quantity, low_stock_threshold, and is_out_of_stock
+ * - Stock uses quantity and is_out_of_stock
  * - Media uses pre-uploaded media IDs
  * - Attributes and specifications accept selected IDs only
  */
@@ -240,12 +240,6 @@ export class CreateProductDto {
   @Min(0)
   @IsOptional()
   quantity?: number;
-
-  @ApiPropertyOptional({ example: 10, description: 'Threshold to trigger low stock warnings' })
-  @IsNumber()
-  @Min(0)
-  @IsOptional()
-  low_stock_threshold?: number;
 
   @ApiPropertyOptional({ example: false, description: 'Manual override to mark product as out of stock' })
   @IsBoolean()

@@ -241,12 +241,6 @@ export class UpdateProductDto {
   @IsOptional()
   quantity?: number;
 
-  @ApiPropertyOptional({ example: 15, description: 'Threshold to trigger low stock warnings' })
-  @IsNumber()
-  @Min(0)
-  @IsOptional()
-  low_stock_threshold?: number;
-
   @ApiPropertyOptional({ example: false, description: 'Manual override to mark product as out of stock' })
   @IsBoolean()
   @IsOptional()
