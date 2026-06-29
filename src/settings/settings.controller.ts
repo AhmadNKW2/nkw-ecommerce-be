@@ -35,6 +35,22 @@ export class SettingsController {
     return this.settingsService.updateSeoSettings(updateSeoSettingsDto);
   }
 
+  @Get('features')
+  getFeatureToggles() {
+    return this.settingsService.getProductFieldToggles();
+  }
+
+  @Patch('features')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateFeatureToggles(
+    @Body() updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
+  ) {
+    return this.settingsService.updateProductFieldToggles(
+      updateProductFieldTogglesDto,
+    );
+  }
+
   @Get('product-fields')
   getProductFieldToggles() {
     return this.settingsService.getProductFieldToggles();

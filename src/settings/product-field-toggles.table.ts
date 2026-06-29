@@ -30,6 +30,31 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
+        name: 'partners_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'cashback_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'banners_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'import_ai_products_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'linked_products_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'reference_link_visible_admin',
         type: 'boolean',
         default: true,

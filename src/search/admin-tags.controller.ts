@@ -7,7 +7,6 @@ import {
   Body,
   Query,
   ParseIntPipe,
-  ParseUUIDPipe,
   UseGuards,
   ValidationPipe,
 } from '@nestjs/common';
@@ -21,20 +20,11 @@ class CreateTagDto {
   name: string;
 }
 
-class LinkConceptDto {
-  @IsString()
-  @IsNotEmpty()
-  concept_id: string;
-}
-
 @UseGuards(JwtAuthGuard)
 @Controller('admin/tags')
 export class AdminTagsController {
   constructor(private readonly tagsService: TagsService) {}
 
-  /**
-   * GET /admin/tags?page=1&per_page=50
-   */
   @Get()
   listTags(
     @Query('page') page?: string,
@@ -46,18 +36,11 @@ export class AdminTagsController {
     );
   }
 
-  /**
-   * GET /admin/tags/:id
-   */
   @Get(':id')
   getTag(@Param('id', ParseIntPipe) id: number) {
     return this.tagsService.findOne(id);
   }
 
-  /**
-   * POST /admin/tags
-   * Create (or find) a tag by name.
-   */
   @Post()
   createTag(
     @Body(new ValidationPipe({ transform: true, whitelist: true }))
@@ -66,35 +49,8 @@ export class AdminTagsController {
     return this.tagsService.findOrCreate(dto.name);
   }
 
-  /**
-   * DELETE /admin/tags/:id
-   */
   @Delete(':id')
   deleteTag(@Param('id', ParseIntPipe) id: number) {
     return this.tagsService.delete(id);
-  }
-
-  /**
-   * POST /admin/tags/:id/concepts
-   * body: { concept_id: string }
-   */
-  @Post(':id/concepts')
-  linkConcept(
-    @Param('id', ParseIntPipe) tagId: number,
-    @Body(new ValidationPipe({ transform: true, whitelist: true }))
-    dto: LinkConceptDto,
-  ) {
-    return this.tagsService.linkConceptToTag(tagId, dto.concept_id);
-  }
-
-  /**
-   * DELETE /admin/tags/:id/concepts/:conceptId
-   */
-  @Delete(':id/concepts/:conceptId')
-  unlinkConcept(
-    @Param('id', ParseIntPipe) tagId: number,
-    @Param('conceptId', ParseUUIDPipe) conceptId: string,
-  ) {
-    return this.tagsService.unlinkConceptFromTag(tagId, conceptId);
   }
 }

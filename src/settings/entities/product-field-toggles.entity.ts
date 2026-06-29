@@ -24,6 +24,21 @@ export class ProductFieldToggles {
   @Column({ type: 'boolean', default: true })
   weight_and_dimensions_enabled: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  partners_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  cashback_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  banners_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  import_ai_products_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  linked_products_enabled: boolean;
+
   // Appearance-only toggles — admin dashboard UI only; BE ignores them.
   @Column({ type: 'boolean', default: true })
   reference_link_visible_admin: boolean;

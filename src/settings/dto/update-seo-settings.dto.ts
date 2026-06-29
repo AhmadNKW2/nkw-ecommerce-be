@@ -79,4 +79,9 @@ export class UpdateSeoSettingsDto {
   @IsNumber()
   @Min(0)
   delivery_fee?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  low_stock_threshold?: number;
 }

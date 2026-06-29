@@ -4,7 +4,6 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, DataSource, EntityManager } from 'typeorm';
 import { Product, ProductStatus } from './entities/product.entity';
@@ -32,8 +31,6 @@ import { ProductSpecificationValue } from './entities/product-specification-valu
 import { AttributeValue } from '../attributes/entities/attribute-value.entity';
 import { SpecificationValue } from '../specifications/entities/specification-value.entity';
 import { CartItem } from '../cart/entities/cart-item.entity';
-import { IndexingService, IndexableProduct } from '../search/indexing.service';
-import { SynonymConceptService } from '../search/synonym-concept.service';
 import { TagsService } from '../search/tags.service';
 import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
@@ -133,94 +130,6 @@ export class ProductsService {
     }));
   }
 
-  // ─── In-memory background job tracker ─────────────────────────────────────
-  // Kept for the lifetime of the process (survives restarts via a fresh Map).
-  // Auto-cleaned after 24 h to avoid memory bloat.
-  private readonly jobs = new Map<
-    string,
-    {
-      type: 'reindex' | 'generate-concepts';
-      status: 'running' | 'done' | 'failed';
-      startedAt: Date;
-      finishedAt?: Date;
-      result?: Record<string, unknown>;
-      error?: string;
-    }
-  >();
-
-  private createJob(type: 'reindex' | 'generate-concepts'): string {
-    const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    this.jobs.set(id, { type, status: 'running', startedAt: new Date() });
-    // Auto-evict after 24 h
-    setTimeout(() => this.jobs.delete(id), 24 * 60 * 60 * 1000).unref?.();
-    return id;
-  }
-
-  getJobStatus(jobId: string) {
-    const job = this.jobs.get(jobId);
-    if (!job) return null;
-    return {
-      job_id: jobId,
-      type: job.type,
-      status: job.status,
-      started_at: job.startedAt,
-      finished_at: job.finishedAt ?? null,
-      duration_seconds: job.finishedAt
-        ? Math.round(
-            (job.finishedAt.getTime() - job.startedAt.getTime()) / 1000,
-          )
-        : Math.round((Date.now() - job.startedAt.getTime()) / 1000),
-      result: job.result ?? null,
-      error: job.error ?? null,
-    };
-  }
-
-  /** Kick off reindexAll in background and return a job_id immediately. */
-  startReindexJob(opts: { dropFirst?: boolean } = {}): string {
-    const jobId = this.createJob('reindex');
-    this.reindexAll(opts)
-      .then((result) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'done';
-          job.finishedAt = new Date();
-          job.result = result as unknown as Record<string, unknown>;
-        }
-      })
-      .catch((err: Error) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'failed';
-          job.finishedAt = new Date();
-          job.error = err?.message ?? String(err);
-        }
-      });
-    return jobId;
-  }
-
-  /** Kick off generateAiConceptsForAll in background and return a job_id immediately. */
-  startGenerateConceptsJob(): string {
-    const jobId = this.createJob('generate-concepts');
-    this.generateAiConceptsForAll()
-      .then((result) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'done';
-          job.finishedAt = new Date();
-          job.result = result as unknown as Record<string, unknown>;
-        }
-      })
-      .catch((err: Error) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'failed';
-          job.finishedAt = new Date();
-          job.error = err?.message ?? String(err);
-        }
-      });
-    return jobId;
-  }
-
   constructor(
     @InjectRepository(Product)
     private productsRepository: Repository<Product>,
@@ -239,8 +148,6 @@ export class ProductsService {
     @InjectRepository(CartItem)
     private cartItemsRepository: Repository<CartItem>,
     private dataSource: DataSource,
-    private readonly indexingService: IndexingService,
-    private readonly synonymConceptService: SynonymConceptService,
     private readonly tagsService: TagsService,
     private readonly settingsService: SettingsService,
   ) {}
@@ -258,6 +165,7 @@ export class ProductsService {
     vendor_id?: unknown;
     attributes?: unknown;
     specifications?: unknown;
+    linked_product_ids?: unknown;
     weight?: unknown;
     weight_unit?: unknown;
     length?: unknown;
@@ -276,6 +184,9 @@ export class ProductsService {
       }
       if (toggles.specifications_enabled === false) {
         dto.specifications = undefined;
+      }
+      if (toggles.linked_products_enabled === false) {
+        dto.linked_product_ids = undefined;
       }
       if (toggles.weight_and_dimensions_enabled === false) {
         dto.weight = undefined;
@@ -756,6 +667,11 @@ export class ProductsService {
     }>;
     message: string;
   }> {
+    const toggles = await this.settingsService.getProductFieldToggles();
+    if (toggles.linked_products_enabled === false) {
+      throw new BadRequestException('Linked products are disabled');
+    }
+
     const product = await this.productsRepository.findOne({
       where: { id: productId },
       select: ['id'],
@@ -792,45 +708,24 @@ export class ProductsService {
     };
   }
 
-  /**
-   * Public proxy used by SearchProcessor to reindex a product from a BullMQ job.
-   */
-  async syncToIndexPublic(productId: number): Promise<void> {
-    return this.syncProductToIndex(productId, true);
-  }
-
-  // ─── Product tag management ────────────────────────────────────────────────
-
-  /**
-   * Get all tags attached to a product (with their linked concepts).
-   */
   async getProductTags(productId: number): Promise<Tag[]> {
     const product = await this.productsRepository.findOne({
       where: { id: productId },
-      relations: ['tags', 'tags.concepts'],
+      relations: ['tags'],
     } as any);
     if (!product) throw new NotFoundException('Product not found');
     return (product as any).tags ?? [];
   }
 
-  /**
-   * Replace the complete tag list for a product.
-   * Fires a Typesense reindex after the update.
-   */
   async syncProductTags(productId: number, tagNames: string[]): Promise<Tag[]> {
     const exists = await this.productsRepository.count({
       where: { id: productId },
     });
     if (!exists) throw new NotFoundException('Product not found');
     await this.applyTagsToProduct(productId, tagNames);
-    void this.syncProductToIndex(productId);
     return this.getProductTags(productId);
   }
 
-  /**
-   * Add a single tag by name to a product.
-   * Creates the tag (and a background AI concept) if it doesn't exist yet.
-   */
   async addProductTagByName(productId: number, tagName: string): Promise<Tag> {
     const exists = await this.productsRepository.count({
       where: { id: productId },
@@ -842,13 +737,9 @@ export class ProductsService {
       .relation(Product, 'tags')
       .of(productId)
       .add(tag.id);
-    void this.syncProductToIndex(productId);
     return tag;
   }
 
-  /**
-   * Remove a single tag (by its numeric ID) from a product.
-   */
   async removeProductTag(productId: number, tagId: number): Promise<void> {
     const exists = await this.productsRepository.count({
       where: { id: productId },
@@ -859,14 +750,8 @@ export class ProductsService {
       .relation(Product, 'tags')
       .of(productId)
       .remove(tagId);
-    void this.syncProductToIndex(productId);
   }
 
-  /**
-   * Replace the product's tag list with the provided tag names.
-   * Creates missing tags (and fires background AI concept generation).
-   * Uses addAndRemove to update the junction table atomically.
-   */
   private async applyTagsToProduct(
     productId: number,
     tagNames: string[],
@@ -900,433 +785,6 @@ export class ProductsService {
       .addAndRemove(newIds, currentIds);
   }
 
-  // ─── Search indexing helpers ───────────────────────────────────────────────
-
-  /**
-   * Tokenize a string into lowercase words for tag generation.
-   * Splits on whitespace, hyphens, slashes, commas, and dots.
-   */
-  private tokenizeForTags(text?: string | null): string[] {
-    if (!text) return [];
-    return text
-      .toLowerCase()
-      .split(/[\s\-_/,\.\(\)\[\]]+/)
-      .map((w) => w.trim())
-      .filter((w) => w.length > 1);
-  }
-
-  /**
-   * Build a deduplicated tag array from all searchable signal fields.
-   * This is the key to making synonyms work: the synonym "mobile" → "smartphone"
-   * only fires if "smartphone" actually appears somewhere in the document.
-   * By adding the category name as a tag, the product becomes findable via synonyms
-   * even if the product name itself doesn't contain those words.
-   */
-  private buildSearchTags(
-    nameEn: string,
-    nameAr: string,
-    categoryNames: string[],
-    brandEn?: string,
-    brandAr?: string,
-  ): string[] {
-    const parts: string[] = [
-      ...this.tokenizeForTags(nameEn),
-      ...this.tokenizeForTags(nameAr),
-      ...(brandEn ? this.tokenizeForTags(brandEn) : []),
-      ...(brandAr ? this.tokenizeForTags(brandAr) : []),
-      ...categoryNames.flatMap((n) => this.tokenizeForTags(n)),
-    ];
-    return [...new Set(parts)];
-  }
-
-  /**
-   * Load all data needed for Typesense and upsert the document.
-   * Fire-and-forget safe — errors are logged but never bubble up to the caller.
-   */
-  private async syncProductToIndex(
-    productId: number,
-    throwOnError = false,
-    generateAiConcepts = false,
-  ): Promise<void> {
-    try {
-      const showSalePricing = await this.shouldShowSalePricing();
-      const [
-        product,
-        productCategories,
-        productMediaRows,
-        productWithTags,
-      ] = await Promise.all([
-        this.productsRepository.findOne({
-          where: { id: productId },
-          relations: ['brand', 'category', 'vendor'],
-        }),
-        this.productCategoriesRepository.find({
-          where: { product_id: productId },
-          relations: ['category'],
-        }),
-        this.dataSource.getRepository(ProductMedia).find({
-          where: { product_id: productId },
-          relations: ['media'],
-          order: { is_primary: 'DESC', sort_order: 'ASC', media_id: 'ASC' },
-        }),
-        this.productsRepository.findOne({
-          where: { id: productId },
-          relations: ['tags', 'tags.concepts'],
-        } as any),
-      ]);
-
-      if (!product) return;
-
-      // ── Tags: collect all search terms from APPROVED concepts ─────────────
-      const tagIds: number[] = ((productWithTags as any)?.tags ?? []).map(
-        (t: any) => t.id,
-      );
-      const searchTags = await this.tagsService.getSearchTermsForTags(tagIds);
-
-      // ── Pricing: direct from product ────────────────────────────────────
-      const storefrontPricing = this.resolveStorefrontPricing(
-        product,
-        showSalePricing,
-      );
-      const effectivePrice = storefrontPricing.effectivePrice;
-
-      // ── Stock ────────────────────────────────────────────────────────────
-      const totalStock = product.quantity ?? 0;
-      const inStock = !product.is_out_of_stock;
-
-      // ── Media ────────────────────────────────────────────────────────────
-      const images = productMediaRows
-        .map((productMedia) => productMedia.media?.url)
-        .filter((url): url is string => Boolean(url));
-
-      // ── Category resolution ───────────────────────────────────────────────
-      const allCategories = productCategories
-        .map((pc) => pc.category)
-        .filter(Boolean);
-
-      if (allCategories.length === 0 && (product as any).category) {
-        allCategories.push((product as any).category);
-      }
-
-      const primaryCategory: Category | null =
-        allCategories[0] ?? (product as any).category ?? null;
-      const subCategory = allCategories.find((c) => c.level > 0) ?? null;
-
-      const categoryIds = [
-        ...new Set([
-          ...(product.category_id ? [product.category_id] : []),
-          ...allCategories.map((c) => c.id),
-        ]),
-      ];
-
-      const categoryNamesEn = [
-        ...new Set(allCategories.map((c) => c.name_en).filter(Boolean)),
-      ];
-      const categoryNamesAr = [
-        ...new Set(allCategories.map((c) => c.name_ar).filter(Boolean)),
-      ];
-
-      // ── Brand data ────────────────────────────────────────────────────────
-      const brand = (product as any).brand as {
-        id?: number;
-        name_en: string;
-        name_ar?: string;
-      } | null;
-
-      // ── Vendor data ───────────────────────────────────────────────────────
-      const vendor = (product as any).vendor as {
-        name_en?: string;
-        name_ar?: string;
-      } | null;
-
-      // ── Attribute pairs — no longer variant-based ───────────────────────
-      const attrPairs: string[] | undefined = undefined;
-
-      // ── Descriptions ─────────────────────────────────────────────────────
-      const descriptionEn =
-        [product.short_description_en, product.long_description_en]
-          .filter(Boolean)
-          .join(' ')
-          .trim() || undefined;
-
-      const descriptionAr =
-        [product.short_description_ar, product.long_description_ar]
-          .filter(Boolean)
-          .join(' ')
-          .trim() || undefined;
-
-      // ── Tags ─────────────────────────────────────────────────────────────
-      // searchTags contains: tag names + all terms from APPROVED concepts.
-      // Fall back to the legacy tokenized approach if no tags are assigned yet.
-      const categoryNamesForTags = allCategories.flatMap((c) =>
-        [c.name_en, c.name_ar].filter(Boolean),
-      );
-      const legacyTags = this.buildSearchTags(
-        product.name_en,
-        product.name_ar,
-        categoryNamesForTags,
-        brand?.name_en,
-        brand?.name_ar,
-      );
-      const tags = searchTags.length > 0 ? searchTags : legacyTags;
-
-      const isAvailable = isStorefrontAvailableProduct(product);
-
-      const doc: IndexableProduct = {
-        // ── Identity ────────────────────────────────────────────────────
-        id: String(product.id),
-        slug: product.slug ?? undefined,
-        sku: product.sku ?? undefined,
-
-        // ── Search text ─────────────────────────────────────────────────
-        name_en: product.name_en,
-        name_ar: product.name_ar,
-        description_en: descriptionEn,
-        description_ar: descriptionAr,
-
-        // ── Relational labels ────────────────────────────────────────────
-        brand: brand?.name_en ?? 'Unknown',
-        category: primaryCategory?.name_en ?? 'Uncategorized',
-        subcategory: subCategory?.name_en ?? undefined,
-        category_names_en: categoryNamesEn.length ? categoryNamesEn : undefined,
-        category_names_ar: categoryNamesAr.length ? categoryNamesAr : undefined,
-        tags: tags.length ? tags : undefined,
-
-        // ── Relational IDs (facets) ──────────────────────────────────────
-        brand_id: brand?.id ?? product.brand_id ?? undefined,
-        vendor_id: product.vendor_id ?? undefined,
-        seller_id: product.vendor_id ? String(product.vendor_id) : undefined,
-        category_ids: categoryIds.length ? categoryIds : undefined,
-
-        // ── Pricing ─────────────────────────────────────────────────────
-        price: storefrontPricing.price,
-        sale_price:
-          storefrontPricing.salePrice != null
-            ? storefrontPricing.salePrice
-            : undefined,
-        price_min: effectivePrice,
-        price_max: effectivePrice,
-
-        // ── Availability ─────────────────────────────────────────────────
-        stock_quantity: totalStock,
-        in_stock: inStock,
-        is_available: isAvailable,
-
-        // ── Attributes ──────────────────────────────────────────────────
-        attr_pairs: attrPairs,
-
-        // ── Rating ──────────────────────────────────────────────────────
-        rating: Number(product.average_rating) || 0,
-        rating_count: product.total_ratings ?? 0,
-
-        // ── Media ────────────────────────────────────────────────────────
-        images: images.length ? images : undefined,
-
-        // ── Sort signals ─────────────────────────────────────────────────
-        created_at: product.created_at
-          ? Math.floor(new Date(product.created_at).getTime() / 1000)
-          : Math.floor(Date.now() / 1000),
-        popularity_score: this.indexingService.calculatePopularityScore(
-          0,
-          Number(product.average_rating) || 0,
-          product.total_ratings ?? 0,
-          product.created_at ?? new Date(),
-        ),
-        sales_count: undefined,
-      };
-
-      await this.indexingService.upsertProduct(doc);
-
-      // ── Fire-and-forget: generate AI synonym concepts (new products only) ──
-      if (generateAiConcepts)
-        void this.synonymConceptService.generateAndSaveConceptsForProduct({
-          name_en: product.name_en,
-          name_ar: product.name_ar,
-          category_names_en: categoryNamesEn,
-          category_names_ar: categoryNamesAr,
-          brand_en: brand?.name_en,
-          brand_ar: brand?.name_ar,
-          vendor_en: vendor?.name_en,
-          vendor_ar: vendor?.name_ar,
-          short_description_en: product.short_description_en ?? undefined,
-          short_description_ar: product.short_description_ar ?? undefined,
-          long_description_en: product.long_description_en ?? undefined,
-          long_description_ar: product.long_description_ar ?? undefined,
-        });
-    } catch (err) {
-      this.logger.warn(
-        `Failed to sync product ${productId} to search index: ${getErrorMessage(err)}`,
-      );
-      if (throwOnError) throw err;
-    }
-  }
-
-  /**
-   * Public: reindex a single product by ID.
-   * Useful for debugging via the admin reindex endpoint.
-   */
-  async reindexOne(
-    productId: number,
-  ): Promise<{ success: boolean; message: string }> {
-    try {
-      await this.syncProductToIndex(productId, true);
-      return { success: true, message: `Product ${productId} reindexed` };
-    } catch (err: any) {
-      return { success: false, message: err?.message ?? 'Unknown error' };
-    }
-  }
-
-  /**
-   * Run AI concept generation for ALL active + visible products.
-   * Processes in small sequential batches to respect AI rate limits.
-   * Already-existing concept_keys are skipped (safe to run multiple times).
-   */
-  async generateAiConceptsForAll(): Promise<{
-    processed: number;
-    failed: number;
-    errors: string[];
-  }> {
-    const products = await this.productsRepository.find({
-      relations: ['brand', 'category', 'vendor'],
-    });
-
-    this.logger.log(
-      `Generating AI concepts for ${products.length} products (all statuses)…`,
-    );
-
-    let processed = 0;
-    const errors: string[] = [];
-    const BATCH = 5; // small batches to avoid AI rate limits
-    const DELAY_MS = 1000;
-
-    for (let i = 0; i < products.length; i += BATCH) {
-      const batch = products.slice(i, i + BATCH);
-
-      for (const product of batch) {
-        try {
-          const productCategories = await this.productCategoriesRepository.find(
-            {
-              where: { product_id: product.id },
-              relations: ['category'],
-            },
-          );
-
-          const allCategories = productCategories
-            .map((pc) => pc.category)
-            .filter(Boolean);
-
-          if (allCategories.length === 0 && (product as any).category) {
-            allCategories.push((product as any).category);
-          }
-
-          const categoryNamesEn = [
-            ...new Set(allCategories.map((c) => c.name_en).filter(Boolean)),
-          ];
-          const categoryNamesAr = [
-            ...new Set(allCategories.map((c) => c.name_ar).filter(Boolean)),
-          ];
-
-          const brand = (product as any).brand as {
-            name_en: string;
-            name_ar?: string;
-          } | null;
-
-          const vendorData = (product as any).vendor as {
-            name_en?: string;
-            name_ar?: string;
-          } | null;
-
-          await this.synonymConceptService.generateAndSaveConceptsForProduct({
-            name_en: product.name_en,
-            name_ar: product.name_ar,
-            category_names_en: categoryNamesEn,
-            category_names_ar: categoryNamesAr,
-            brand_en: brand?.name_en,
-            brand_ar: brand?.name_ar,
-            vendor_en: vendorData?.name_en,
-            vendor_ar: vendorData?.name_ar,
-            short_description_en: product.short_description_en ?? undefined,
-            short_description_ar: product.short_description_ar ?? undefined,
-            long_description_en: product.long_description_en ?? undefined,
-            long_description_ar: product.long_description_ar ?? undefined,
-          });
-
-          processed++;
-        } catch (err: any) {
-          errors.push(`Product ${product.id}: ${err?.message ?? String(err)}`);
-        }
-      }
-
-      // Delay between batches to respect AI rate limits
-      if (i + BATCH < products.length) {
-        await new Promise((r) => setTimeout(r, DELAY_MS));
-      }
-    }
-
-    this.logger.log(
-      `✅ AI concept generation done — ${processed}/${products.length} processed, ${errors.length} failed`,
-    );
-
-    return { processed, failed: errors.length, errors: errors.slice(0, 20) };
-  }
-
-  /**
-   * Bulk re-index all ACTIVE + visible products.
-   * Called by the admin reindex endpoint.
-   * Pass { dropFirst: true } to drop+recreate the Typesense collection first.
-   */
-  async reindexAll(
-    opts: { dropFirst?: boolean } = {},
-  ): Promise<{ indexed: number; failed: number; errors: string[] }> {
-    if (opts.dropFirst) {
-      await this.indexingService.dropAndRecreateCollection();
-    }
-
-    const products = await this.productsRepository.find({
-      relations: ['brand', 'category'],
-    });
-
-    const ids = products.map((p) => p.id);
-    this.logger.log(`Reindexing ${ids.length} products (all statuses)…`);
-
-    let indexed = 0;
-    const errors: string[] = [];
-
-    // Process concurrently in small batches to avoid DB overload
-    const BATCH = 10;
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const results = await Promise.allSettled(
-        ids.slice(i, i + BATCH).map((id) => this.syncProductToIndex(id, true)),
-      );
-      for (const r of results) {
-        if (r.status === 'fulfilled') {
-          indexed++;
-        } else {
-          errors.push(r.reason?.message ?? String(r.reason));
-        }
-      }
-    }
-
-    this.logger.log(
-      `✅ Reindex complete — ${indexed}/${ids.length} products indexed, ${errors.length} failed`,
-    );
-    if (errors.length) {
-      this.logger.warn(`Reindex errors: ${errors.slice(0, 5).join(' | ')}`);
-    }
-    return { indexed, failed: errors.length, errors: errors.slice(0, 10) };
-  }
-
-  /** Runs every night at 03:00 to heal any drift between PostgreSQL and Typesense. */
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async scheduledReindex(): Promise<void> {
-    this.logger.log('Scheduled nightly reindex started…');
-    const { indexed, failed } = await this.reindexAll();
-    this.logger.log(
-      `Scheduled nightly reindex done — ${indexed} synced, ${failed} failed`,
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
 
   private slugify(text: string): string {
     return text
@@ -1850,10 +1308,6 @@ export class ProductsService {
 
       // Return the complete product
       const result = await this.findOne(savedProduct.id);
-
-      // Sync to Typesense (fire-and-forget — never blocks the response)
-      // Pass generateAiConcepts=true so AI runs only on the first index (creation).
-      void this.syncProductToIndex(savedProduct.id, false, true);
 
       return {
         product: result,
@@ -3008,9 +2462,6 @@ export class ProductsService {
       // Return updated product (admin context — out-of-stock products are hidden from public findOne)
       const updatedProduct = await this.findOne(id, true);
 
-      // Sync to Typesense (fire-and-forget)
-      void this.syncProductToIndex(id);
-
       return {
         product: updatedProduct,
         message: 'Product updated successfully',
@@ -3072,15 +2523,6 @@ export class ProductsService {
       archived_at: new Date(),
       archived_by: userId,
     });
-
-    // Remove from search index (fire-and-forget)
-    void this.indexingService
-      .deleteProduct(String(id))
-      .catch((err) =>
-        this.logger.warn(
-          `Failed to remove product ${id} from index: ${err?.message}`,
-        ),
-      );
 
     return { message: `Product "${product.name_en}" archived successfully` };
   }
@@ -3150,13 +2592,6 @@ export class ProductsService {
     await this.productsRepository.query(
       'UPDATE products SET archived_at = NULL, archived_by = NULL WHERE id = $1',
       [id],
-    );
-
-    // Re-add to search index (fire-and-forget)
-    void this.syncProductToIndex(id).catch((err) =>
-      this.logger.warn(
-        `Failed to re-index restored product ${id}: ${err?.message}`,
-      ),
     );
 
     return { message: `Product "${product.name_en}" restored successfully` };

@@ -84,6 +84,9 @@ export class SeoSettings {
   })
   delivery_fee: number;
 
+  @Column({ type: 'int', default: 10 })
+  low_stock_threshold: number;
+
   @CreateDateColumn()
   created_at: Date;
 

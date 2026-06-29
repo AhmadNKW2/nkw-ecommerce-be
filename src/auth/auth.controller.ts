@@ -29,6 +29,9 @@ import {
   buildFrontendRedirectUrl,
   getOAuthReturnToFromRequest,
 } from './oauth-return-to';
+import { OAuthProviderRoute } from './decorators/oauth-provider.decorator';
+import { OAuthProviderEnabledGuard } from './guards/oauth-provider-enabled.guard';
+import { getAllOAuthProviderStatuses } from './oauth-providers.config';
 
 @Controller('auth')
 export class AuthController {
@@ -91,12 +94,19 @@ export class AuthController {
     return this.configService.get('FRONTEND_URL') || 'http://localhost:3000';
   }
 
+  @Get('oauth-providers')
+  getOAuthProviders() {
+    return getAllOAuthProviderStatuses();
+  }
+
   @Get('google')
-  @UseGuards(AuthGuard('google'))
+  @OAuthProviderRoute('google')
+  @UseGuards(OAuthProviderEnabledGuard, AuthGuard('google'))
   async googleAuth(@Request() req) {}
 
   @Get('google/callback')
-  @UseGuards(AuthGuard('google'))
+  @OAuthProviderRoute('google')
+  @UseGuards(OAuthProviderEnabledGuard, AuthGuard('google'))
   async googleAuthRedirect(
     @Request() req: ExpressRequest,
     @Response() res: ExpressResponse,
@@ -123,11 +133,13 @@ export class AuthController {
   }
 
   @Get('facebook')
-  @UseGuards(AuthGuard('facebook'))
+  @OAuthProviderRoute('facebook')
+  @UseGuards(OAuthProviderEnabledGuard, AuthGuard('facebook'))
   async facebookAuth(@Request() req) {}
 
   @Get('facebook/callback')
-  @UseGuards(AuthGuard('facebook'))
+  @OAuthProviderRoute('facebook')
+  @UseGuards(OAuthProviderEnabledGuard, AuthGuard('facebook'))
   async facebookAuthRedirect(
     @Request() req: ExpressRequest,
     @Response() res: ExpressResponse,
@@ -154,11 +166,13 @@ export class AuthController {
   }
 
   @Get('apple')
-  @UseGuards(AuthGuard('apple'))
+  @OAuthProviderRoute('apple')
+  @UseGuards(OAuthProviderEnabledGuard, AuthGuard('apple'))
   async appleAuth(@Request() req) {}
 
   @Post('apple/callback')
-  @UseGuards(AuthGuard('apple'))
+  @OAuthProviderRoute('apple')
+  @UseGuards(OAuthProviderEnabledGuard, AuthGuard('apple'))
   async appleAuthCallback(
     @Request() req: ExpressRequest,
     @Response() res: ExpressResponse,

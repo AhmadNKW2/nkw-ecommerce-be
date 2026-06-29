@@ -443,14 +443,69 @@ export class SettingsService implements OnModuleInit {
 
       const hasTable = await queryRunner.hasTable('product_field_toggles');
 
-      if (hasTable) {
+      if (!hasTable) {
+        await queryRunner.createTable(
+          createProductFieldTogglesTableDefinition(),
+          true,
+        );
         return;
       }
 
-      await queryRunner.createTable(
-        createProductFieldTogglesTableDefinition(),
-        true,
-      );
+      const missingColumns: TableColumn[] = [];
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'partners_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'partners_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'cashback_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'cashback_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'banners_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'banners_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'import_ai_products_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'import_ai_products_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'linked_products_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'linked_products_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (missingColumns.length > 0) {
+        await queryRunner.addColumns('product_field_toggles', missingColumns);
+      }
     } finally {
       await queryRunner.release();
     }

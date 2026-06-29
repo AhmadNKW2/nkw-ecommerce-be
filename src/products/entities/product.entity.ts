@@ -265,7 +265,7 @@ export class Product {
   )
   product_input_json?: ProductInputJson | null;
 
-  // Tags relationship (many-to-many, drives search term expansion)
+  // Tags relationship (many-to-many)
   @ManyToMany('Tag', (tag: any) => tag.products, { eager: false })
   @JoinTable({
     name: 'product_tags',

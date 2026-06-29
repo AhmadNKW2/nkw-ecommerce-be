@@ -44,7 +44,6 @@ export class SearchQueryDto {
 
   /**
    * Filter by a single category ID.
-   * The field in Typesense is category_ids (array), so this does: category_ids:=[X]
    */
   @IsOptional()
   @Type(() => Number)

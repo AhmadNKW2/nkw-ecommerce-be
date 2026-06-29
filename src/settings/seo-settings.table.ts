@@ -100,6 +100,11 @@ export function createSeoSettingsTableDefinition() {
         default: '2.00',
       },
       {
+        name: 'low_stock_threshold',
+        type: 'int',
+        default: 10,
+      },
+      {
         name: 'created_at',
         type: 'timestamp',
         default: 'now()',

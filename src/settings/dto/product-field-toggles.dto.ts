@@ -18,6 +18,26 @@ export class UpdateProductFieldTogglesDto {
   @IsBoolean()
   weight_and_dimensions_enabled?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  partners_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  cashback_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  banners_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  import_ai_products_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  linked_products_enabled?: boolean;
+
   // Appearance-only toggles
   @IsOptional()
   @IsBoolean()

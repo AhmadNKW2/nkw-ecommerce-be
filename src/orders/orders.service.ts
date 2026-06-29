@@ -371,12 +371,6 @@ export class OrdersService implements OnModuleInit {
 
       await queryRunner.commitTransaction();
 
-      void Promise.allSettled(
-        [...touchedProductIds].map((productId) =>
-          this.productsService.reindexOne(productId),
-        ),
-      );
-
       // Clear Cart
       try {
         await this.cartService.clearCart(user.id);
@@ -589,12 +583,6 @@ export class OrdersService implements OnModuleInit {
       await queryRunner.manager.save(order);
 
       await queryRunner.commitTransaction();
-
-      void Promise.allSettled(
-        [...touchedProductIds].map((productId) =>
-          this.productsService.reindexOne(productId),
-        ),
-      );
 
       return this.findOne(order.id);
     } catch (error) {

@@ -536,7 +536,7 @@ async function main() {
 
     if (migrationResult.affectedProductIds.length > 0) {
       console.log(
-        'Run a product reindex after applying (POST /products/reindex) so Typesense reflects new category paths.',
+        'Review updated category assignments after applying taxonomy changes.',
       );
     }
   } catch (error) {
