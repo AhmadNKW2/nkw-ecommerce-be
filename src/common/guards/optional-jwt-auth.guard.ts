@@ -1,11 +1,27 @@
-import { Injectable } from '@nestjs/common';
+import { ExecutionContext, Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { isObservable, Observable } from 'rxjs';
+import { catchError, of } from 'rxjs';
 
 @Injectable()
 export class OptionalJwtAuthGuard extends AuthGuard('jwt') {
-  handleRequest(err: any, user: any, info: any) {
-    // If error or no user, just return null (don't throw)
-    // We want to allow the request to proceed even if unauthenticated
-    return user;
+  canActivate(
+    context: ExecutionContext,
+  ): boolean | Promise<boolean> | Observable<boolean> {
+    const result = super.canActivate(context);
+
+    if (result instanceof Promise) {
+      return result.catch(() => true);
+    }
+
+    if (isObservable(result)) {
+      return result.pipe(catchError(() => of(true)));
+    }
+
+    return result;
+  }
+
+  handleRequest<TUser = any>(err: any, user: any): TUser {
+    return user ?? null;
   }
 }

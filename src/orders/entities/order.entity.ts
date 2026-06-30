@@ -49,7 +49,7 @@ export class Order {
   user: User;
 
   @Column({ nullable: true })
-  userId: number;
+  userId: number | null;
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items: OrderItem[];

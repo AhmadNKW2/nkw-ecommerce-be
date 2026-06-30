@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -182,8 +183,27 @@ export class OrdersService implements OnModuleInit {
     await queryRunner.manager.save(Address, savedAddress);
   }
 
-  async create(user: User, createOrderDto: CreateOrderDto) {
+  async create(user: User | null, createOrderDto: CreateOrderDto) {
     await this.ensureSchemaReady();
+
+    if (!user) {
+      const toggles = await this.settingsService.getProductFieldToggles();
+      if (!toggles.easy_purchase_enabled) {
+        throw new ForbiddenException('Authentication required to place an order');
+      }
+
+      if (createOrderDto.couponCode) {
+        throw new BadRequestException(
+          'Coupons are not available for guest checkout',
+        );
+      }
+
+      if (Number(createOrderDto.walletAppliedAmount ?? 0) > 0) {
+        throw new BadRequestException(
+          'Wallet payment is not available for guest checkout',
+        );
+      }
+    }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -268,7 +288,7 @@ export class OrdersService implements OnModuleInit {
       let couponId: number | null = null;
 
       // 2. Apply Coupon
-      if (createOrderDto.couponCode) {
+      if (createOrderDto.couponCode && user) {
         try {
           const validation = await this.couponsService.validateCoupon(user.id, {
             code: createOrderDto.couponCode,
@@ -304,7 +324,7 @@ export class OrdersService implements OnModuleInit {
         walletAppliedAmount: createOrderDto.walletAppliedAmount,
       });
 
-      if (walletPayment.walletAppliedAmount > 0) {
+      if (walletPayment.walletAppliedAmount > 0 && user) {
         await this.walletService.deductFunds(
           user.id,
           walletPayment.walletAppliedAmount,
@@ -317,7 +337,7 @@ export class OrdersService implements OnModuleInit {
 
       // 5. Create Order
       const order = this.ordersRepository.create({
-        userId: user.id,
+        userId: user?.id ?? null,
         status: OrderStatus.PENDING,
         subtotalAmount,
         taxAmount,
@@ -353,7 +373,7 @@ export class OrdersService implements OnModuleInit {
       }
 
       // 7. Record Coupon Usage
-      if (couponId) {
+      if (couponId && user) {
         await this.couponsService.applyCoupon(
           user.id,
           couponId,
@@ -363,19 +383,23 @@ export class OrdersService implements OnModuleInit {
         );
       }
 
-      await this.persistUserShippingAddress(
-        user.id,
-        createOrderDto.shippingAddress,
-        queryRunner,
-      );
+      if (user) {
+        await this.persistUserShippingAddress(
+          user.id,
+          createOrderDto.shippingAddress,
+          queryRunner,
+        );
+      }
 
       await queryRunner.commitTransaction();
 
       // Clear Cart
-      try {
-        await this.cartService.clearCart(user.id);
-      } catch (err) {
-        console.error('Failed to clear cart after order:', err);
+      if (user) {
+        try {
+          await this.cartService.clearCart(user.id);
+        } catch (err) {
+          console.error('Failed to clear cart after order:', err);
+        }
       }
 
       return this.findOne(savedOrder.id);
@@ -563,7 +587,7 @@ export class OrdersService implements OnModuleInit {
       // Refund Wallet
       const walletAppliedAmount = Number(order.walletAppliedAmount ?? 0);
 
-      if (walletAppliedAmount > 0) {
+      if (walletAppliedAmount > 0 && order.userId) {
         await this.walletService.addFunds(
           order.userId,
           {
