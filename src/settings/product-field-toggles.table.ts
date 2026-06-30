@@ -60,6 +60,11 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
+        name: 'reference_links_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'reference_link_visible_admin',
         type: 'boolean',
         default: true,

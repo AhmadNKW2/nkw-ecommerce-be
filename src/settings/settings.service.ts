@@ -558,6 +558,16 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'reference_links_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'reference_links_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('product_field_toggles', missingColumns);
       }

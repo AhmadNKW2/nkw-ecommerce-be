@@ -42,6 +42,10 @@ export class UpdateProductFieldTogglesDto {
   @IsBoolean()
   linked_products_enabled?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  reference_links_enabled?: boolean;
+
   // Appearance-only toggles
   @IsOptional()
   @IsBoolean()

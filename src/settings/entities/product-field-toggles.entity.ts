@@ -42,6 +42,9 @@ export class ProductFieldToggles {
   @Column({ type: 'boolean', default: true })
   linked_products_enabled: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  reference_links_enabled: boolean;
+
   // Appearance-only toggles — admin dashboard UI only; BE ignores them.
   @Column({ type: 'boolean', default: true })
   reference_link_visible_admin: boolean;
