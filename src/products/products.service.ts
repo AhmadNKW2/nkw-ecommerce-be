@@ -1316,8 +1316,8 @@ export class ProductsService {
         await this.syncLinkedProducts(savedProduct.id, dto.linked_product_ids);
       }
 
-      // Return the complete product
-      const result = await this.findOne(savedProduct.id);
+      // Return the complete product (admin context — include out-of-stock rows)
+      const result = await this.findOne(savedProduct.id, true);
 
       return {
         product: result,

@@ -8,6 +8,10 @@ export class UpdateProductFieldTogglesDto {
 
   @IsOptional()
   @IsBoolean()
+  ratings_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   attributes_enabled?: boolean;
 
   @IsOptional()

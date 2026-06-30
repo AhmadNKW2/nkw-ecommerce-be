@@ -473,6 +473,16 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'ratings_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'ratings_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
       if (!(await queryRunner.hasColumn('product_field_toggles', 'cashback_enabled'))) {
         missingColumns.push(
           new TableColumn({

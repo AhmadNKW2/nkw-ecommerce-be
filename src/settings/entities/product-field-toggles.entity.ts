@@ -16,6 +16,9 @@ export class ProductFieldToggles {
   vendors_enabled: boolean;
 
   @Column({ type: 'boolean', default: true })
+  ratings_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
   attributes_enabled: boolean;
 
   @Column({ type: 'boolean', default: true })

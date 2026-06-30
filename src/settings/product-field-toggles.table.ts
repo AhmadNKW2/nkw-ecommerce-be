@@ -15,6 +15,11 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
+        name: 'ratings_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'attributes_enabled',
         type: 'boolean',
         default: true,
