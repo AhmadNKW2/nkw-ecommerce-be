@@ -22,6 +22,12 @@ export function createSeoSettingsTableDefinition() {
         default: `'المتجر الإلكتروني'`,
       },
       {
+        name: 'site_logo',
+        type: 'varchar',
+        length: '2048',
+        isNullable: true,
+      },
+      {
         name: 'default_meta_title_en',
         type: 'varchar',
         length: '70',

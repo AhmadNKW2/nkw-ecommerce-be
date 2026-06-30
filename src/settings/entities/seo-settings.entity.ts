@@ -17,6 +17,33 @@ export class SeoSettings {
   @Column({ type: 'varchar', length: 120, default: 'المتجر الإلكتروني' })
   site_name_ar: string;
 
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  site_logo: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_primary: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_primary_2: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_primary_3: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_secondary: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_success: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_success_2: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_danger: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_danger_2: string | null;
+
   @Column({ type: 'varchar', length: 70, default: 'Storefront' })
   default_meta_title_en: string;
 

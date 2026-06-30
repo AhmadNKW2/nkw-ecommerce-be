@@ -437,6 +437,41 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('seo_settings', 'site_logo'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'site_logo',
+            type: 'varchar',
+            length: '2048',
+            isNullable: true,
+          }),
+        );
+      }
+
+      const brandColorColumns = [
+        'brand_primary',
+        'brand_primary_2',
+        'brand_primary_3',
+        'brand_secondary',
+        'brand_success',
+        'brand_success_2',
+        'brand_danger',
+        'brand_danger_2',
+      ] as const;
+
+      for (const columnName of brandColorColumns) {
+        if (!(await queryRunner.hasColumn('seo_settings', columnName))) {
+          missingColumns.push(
+            new TableColumn({
+              name: columnName,
+              type: 'varchar',
+              length: '7',
+              isNullable: true,
+            }),
+          );
+        }
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('seo_settings', missingColumns);
       }
