@@ -46,6 +46,14 @@ export class UpdateProductFieldTogglesDto {
   @IsBoolean()
   reference_links_enabled?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  easy_purchase_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  cart_sidebar_button_enabled?: boolean;
+
   // Appearance-only toggles
   @IsOptional()
   @IsBoolean()

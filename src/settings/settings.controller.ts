@@ -17,6 +17,7 @@ import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
 import { UpdateSeoSettingsDto } from './dto/update-seo-settings.dto';
+import { UpdateSitePopupSettingsDto } from './dto/update-site-popup-settings.dto';
 import { SettingsService } from './settings.service';
 
 @Controller('settings')
@@ -65,6 +66,18 @@ export class SettingsController {
     return this.settingsService.updateProductFieldToggles(
       updateProductFieldTogglesDto,
     );
+  }
+
+  @Get('popup')
+  getSitePopupSettings() {
+    return this.settingsService.getSitePopupSettings();
+  }
+
+  @Patch('popup')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateSitePopupSettings(@Body() updateSitePopupSettingsDto: UpdateSitePopupSettingsDto) {
+    return this.settingsService.updateSitePopupSettings(updateSitePopupSettingsDto);
   }
 
   @Get('pricing-rules')

@@ -28,9 +28,12 @@ import {
 import { createProductPriceRulesTableDefinition } from './product-price-rule.table';
 import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
 import { UpdateSeoSettingsDto } from './dto/update-seo-settings.dto';
+import { UpdateSitePopupSettingsDto } from './dto/update-site-popup-settings.dto';
 import { ProductFieldToggles } from './entities/product-field-toggles.entity';
+import { SitePopupSettings } from './entities/site-popup-settings.entity';
 import { createProductFieldTogglesTableDefinition } from './product-field-toggles.table';
 import { createSeoSettingsTableDefinition } from './seo-settings.table';
+import { createSitePopupSettingsTableDefinition } from './site-popup-settings.table';
 
 @Injectable()
 export class SettingsService implements OnModuleInit {
@@ -45,6 +48,8 @@ export class SettingsService implements OnModuleInit {
     private readonly productsRepository: Repository<Product>,
     @InjectRepository(ProductFieldToggles)
     private readonly productFieldTogglesRepository: Repository<ProductFieldToggles>,
+    @InjectRepository(SitePopupSettings)
+    private readonly sitePopupSettingsRepository: Repository<SitePopupSettings>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -111,6 +116,43 @@ export class SettingsService implements OnModuleInit {
     Object.assign(toggles, updateProductFieldTogglesDto);
 
     return this.productFieldTogglesRepository.save(toggles);
+  }
+
+  async getSitePopupSettings(): Promise<SitePopupSettings> {
+    await this.ensureSchemaReady();
+
+    const existingSettings = await this.sitePopupSettingsRepository.findOne({
+      where: {},
+      order: { id: 'ASC' },
+    });
+
+    if (existingSettings) {
+      return existingSettings;
+    }
+
+    const defaultSettings = this.sitePopupSettingsRepository.create({});
+    return this.sitePopupSettingsRepository.save(defaultSettings);
+  }
+
+  async updateSitePopupSettings(
+    updateSitePopupSettingsDto: UpdateSitePopupSettingsDto,
+  ): Promise<SitePopupSettings> {
+    const settings = await this.getSitePopupSettings();
+
+    const normalizedPatch = Object.fromEntries(
+      Object.entries(updateSitePopupSettingsDto).map(([key, value]) => {
+        if (typeof value !== 'string') {
+          return [key, value];
+        }
+
+        const trimmedValue = value.trim();
+        return [key, trimmedValue.length > 0 ? trimmedValue : null];
+      }),
+    );
+
+    Object.assign(settings, normalizedPatch);
+
+    return this.sitePopupSettingsRepository.save(settings);
   }
 
   async getProductPriceRules() {
@@ -347,6 +389,7 @@ export class SettingsService implements OnModuleInit {
     await this.ensureSeoSettingsTableExists();
     await this.ensureSeoSettingsColumnsExist();
     await this.ensureProductFieldTogglesTableExists();
+    await this.ensureSitePopupSettingsTableExists();
     await this.ensureProductPriceRulesTableExists();
     await this.ensureProductVendorPriceColumnsExist();
     await this.ensureProductMeasurementUnitColumnsExist();
@@ -568,9 +611,50 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'easy_purchase_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'easy_purchase_enabled',
+            type: 'boolean',
+            default: false,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'cart_sidebar_button_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'cart_sidebar_button_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('product_field_toggles', missingColumns);
       }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureSitePopupSettingsTableExists(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      const hasTable = await queryRunner.hasTable('site_popup_settings');
+
+      if (hasTable) {
+        return;
+      }
+
+      await queryRunner.createTable(
+        createSitePopupSettingsTableDefinition(),
+        true,
+      );
     } finally {
       await queryRunner.release();
     }

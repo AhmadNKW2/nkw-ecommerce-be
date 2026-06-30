@@ -65,6 +65,16 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
+        name: 'easy_purchase_enabled',
+        type: 'boolean',
+        default: false,
+      },
+      {
+        name: 'cart_sidebar_button_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'reference_link_visible_admin',
         type: 'boolean',
         default: true,
