@@ -9,6 +9,7 @@ import {
   OneToMany,
 } from 'typeorm';
 import { Address } from '../../addresses/entities/address.entity';
+import type { AdminAccess } from '../admin-access.constants';
 
 export enum UserRole {
   USER = 'user',
@@ -61,6 +62,9 @@ export class User {
 
   @Column({ default: true })
   isActive: boolean;
+
+  @Column({ name: 'admin_access', type: 'jsonb', nullable: true })
+  adminAccess: AdminAccess | null;
 
   @OneToMany(() => Address, (address) => address.user)
   addresses: Address[];

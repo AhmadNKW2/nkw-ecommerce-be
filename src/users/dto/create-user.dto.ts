@@ -11,9 +11,11 @@ import {
   IsOptional,
   IsArray,
   IsNumber,
+  IsObject,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { UserRole } from '../entities/user.entity';
+import type { AdminAccess } from '../admin-access.constants';
 
 export class CreateUserDto {
   @ApiProperty({
@@ -95,4 +97,17 @@ export class CreateUserDto {
   @Type(() => Number)
   @IsNumber({}, { each: true })
   product_ids?: number[]; // Products to add to user's wishlist
+
+  @ApiPropertyOptional({
+    description:
+      'Per-section access flags for admin users. Omitted keys fall back to role defaults.',
+    example: {
+      products: true,
+      product_pricing: false,
+      categories: true,
+    },
+  })
+  @IsObject()
+  @IsOptional()
+  adminAccess?: Partial<AdminAccess>;
 }

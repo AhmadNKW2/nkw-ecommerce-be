@@ -48,11 +48,23 @@ export class UpdateProductFieldTogglesDto {
 
   @IsOptional()
   @IsBoolean()
+  product_status_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  pricing_view_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   easy_purchase_enabled?: boolean;
 
   @IsOptional()
   @IsBoolean()
   cart_sidebar_button_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  popup_enabled?: boolean;
 
   // Appearance-only toggles
   @IsOptional()

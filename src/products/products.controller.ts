@@ -346,7 +346,7 @@ export class ProductsController {
     },
   })
   create(@Body() createProductDto: CreateProductDto, @Req() req: any) {
-    return this.productsService.create(createProductDto, req.user?.id);
+    return this.productsService.create(createProductDto, req.user?.id, req.user);
   }
 
   @Patch('bulk-status')
@@ -665,8 +665,12 @@ export class ProductsController {
       },
     },
   })
-  update(@Param('id') id: string, @Body() updateProductDto: UpdateProductDto) {
-    return this.productsService.update(+id, updateProductDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateProductDto: UpdateProductDto,
+    @Req() req: any,
+  ) {
+    return this.productsService.update(+id, updateProductDto, req.user);
   }
 
   @Patch(':id')
@@ -738,10 +742,15 @@ export class ProductsController {
       },
     },
   })
-  patch(@Param('id', ParseIntPipe) id: number, @Body() patchProductDto: PatchProductDto) {
+  patch(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() patchProductDto: PatchProductDto,
+    @Req() req: any,
+  ) {
     return this.productsService.update(
       id,
       patchProductDto as UpdateProductDto,
+      req.user,
     );
   }
 

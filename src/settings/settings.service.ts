@@ -631,6 +631,36 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'popup_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'popup_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'product_status_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'product_status_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'pricing_view_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'pricing_view_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('product_field_toggles', missingColumns);
       }

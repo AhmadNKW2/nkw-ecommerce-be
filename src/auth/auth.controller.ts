@@ -24,6 +24,7 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ConfigService } from '@nestjs/config';
 import { UserRole } from '../users/entities/user.entity';
+import { resolveAdminAccess } from '../users/utils/admin-access.util';
 import {
   buildFrontendLoginUrl,
   buildFrontendRedirectUrl,
@@ -432,6 +433,7 @@ export class AuthController {
       lastName: req.user.lastName,
       image: req.user.image,
       role: req.user.role,
+      adminAccess: resolveAdminAccess(req.user),
     };
   }
 

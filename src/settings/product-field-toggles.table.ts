@@ -65,12 +65,27 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
+        name: 'product_status_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'pricing_view_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'easy_purchase_enabled',
         type: 'boolean',
         default: false,
       },
       {
         name: 'cart_sidebar_button_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'popup_enabled',
         type: 'boolean',
         default: true,
       },

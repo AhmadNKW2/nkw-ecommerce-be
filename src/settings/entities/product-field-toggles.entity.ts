@@ -45,11 +45,20 @@ export class ProductFieldToggles {
   @Column({ type: 'boolean', default: true })
   reference_links_enabled: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  product_status_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  pricing_view_enabled: boolean;
+
   @Column({ type: 'boolean', default: false })
   easy_purchase_enabled: boolean;
 
   @Column({ type: 'boolean', default: true })
   cart_sidebar_button_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  popup_enabled: boolean;
 
   // Appearance-only toggles — admin dashboard UI only; BE ignores them.
   @Column({ type: 'boolean', default: true })

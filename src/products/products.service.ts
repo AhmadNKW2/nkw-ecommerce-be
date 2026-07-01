@@ -35,6 +35,10 @@ import { TagsService } from '../search/tags.service';
 import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
 import { SettingsService } from '../settings/settings.service';
+import {
+  hasAdminAccess,
+  stripProductPricingFields,
+} from '../users/utils/admin-access.util';
 
 import { ProductSpecificationInputDto } from './dto/product-specification.dto';
 import { ProductAttributeInputDto } from './dto/product-attribute.dto';
@@ -1176,8 +1180,11 @@ export class ProductsService {
     );
   }
 
-  async create(dto: CreateProductDto, userId?: number): Promise<any> {
+  async create(dto: CreateProductDto, userId?: number, user?: { role: string; adminAccess?: unknown }): Promise<any> {
     try {
+      if (user && !hasAdminAccess(user as any, 'product_pricing')) {
+        dto = stripProductPricingFields(dto);
+      }
       // Validate categories exist and are active
       if (dto.category_ids && dto.category_ids.length > 0) {
         const categories = await this.categoriesRepository.find({
@@ -2232,7 +2239,15 @@ export class ProductsService {
    * The payload represents the COMPLETE state of the product.
    * Anything not in the payload will be deleted.
    */
-  async update(id: number, dto: UpdateProductDto): Promise<any> {
+  async update(
+    id: number,
+    dto: UpdateProductDto,
+    user?: { role: string; adminAccess?: unknown },
+  ): Promise<any> {
+    if (user && !hasAdminAccess(user as any, 'product_pricing')) {
+      dto = stripProductPricingFields(dto);
+    }
+
     // Lightweight check for existence
     const existingProduct = await this.productsRepository.findOne({
       where: { id },
