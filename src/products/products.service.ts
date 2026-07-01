@@ -2949,4 +2949,109 @@ export class ProductsService {
       updated: result.affected || 0,
     };
   }
+
+  async bulkUpdateProductStatus(dto: {
+    from_status: ProductStatus;
+    to_status: ProductStatus;
+    vendor_id?: number;
+    category_id?: number;
+  }): Promise<{
+    message: string;
+    updated: number;
+    filters: {
+      from_status: ProductStatus;
+      to_status: ProductStatus;
+      vendor_id?: number;
+      category_id?: number;
+    };
+  }> {
+    if (dto.from_status === dto.to_status) {
+      throw new BadRequestException('from_status and to_status must be different');
+    }
+
+    const allowedStatuses = [
+      ProductStatus.ACTIVE,
+      ProductStatus.REVIEW,
+      ProductStatus.UPDATED,
+    ];
+
+    if (
+      !allowedStatuses.includes(dto.from_status) ||
+      !allowedStatuses.includes(dto.to_status)
+    ) {
+      throw new BadRequestException(
+        'Bulk status changes only support active, review, and updated statuses',
+      );
+    }
+
+    if (dto.vendor_id) {
+      const vendor = await this.dataSource
+        .getRepository(Vendor)
+        .findOne({ where: { id: dto.vendor_id } });
+
+      if (!vendor) {
+        throw new NotFoundException('Vendor not found');
+      }
+    }
+
+    if (dto.category_id) {
+      const category = await this.categoriesRepository.findOne({
+        where: { id: dto.category_id },
+      });
+
+      if (!category) {
+        throw new NotFoundException('Category not found');
+      }
+    }
+
+    const matchingProductsQuery = this.productsRepository
+      .createQueryBuilder('product')
+      .select('product.id', 'id')
+      .where('product.status = :fromStatus', { fromStatus: dto.from_status });
+
+    if (dto.vendor_id) {
+      matchingProductsQuery.andWhere('product.vendor_id = :vendorId', {
+        vendorId: dto.vendor_id,
+      });
+    }
+
+    if (dto.category_id) {
+      matchingProductsQuery.andWhere(
+        '(product.category_id = :categoryId OR EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id = product.id AND pc.category_id = :categoryId))',
+        { categoryId: dto.category_id },
+      );
+    }
+
+    const matchingProducts = await matchingProductsQuery.getRawMany<{ id: number }>();
+    const productIds = matchingProducts.map((row) => Number(row.id));
+
+    if (productIds.length === 0) {
+      return {
+        message: 'No products matched the selected filters',
+        updated: 0,
+        filters: {
+          from_status: dto.from_status,
+          to_status: dto.to_status,
+          vendor_id: dto.vendor_id,
+          category_id: dto.category_id,
+        },
+      };
+    }
+
+    const result = await this.productsRepository.update(
+      { id: In(productIds), status: dto.from_status },
+      { status: dto.to_status },
+    );
+
+    return {
+      message: `Updated ${result.affected ?? 0} products from ${dto.from_status} to ${dto.to_status}`,
+      updated: result.affected ?? 0,
+      filters: {
+        from_status: dto.from_status,
+        to_status: dto.to_status,
+        vendor_id: dto.vendor_id,
+        category_id: dto.category_id,
+      },
+    };
+  }
 }

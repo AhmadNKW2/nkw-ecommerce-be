@@ -34,6 +34,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { DeleteReviewProductsDto } from './dto/delete-review-products.dto';
 import { ImportedPricingAuditQueryDto } from './dto/imported-pricing-audit-query.dto';
 import { ReimportReviewProductsDto } from './dto/reimport-review-products.dto';
+import { BulkUpdateProductStatusDto } from './dto/bulk-update-product-status.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { PatchProductDto } from './dto/patch-product.dto';
 import { FilterProductDto, AssignProductsDto } from './dto/filter-product.dto';
@@ -346,6 +347,14 @@ export class ProductsController {
   })
   create(@Body() createProductDto: CreateProductDto, @Req() req: any) {
     return this.productsService.create(createProductDto, req.user?.id);
+  }
+
+  @Patch('bulk-status')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @ApiOperation({ summary: 'Bulk update product workflow status' })
+  bulkUpdateProductStatus(@Body() dto: BulkUpdateProductStatusDto) {
+    return this.productsService.bulkUpdateProductStatus(dto);
   }
 
   @Put('linked-products')
@@ -729,9 +738,9 @@ export class ProductsController {
       },
     },
   })
-  patch(@Param('id') id: string, @Body() patchProductDto: PatchProductDto) {
+  patch(@Param('id', ParseIntPipe) id: number, @Body() patchProductDto: PatchProductDto) {
     return this.productsService.update(
-      +id,
+      id,
       patchProductDto as UpdateProductDto,
     );
   }
@@ -847,6 +856,7 @@ export class ProductsController {
         'Review product re-import started in background. Matching review products will be processed one by one. Poll GET /products/import-jobs/:job_id to track progress.',
     };
   }
+
 
   @Get('import-pricing/audit')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
