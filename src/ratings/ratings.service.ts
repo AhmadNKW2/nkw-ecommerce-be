@@ -117,7 +117,10 @@ export class RatingsService {
   async findOne(id: number): Promise<Rating> {
     const rating = await this.ratingsRepository.findOne({
       where: { id },
-      relations: ['user', 'product'],
+      relations: {
+        user: true,
+        product: true
+      },
     });
 
     if (!rating) {
@@ -183,7 +186,9 @@ export class RatingsService {
         product_id,
         status: RatingStatus.APPROVED,
       },
-      relations: ['user'],
+      relations: {
+        user: true
+      },
       order: {
         createdAt: 'DESC',
       },

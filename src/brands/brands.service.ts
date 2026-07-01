@@ -62,7 +62,10 @@ export class BrandsService {
     let counter = 1;
 
     const existing = await this.brandsRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -139,7 +142,9 @@ export class BrandsService {
 
     const [data, total] = await this.brandsRepository.findAndCount({
       where: searchWhere || where,
-      relations: ['products'],
+      relations: {
+        products: true
+      },
       order: { [sortBy]: sortOrder },
       skip: (page - 1) * limit,
       take: limit,
@@ -409,15 +414,19 @@ export class BrandsService {
       brands.map(async (brand) => {
         const archivedProductsRaw = await this.productsRepository.find({
           where: { brand_id: brand.id, status: ProductStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'sku',
-            'archived_at',
-            'archived_by',
-          ],
-          relations: ['productMedia', 'productMedia.media'],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            sku: true,
+            archived_at: true,
+            archived_by: true
+          },
+          relations: {
+            productMedia: {
+              media: true
+            }
+          },
         });
 
         const archivedProducts = archivedProductsRaw.map((product) => {

@@ -161,7 +161,9 @@ export class VendorsService {
 
     const categories = await this.categoriesRepository.find({
       where: { id: In(categoryIds) },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (categories.length !== categoryIds.length) {
@@ -186,7 +188,9 @@ export class VendorsService {
 
     const parent = await this.vendorCategoryRepository.findOne({
       where: { id: parentId, vendor_id: vendorId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!parent) {
@@ -201,7 +205,10 @@ export class VendorsService {
 
     const nodes = await this.vendorCategoryRepository.find({
       where: { vendor_id: vendorId },
-      select: ['id', 'parent_id'],
+      select: {
+        id: true,
+        parent_id: true
+      },
     });
     const parentById = new Map(
       nodes.map((node) => [node.id, node.parent_id ?? null]),
@@ -298,7 +305,9 @@ export class VendorsService {
   ): Promise<VendorCategory> {
     const vendorCategory = await this.vendorCategoryRepository.findOne({
       where: { id: vendorCategoryId, vendor_id: vendorId },
-      relations: ['categories'],
+      relations: {
+        categories: true
+      },
     });
 
     if (!vendorCategory) {
@@ -317,7 +326,9 @@ export class VendorsService {
 
     return this.vendorCategoryRepository.find({
       where: { vendor_id: In(vendorIds) },
-      relations: ['categories'],
+      relations: {
+        categories: true
+      },
       order: { sort_order: 'ASC', id: 'ASC' },
     });
   }
@@ -493,7 +504,10 @@ export class VendorsService {
     let counter = 1;
 
     const existing = await this.vendorRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -586,7 +600,9 @@ export class VendorsService {
   async findAll(): Promise<Vendor[]> {
     const vendors = await this.vendorRepository.find({
       where: { status: VendorStatus.ACTIVE },
-      relations: ['products'],
+      relations: {
+        products: true
+      },
       order: { sort_order: 'ASC', created_at: 'DESC' },
     });
 
@@ -972,15 +988,19 @@ export class VendorsService {
       vendors.map(async (vendor) => {
         const archivedProductsRaw = await this.productsRepository.find({
           where: { vendor_id: vendor.id, status: ProductStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'sku',
-            'archived_at',
-            'archived_by',
-          ],
-          relations: ['productMedia', 'productMedia.media'],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            sku: true,
+            archived_at: true,
+            archived_by: true
+          },
+          relations: {
+            productMedia: {
+              media: true
+            }
+          },
         });
 
         // Map products to include image from primary media or first media
@@ -1183,12 +1203,15 @@ export class VendorsService {
 
     const products = await this.productsRepository.find({
       where: { vendor_id: vendorId, status: ProductStatus.ACTIVE },
-      relations: [
-        'media',
-        'priceGroups',
-        'productCategories',
-        'productCategories.category',
-      ],
+      relations: {
+        productMedia: {
+          media: true
+        },
+
+        productCategories: {
+          category: true
+        }
+      },
       order: { created_at: 'DESC' },
     });
 
@@ -1215,12 +1238,15 @@ export class VendorsService {
 
     const products = await this.productsRepository.find({
       where: { vendor_id: vendorId, status: ProductStatus.ARCHIVED },
-      relations: [
-        'media',
-        'priceGroups',
-        'productCategories',
-        'productCategories.category',
-      ],
+      relations: {
+        productMedia: {
+          media: true
+        },
+
+        productCategories: {
+          category: true
+        }
+      },
       order: { archived_at: 'DESC' },
     });
 

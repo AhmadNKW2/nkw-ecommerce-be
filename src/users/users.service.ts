@@ -209,17 +209,24 @@ export class UsersService implements OnModuleInit {
     // Get user's wishlist with full product details
     const wishlistItems = await this.wishlistRepository.find({
       where: { user_id: id },
-      relations: [
-        'product',
-        'product.productMedia',
-        'product.productMedia.media',
-        'product.vendor',
-        'product.category',
-        'product.productCategories',
-        'product.productCategories.category',
-        'product.attributes',
-        'product.attributes.attribute',
-      ],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          },
+
+          vendor: true,
+          category: true,
+
+          productCategories: {
+            category: true
+          },
+
+          attributes: {
+            attribute: true
+          }
+        }
+      },
       order: { created_at: 'DESC' },
     });
 
@@ -317,7 +324,11 @@ export class UsersService implements OnModuleInit {
         this.walletService.getTransactions(id, { page: 1, limit: 20 }),
         this.ordersRepository.find({
           where: { userId: id },
-          relations: ['items', 'items.product'],
+          relations: {
+            items: {
+              product: true
+            }
+          },
           order: { createdAt: 'DESC' },
           take: 20,
         }),
@@ -411,7 +422,9 @@ export class UsersService implements OnModuleInit {
     // Validate products exist and are active
     const validProducts = await this.productRepository.find({
       where: { id: In(product_ids), status: ProductStatus.ACTIVE },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     const validProductIds = validProducts.map((p) => p.id);

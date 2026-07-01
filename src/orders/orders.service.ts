@@ -414,7 +414,13 @@ export class OrdersService implements OnModuleInit {
   async findOne(id: number) {
     const order = await this.ordersRepository.findOne({
       where: { id },
-      relations: ['items', 'items.product', 'user'],
+      relations: {
+        items: {
+          product: true
+        },
+
+        user: true
+      },
     });
     if (!order) throw new NotFoundException('Order not found');
     return order;
@@ -424,7 +430,11 @@ export class OrdersService implements OnModuleInit {
     return this.ordersRepository.find({
       where: { userId },
       order: { createdAt: 'DESC' },
-      relations: ['items', 'items.product'],
+      relations: {
+        items: {
+          product: true
+        }
+      },
     });
   }
 

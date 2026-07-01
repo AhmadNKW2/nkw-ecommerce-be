@@ -680,7 +680,9 @@ export class AuthService {
         token: resetPasswordDto.token,
         used: false,
       },
-      relations: ['user'],
+      relations: {
+        user: true
+      },
     });
 
     if (!resetToken) {

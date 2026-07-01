@@ -43,7 +43,15 @@ export class NotesService {
 
     const [notes, total] = await this.notesRepository.findAndCount({
       where: whereCondition,
-      relations: ['product', 'product.productMedia', 'product.productMedia.media', 'user'],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          }
+        },
+
+        user: true
+      },
       order: { created_at: 'DESC' },
       skip,
       take: per_page,
@@ -85,7 +93,15 @@ export class NotesService {
 
     const [notes, total] = await this.notesRepository.findAndCount({
       where: whereCondition,
-      relations: ['product', 'product.productMedia', 'product.productMedia.media', 'user'],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          }
+        },
+
+        user: true
+      },
       order: { created_at: 'DESC' },
       skip,
       take: per_page,
@@ -120,7 +136,15 @@ export class NotesService {
 
     const note = await this.notesRepository.findOne({
       where: { id },
-      relations: ['product', 'product.productMedia', 'product.productMedia.media', 'user'],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          }
+        },
+
+        user: true
+      },
     });
 
     if (!note) {

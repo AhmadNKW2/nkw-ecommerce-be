@@ -2,7 +2,7 @@ import { CategoriesService } from './categories.service';
 
 describe('CategoriesService category URLs', () => {
   let service: CategoriesService;
-  let categoriesRepository: { exist: jest.Mock };
+  let categoriesRepository: { exists: jest.Mock };
   let categoryUrlsRepository: {
     findOne: jest.Mock;
     createQueryBuilder: jest.Mock;
@@ -12,7 +12,7 @@ describe('CategoriesService category URLs', () => {
 
   beforeEach(() => {
     categoriesRepository = {
-      exist: jest.fn(),
+      exists: jest.fn(),
     };
 
     const categoryUrlQueryBuilder = {
@@ -41,7 +41,7 @@ describe('CategoriesService category URLs', () => {
   });
 
   it('creates a category URL without any vendor dependency', async () => {
-    categoriesRepository.exist.mockResolvedValue(true);
+    categoriesRepository.exists.mockResolvedValue(true);
     categoryUrlsRepository.findOne
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({

@@ -65,7 +65,9 @@ export class CartService {
     // Get user cart
     let cart = await this.cartRepository.findOne({
       where: { user_id: userId },
-      relations: ['items'],
+      relations: {
+        items: true
+      },
     });
 
     if (!cart) {
@@ -104,7 +106,9 @@ export class CartService {
   async updateItem(userId: number, itemId: number, dto: UpdateCartItemDto) {
     const item = await this.cartItemRepository.findOne({
       where: { id: itemId },
-      relations: ['cart'],
+      relations: {
+        cart: true
+      },
     });
 
     if (!item || item.cart.user_id !== userId) {
@@ -122,7 +126,9 @@ export class CartService {
   async removeItem(userId: number, itemId: number) {
     const item = await this.cartItemRepository.findOne({
       where: { id: itemId },
-      relations: ['cart'],
+      relations: {
+        cart: true
+      },
     });
 
     if (!item || item.cart.user_id !== userId) {
@@ -137,7 +143,9 @@ export class CartService {
   async clearCart(userId: number) {
     const cart = await this.cartRepository.findOne({
       where: { user_id: userId },
-      relations: ['items'],
+      relations: {
+        items: true
+      },
     });
 
     if (cart && cart.items.length > 0) {

@@ -258,7 +258,9 @@ export class CouponsService {
   async getUserCouponUsage(userId: number) {
     const usage = await this.couponUsageRepository.find({
       where: { userId },
-      relations: ['coupon'],
+      relations: {
+        coupon: true
+      },
       order: { usedAt: 'DESC' },
     });
 

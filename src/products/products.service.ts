@@ -450,7 +450,9 @@ export class ProductsService {
 
     const existingProducts = await manager.find(Product, {
       where: { id: In(productIds) },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     const existingIds = new Set(existingProducts.map((product) => product.id));
@@ -488,7 +490,13 @@ export class ProductsService {
   }> {
     const membership = await this.groupProductsRepository.findOne({
       where: { product_id: productId },
-      relations: ['group', 'group.groupProducts', 'group.groupProducts.product'],
+      relations: {
+        group: {
+          groupProducts: {
+            product: true
+          }
+        }
+      },
     });
 
     if (!membership?.group) {
@@ -642,7 +650,13 @@ export class ProductsService {
       );
       const products = await this.productsRepository.find({
         where: { id: In(normalizedProductIds) },
-        select: ['id', 'name_en', 'name_ar', 'slug', 'sku'],
+        select: {
+          id: true,
+          name_en: true,
+          name_ar: true,
+          slug: true,
+          sku: true
+        },
       });
       const sortedProducts = products
         .sort((left, right) => left.id - right.id)
@@ -687,7 +701,9 @@ export class ProductsService {
 
     const product = await this.productsRepository.findOne({
       where: { id: productId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!product) {
@@ -724,7 +740,9 @@ export class ProductsService {
   async getProductTags(productId: number): Promise<Tag[]> {
     const product = await this.productsRepository.findOne({
       where: { id: productId },
-      relations: ['tags'],
+      relations: {
+        tags: true
+      },
     } as any);
     if (!product) throw new NotFoundException('Product not found');
     return (product as any).tags ?? [];
@@ -783,7 +801,9 @@ export class ProductsService {
     // Load existing tags so we can compute what to remove
     const current = await this.productsRepository.findOne({
       where: { id: productId },
-      relations: ['tags'],
+      relations: {
+        tags: true
+      },
     } as any);
 
     const currentIds: number[] = ((current as any)?.tags ?? []).map(
@@ -821,7 +841,10 @@ export class ProductsService {
 
     // Find all slugs that start with the baseSlug
     const existingProducts = await this.productsRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -913,7 +936,9 @@ export class ProductsService {
       .getRepository(AttributeValue)
       .find({
         where: { id: In(requestedValueIds) },
-        relations: ['attribute'],
+        relations: {
+          attribute: true
+        },
       });
 
     if (attributeValues.length !== requestedValueIds.length) {
@@ -980,7 +1005,9 @@ export class ProductsService {
       .getRepository(SpecificationValue)
       .find({
         where: { id: In(requestedValueIds) },
-        relations: ['specification'],
+        relations: {
+          specification: true
+        },
       });
 
     if (specificationValues.length !== requestedValueIds.length) {
@@ -1726,30 +1753,45 @@ export class ProductsService {
         .getMany(),
       this.productCategoriesRepository.find({
         where: { product_id: In(ids) },
-        relations: ['category'],
+        relations: {
+          category: true
+        },
       }),
       this.dataSource.getRepository(ProductMedia).find({
         where: { product_id: In(ids) },
-        relations: ['media'],
+        relations: {
+          media: true
+        },
       }),
       this.dataSource.getRepository(ProductAttribute).find({
         where: { product_id: In(ids) },
-        relations: ['attribute'],
+        relations: {
+          attribute: true
+        },
       }),
       this.dataSource.getRepository(ProductAttributeValue).find({
         where: { product_id: In(ids) },
-        relations: ['attribute_value', 'attribute_value.attribute'],
+        relations: {
+          attribute_value: {
+            attribute: true
+          }
+        },
       }),
       this.dataSource.getRepository(ProductSpecificationValue).find({
         where: { product_id: In(ids) },
-        relations: [
-          'specification_value',
-          'specification_value.specification',
-          'specification_value.parent_value',
-          'specification_value.parent_value.specification',
-          'specification_value.parent_value.parent_value',
-          'specification_value.parent_value.parent_value.specification',
-        ],
+        relations: {
+          specification_value: {
+            specification: true,
+
+            parent_value: {
+              specification: true,
+
+              parent_value: {
+                specification: true
+              }
+            }
+          }
+        },
       }),
     ]);
 
@@ -2058,34 +2100,54 @@ export class ProductsService {
     ] = await Promise.all([
       this.productsRepository.findOne({
         where: { id },
-        relations: ['category', 'vendor', 'brand', 'createdByUser'],
+        relations: {
+          category: true,
+          vendor: true,
+          brand: true,
+          createdByUser: true
+        },
       }),
       this.dataSource.getRepository(ProductCategory).find({
         where: { product_id: id },
-        relations: ['category'],
+        relations: {
+          category: true
+        },
       }),
       this.dataSource.getRepository(ProductMedia).find({
         where: { product_id: id },
-        relations: ['media'],
+        relations: {
+          media: true
+        },
       }),
       this.dataSource.getRepository(ProductAttribute).find({
         where: { product_id: id },
-        relations: ['attribute'],
+        relations: {
+          attribute: true
+        },
       }),
       this.dataSource.getRepository(ProductAttributeValue).find({
         where: { product_id: id },
-        relations: ['attribute_value', 'attribute_value.attribute'],
+        relations: {
+          attribute_value: {
+            attribute: true
+          }
+        },
       }),
       this.dataSource.getRepository(ProductSpecificationValue).find({
         where: { product_id: id },
-        relations: [
-          'specification_value',
-          'specification_value.specification',
-          'specification_value.parent_value',
-          'specification_value.parent_value.specification',
-          'specification_value.parent_value.parent_value',
-          'specification_value.parent_value.parent_value.specification',
-        ],
+        relations: {
+          specification_value: {
+            specification: true,
+
+            parent_value: {
+              specification: true,
+
+              parent_value: {
+                specification: true
+              }
+            }
+          }
+        },
       }),
       this.getLinkedProductsState(id),
     ]);
@@ -2115,7 +2177,9 @@ export class ProductsService {
   async findOneBySlug(slug: string, isAdmin = false): Promise<any> {
     const product = await this.productsRepository.findOne({
       where: { slug },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!product) {
@@ -2137,7 +2201,9 @@ export class ProductsService {
 
     const product = await this.productsRepository.findOne({
       where: { reference_link: normalizedReferenceLink },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!product) {
@@ -2251,7 +2317,12 @@ export class ProductsService {
     // Lightweight check for existence
     const existingProduct = await this.productsRepository.findOne({
       where: { id },
-      select: ['id', 'slug', 'quantity', 'is_out_of_stock'],
+      select: {
+        id: true,
+        slug: true,
+        quantity: true,
+        is_out_of_stock: true
+      },
     });
     if (!existingProduct) {
       throw new NotFoundException('Product not found');
@@ -2562,7 +2633,10 @@ export class ProductsService {
   ): Promise<{ message: string }> {
     const product = await this.productsRepository.findOne({
       where: { id, status: ProductStatus.ARCHIVED },
-      relations: ['category', 'vendor'],
+      relations: {
+        category: true,
+        vendor: true
+      },
     });
 
     if (!product) {

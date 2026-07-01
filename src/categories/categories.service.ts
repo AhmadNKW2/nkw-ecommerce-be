@@ -102,7 +102,9 @@ export class CategoriesService {
     if (normalizedAttributeIds.length > 0) {
       const attributes = await this.attributesRepository.find({
         where: { id: In(normalizedAttributeIds) },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       if (attributes.length !== normalizedAttributeIds.length) {
@@ -132,7 +134,9 @@ export class CategoriesService {
 
     const relationCategories = await this.categoriesRepository.find({
       where: { id: In(nodes.map((category) => category.id)) },
-      relations: ['attributes'],
+      relations: {
+        attributes: true
+      },
     });
 
     const attributesByCategoryId = new Map(
@@ -160,7 +164,9 @@ export class CategoriesService {
     if (normalizedSpecificationIds.length > 0) {
       const specifications = await this.specificationsRepository.find({
         where: { id: In(normalizedSpecificationIds) },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       if (specifications.length !== normalizedSpecificationIds.length) {
@@ -191,7 +197,9 @@ export class CategoriesService {
 
     const relationCategories = await this.categoriesRepository.find({
       where: { id: In(nodes.map((category) => category.id)) },
-      relations: ['specifications'],
+      relations: {
+        specifications: true
+      },
     });
 
     const specificationsByCategoryId = new Map(
@@ -210,7 +218,7 @@ export class CategoriesService {
   }
 
   private async validateCategoryUrlReferences(categoryId: number): Promise<void> {
-    const categoryExists = await this.categoriesRepository.exist({
+    const categoryExists = await this.categoriesRepository.exists({
       where: { id: categoryId },
     });
 
@@ -292,7 +300,7 @@ export class CategoriesService {
     categoryId: number,
     filterDto?: FilterCategoryUrlDto,
   ): Promise<CategoryUrl[]> {
-    const categoryExists = await this.categoriesRepository.exist({
+    const categoryExists = await this.categoriesRepository.exists({
       where: { id: categoryId },
     });
 
@@ -309,7 +317,9 @@ export class CategoriesService {
   async findOneCategoryUrl(id: number): Promise<CategoryUrl> {
     const categoryUrl = await this.categoryUrlsRepository.findOne({
       where: { id },
-      relations: ['category'],
+      relations: {
+        category: true
+      },
     });
 
     if (!categoryUrl) {
@@ -375,7 +385,10 @@ export class CategoriesService {
     let counter = 1;
 
     const existing = await this.categoriesRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -636,7 +649,9 @@ export class CategoriesService {
   private async getDescendantIds(id: number): Promise<number[]> {
     const children = await this.categoriesRepository.find({
       where: { parent_id: id },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
     const childIds = children.map((c) => c.id);
 
@@ -644,7 +659,9 @@ export class CategoriesService {
 
     const grandchildren = await this.categoriesRepository.find({
       where: { parent_id: In(childIds) },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
     const grandChildIds = grandchildren.map((c) => c.id);
 
@@ -657,7 +674,10 @@ export class CategoriesService {
   ): Promise<Category> {
     const category = await this.categoriesRepository.findOne({
       where: { id },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true
+      },
     });
 
     if (!category) {
@@ -688,7 +708,10 @@ export class CategoriesService {
   ): Promise<Category> {
     const category = await this.categoriesRepository.findOne({
       where: { slug },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true
+      },
     });
 
     if (!category) {
@@ -829,7 +852,9 @@ export class CategoriesService {
     const findDescendants = async (parent_id: number) => {
       const children = await this.categoriesRepository.find({
         where: { parent_id },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       for (const child of children) {
@@ -876,7 +901,9 @@ export class CategoriesService {
     // Get all product IDs in these categories via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: In(allCategoryIds) },
-      select: ['product_id'],
+      select: {
+        product_id: true
+      },
     });
     const product_ids = [
       ...new Set(productCategories.map((pc) => pc.product_id)),
@@ -923,7 +950,10 @@ export class CategoriesService {
   }> {
     const category = await this.categoriesRepository.findOne({
       where: { id },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true
+      },
     });
 
     if (!category) {
@@ -1075,7 +1105,9 @@ export class CategoriesService {
     // Get product IDs in this category via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: categoryId },
-      select: ['product_id'],
+      select: {
+        product_id: true
+      },
     });
     let product_ids = productCategories.map((pc) => pc.product_id);
 
@@ -1093,7 +1125,9 @@ export class CategoriesService {
     // Get archived products with their vendor info
     const products = await this.productsRepository.find({
       where: { id: In(product_ids), status: ProductStatus.ARCHIVED },
-      relations: ['vendor'],
+      relations: {
+        vendor: true
+      },
     });
 
     let restored = 0;
@@ -1132,7 +1166,9 @@ export class CategoriesService {
   }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: options.id },
-      relations: ['children'],
+      relations: {
+        children: true
+      },
     });
 
     if (!category) {
@@ -1325,15 +1361,19 @@ export class CategoriesService {
         // Get archived products in this category with media
         const archivedProductsRaw = await this.productsRepository.find({
           where: { category_id: cat.id, status: ProductStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'sku',
-            'archived_at',
-            'archived_by',
-          ],
-          relations: ['productMedia', 'productMedia.media'],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            sku: true,
+            archived_at: true,
+            archived_by: true
+          },
+          relations: {
+            productMedia: {
+              media: true
+            }
+          },
         });
 
         // Map products to include image from primary media or first media
@@ -1347,14 +1387,14 @@ export class CategoriesService {
         // Get archived subcategories
         const archivedSubcategories = await this.categoriesRepository.find({
           where: { parent_id: cat.id, status: CategoryStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'image',
-            'archived_at',
-            'archived_by',
-          ],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            image: true,
+            archived_at: true,
+            archived_by: true
+          },
         });
 
         return {
@@ -1389,7 +1429,9 @@ export class CategoriesService {
   ): Promise<{ message: string }> {
     const category = await this.categoriesRepository.findOne({
       where: { id, status: CategoryStatus.ARCHIVED },
-      relations: ['children'],
+      relations: {
+        children: true
+      },
     });
 
     if (!category) {
@@ -1597,7 +1639,9 @@ export class CategoriesService {
   ): Promise<{ category: Category; products: Product[] }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: categoryId },
-      relations: ['parent'],
+      relations: {
+        parent: true
+      },
     });
 
     if (!category) {
@@ -1607,13 +1651,15 @@ export class CategoriesService {
     // Get products via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: categoryId },
-      relations: [
-        'product',
-        'product.vendor',
-        'product.productMedia',
-        'product.productMedia.media',
-        'product.priceGroups',
-      ],
+      relations: {
+        product: {
+          vendor: true,
+
+          productMedia: {
+            media: true
+          }
+        }
+      },
     });
 
     const products = productCategories
@@ -1637,7 +1683,9 @@ export class CategoriesService {
   }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: categoryId },
-      relations: ['parent'],
+      relations: {
+        parent: true
+      },
     });
 
     if (!category) {
@@ -1647,13 +1695,15 @@ export class CategoriesService {
     // Get products via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: categoryId },
-      relations: [
-        'product',
-        'product.vendor',
-        'product.productMedia',
-        'product.productMedia.media',
-        'product.priceGroups',
-      ],
+      relations: {
+        product: {
+          vendor: true,
+
+          productMedia: {
+            media: true
+          }
+        }
+      },
     });
 
     const products = productCategories
@@ -1710,7 +1760,9 @@ export class CategoriesService {
         // Count archived products in this subcategory
         const productCategories = await this.productCategoriesRepository.find({
           where: { category_id: subcat.id },
-          select: ['product_id'],
+          select: {
+            product_id: true
+          },
         });
         const product_ids = productCategories.map((pc) => pc.product_id);
 
