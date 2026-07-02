@@ -9,11 +9,21 @@ import {
   IsIn,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
+import { parseQueryBoolean } from '../../common/utils/query-boolean.util';
 
 export class SearchQueryDto {
   @IsOptional()
   @IsString()
   q?: string = '*';
+
+  @IsOptional()
+  @IsString()
+  locale?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_admin?: boolean;
 
   // ── Text filters ────────────────────────────────────────────────────────────
 
@@ -38,9 +48,29 @@ export class SearchQueryDto {
   brand_id?: number;
 
   @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  brand_ids?: number[];
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   vendor_id?: number;
+
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  vendor_ids?: number[];
 
   /**
    * Filter by a single category ID.
@@ -83,9 +113,14 @@ export class SearchQueryDto {
   // ── Availability ────────────────────────────────────────────────────────────
 
   @IsOptional()
-  @Transform(({ value }: { value: string }) => value === 'true')
+  @Transform(({ value }) => parseQueryBoolean(value))
   @IsBoolean()
   in_stock?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_out_of_stock?: boolean;
 
   // ── Rating filter ────────────────────────────────────────────────────────────
 
@@ -109,6 +144,32 @@ export class SearchQueryDto {
   })
   attrs?: string[];
 
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  attributes_values_ids?: number[];
+
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  specifications_values_ids?: number[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @Max(5)
+  average_rating_min?: number;
+
   // ── Pagination ──────────────────────────────────────────────────────────────
 
   @IsOptional()
@@ -124,6 +185,13 @@ export class SearchQueryDto {
   @Max(100)
   per_page?: number;
 
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
   // ── Sorting ─────────────────────────────────────────────────────────────────
 
   @IsOptional()
@@ -135,12 +203,17 @@ export class SearchQueryDto {
     'rating:desc',
     'created_at:desc',
   ])
-  sort_by?: string = 'popularity_score:desc';
+  sort_by?: string;
 }
 
 export class AutocompleteQueryDto {
   @IsString()
   q: string;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_admin?: boolean;
 
   @IsOptional()
   @Type(() => Number)

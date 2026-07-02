@@ -17,6 +17,7 @@ import {
 import { ReorderVendorsDto } from './dto/reorder-vendors.dto';
 import { Product, ProductStatus } from '../products/entities/product.entity';
 import { FilterProductDto } from '../products/dto/filter-product.dto';
+import { serializePublicVendor } from '../common/serializers/public-entity.serializer';
 import { ProductsService } from '../products/products.service';
 import { R2StorageService } from '../common/services/r2-storage.service';
 import {
@@ -598,18 +599,50 @@ export class VendorsService {
   }
 
   async findAll(): Promise<Vendor[]> {
-    const vendors = await this.vendorRepository.find({
+    return this.vendorRepository.find({
       where: { status: VendorStatus.ACTIVE },
-      relations: {
-        products: true
-      },
       order: { sort_order: 'ASC', created_at: 'DESC' },
     });
-
-    return this.attachVendorCategoryTrees(vendors);
   }
 
-  async findOne(id: number, productFilter?: FilterProductDto): Promise<Vendor> {
+  async findOne(
+    id: number,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Vendor | ReturnType<typeof serializePublicVendor>> {
+    const vendor = await this.ensureVendorExists(id);
+
+    if (!isAdmin) {
+      return serializePublicVendor(vendor);
+    }
+
+    return this.findOneForAdmin(id, productFilter);
+  }
+
+  async findOneBySlug(
+    slug: string,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Vendor | ReturnType<typeof serializePublicVendor>> {
+    const vendor = await this.vendorRepository.findOne({
+      where: { slug },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException(`Vendor with slug ${slug} not found`);
+    }
+
+    if (!isAdmin) {
+      return serializePublicVendor(vendor);
+    }
+
+    return this.findOneBySlugForAdmin(slug, productFilter);
+  }
+
+  private async findOneForAdmin(
+    id: number,
+    productFilter?: FilterProductDto,
+  ): Promise<Vendor> {
     const vendor = await this.ensureVendorExists(id);
 
     const productsResult = await this.productsService.findAll({
@@ -626,7 +659,10 @@ export class VendorsService {
     return vendor;
   }
 
-  async findOneBySlug(slug: string, productFilter?: FilterProductDto): Promise<Vendor> {
+  private async findOneBySlugForAdmin(
+    slug: string,
+    productFilter?: FilterProductDto,
+  ): Promise<Vendor> {
     const vendor = await this.vendorRepository.findOne({
       where: { slug },
     });
@@ -808,7 +844,7 @@ export class VendorsService {
     updateVendorDto: UpdateVendorDto,
     logoUrl?: string,
   ): Promise<Vendor> {
-    const vendor = await this.findOne(id);
+    const vendor = await this.findOneForAdmin(id);
     const oldLogoUrl = vendor.logo;
 
     if (updateVendorDto.name_en && updateVendorDto.name_en !== vendor.name_en) {

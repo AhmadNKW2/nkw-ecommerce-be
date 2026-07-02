@@ -43,6 +43,9 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# Local reset-password credentials
+scripts/reset-password/config.js
+
 # temp directory
 .temp
 .tmp

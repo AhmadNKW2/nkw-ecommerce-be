@@ -12,6 +12,7 @@ import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
 import { FilterBrandDto } from './dto/filter-brand.dto';
 import { FilterProductDto } from '../products/dto/filter-product.dto';
+import { serializePublicBrand } from '../common/serializers/public-entity.serializer';
 import { ProductsService } from '../products/products.service';
 import { Product, ProductStatus } from '../products/entities/product.entity';
 import {
@@ -142,9 +143,6 @@ export class BrandsService {
 
     const [data, total] = await this.brandsRepository.findAndCount({
       where: searchWhere || where,
-      relations: {
-        products: true
-      },
       order: { [sortBy]: sortOrder },
       skip: (page - 1) * limit,
       take: limit,
@@ -161,7 +159,48 @@ export class BrandsService {
     };
   }
 
-  async findOne(id: number, productFilter?: FilterProductDto): Promise<Brand> {
+  async findOne(
+    id: number,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Brand | ReturnType<typeof serializePublicBrand>> {
+    const brand = await this.brandsRepository.findOne({
+      where: { id },
+    });
+    if (!brand) {
+      throw new NotFoundException('Brand not found');
+    }
+
+    if (!isAdmin) {
+      return serializePublicBrand(brand);
+    }
+
+    return this.findOneForAdmin(id, productFilter);
+  }
+
+  async findOneBySlug(
+    slug: string,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Brand | ReturnType<typeof serializePublicBrand>> {
+    const brand = await this.brandsRepository.findOne({
+      where: { slug },
+    });
+    if (!brand) {
+      throw new NotFoundException(`Brand with slug ${slug} not found`);
+    }
+
+    if (!isAdmin) {
+      return serializePublicBrand(brand);
+    }
+
+    return this.findOneBySlugForAdmin(slug, productFilter);
+  }
+
+  private async findOneForAdmin(
+    id: number,
+    productFilter?: FilterProductDto,
+  ): Promise<Brand> {
     const brand = await this.brandsRepository.findOne({
       where: { id },
     });
@@ -181,7 +220,7 @@ export class BrandsService {
     return brand;
   }
 
-  async findOneBySlug(
+  private async findOneBySlugForAdmin(
     slug: string,
     productFilter?: FilterProductDto,
   ): Promise<Brand> {
@@ -209,7 +248,7 @@ export class BrandsService {
     dto: UpdateBrandDto,
     logoUrl?: string,
   ): Promise<Brand> {
-    const brand = await this.findOne(id);
+    const brand = await this.findOneForAdmin(id);
     const oldLogoUrl = brand.logo;
 
     // Check for name conflicts

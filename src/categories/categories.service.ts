@@ -16,6 +16,7 @@ import { CreateCategoryUrlDto } from './dto/create-category-url.dto';
 import { UpdateCategoryUrlDto } from './dto/update-category-url.dto';
 import { FilterCategoryUrlDto } from './dto/filter-category-url.dto';
 import { FilterProductDto } from '../products/dto/filter-product.dto';
+import { serializePublicCategory } from '../common/serializers/public-entity.serializer';
 import {
   RestoreCategoryDto,
   PermanentDeleteCategoryDto,
@@ -475,7 +476,7 @@ export class CategoriesService {
       );
     }
 
-    return this.findOne(savedCategory.id);
+    return this.findOneForAdmin(savedCategory.id);
   }
 
   private async addProductsToCategory(
@@ -671,12 +672,62 @@ export class CategoriesService {
   async findOne(
     id: number,
     productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Category | ReturnType<typeof serializePublicCategory>> {
+    if (!isAdmin) {
+      const category = await this.categoriesRepository.findOne({
+        where: { id },
+        relations: {
+          children: {
+            children: true,
+          },
+        },
+      });
+
+      if (!category) {
+        throw new NotFoundException('Category not found');
+      }
+
+      return serializePublicCategory(category);
+    }
+
+    return this.findOneForAdmin(id, productFilter);
+  }
+
+  async findOneBySlug(
+    slug: string,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Category | ReturnType<typeof serializePublicCategory>> {
+    if (!isAdmin) {
+      const category = await this.categoriesRepository.findOne({
+        where: { slug },
+        relations: {
+          children: {
+            children: true,
+          },
+        },
+      });
+
+      if (!category) {
+        throw new NotFoundException(`Category with slug ${slug} not found`);
+      }
+
+      return serializePublicCategory(category);
+    }
+
+    return this.findOneBySlugForAdmin(slug, productFilter);
+  }
+
+  private async findOneForAdmin(
+    id: number,
+    productFilter?: FilterProductDto,
   ): Promise<Category> {
     const category = await this.categoriesRepository.findOne({
       where: { id },
       relations: {
         parent: true,
-        children: true
+        children: true,
       },
     });
 
@@ -687,7 +738,6 @@ export class CategoriesService {
     const descendantIds = await this.getDescendantIds(category.id);
     const category_ids = [category.id, ...descendantIds];
 
-    // Get products using ProductsService to ensure consistent format
     const productsResult = await this.productsService.findAll({
       ...productFilter,
       categoryId: undefined,
@@ -702,7 +752,7 @@ export class CategoriesService {
     return category;
   }
 
-  async findOneBySlug(
+  private async findOneBySlugForAdmin(
     slug: string,
     productFilter?: FilterProductDto,
   ): Promise<Category> {
@@ -710,7 +760,7 @@ export class CategoriesService {
       where: { slug },
       relations: {
         parent: true,
-        children: true
+        children: true,
       },
     });
 
@@ -721,7 +771,6 @@ export class CategoriesService {
     const descendantIds = await this.getDescendantIds(category.id);
     const category_ids = [category.id, ...descendantIds];
 
-    // Get products using ProductsService to ensure consistent format
     const productsResult = await this.productsService.findAll({
       ...productFilter,
       categoryId: undefined,
@@ -740,7 +789,7 @@ export class CategoriesService {
     id: number,
     updateCategoryDto: UpdateCategoryDto,
   ): Promise<Category> {
-    const category = await this.findOne(id);
+    const category = await this.findOneForAdmin(id);
     const oldImageUrl = category.image;
 
     const { product_changes, attribute_ids, specification_ids, ...updateData } =
@@ -823,7 +872,7 @@ export class CategoriesService {
     }
 
     // Re-fetch to get updated relations
-    return this.findOne(id);
+    return this.findOneForAdmin(id);
   }
 
   // ========== LIFECYCLE MANAGEMENT ==========
@@ -843,28 +892,75 @@ export class CategoriesService {
     }
   }
 
+  private categoryChildrenCache:
+    | { loadedAt: number; childrenByParent: Map<number, number[]> }
+    | null = null;
+
+  private readonly categoryChildrenCacheTtlMs = 5 * 60 * 1000;
+
+  private async getCategoryChildrenByParent(): Promise<Map<number, number[]>> {
+    const now = Date.now();
+    if (
+      this.categoryChildrenCache &&
+      now - this.categoryChildrenCache.loadedAt < this.categoryChildrenCacheTtlMs
+    ) {
+      return this.categoryChildrenCache.childrenByParent;
+    }
+
+    const allCategories = await this.categoriesRepository.find({
+      select: { id: true, parent_id: true },
+    });
+
+    const childrenByParent = new Map<number, number[]>();
+    for (const category of allCategories) {
+      const parentId = category.parent_id ?? 0;
+      const siblings = childrenByParent.get(parentId) ?? [];
+      siblings.push(category.id);
+      childrenByParent.set(parentId, siblings);
+    }
+
+    this.categoryChildrenCache = { loadedAt: now, childrenByParent };
+    return childrenByParent;
+  }
+
   /**
    * Get all descendant category IDs (children, grandchildren, etc.)
    */
-  private async getAllDescendantIds(categoryId: number): Promise<number[]> {
-    const descendants: number[] = [];
+  async expandCategoryIdsWithDescendants(categoryIds: number[]): Promise<number[]> {
+    const normalizedIds = [
+      ...new Set(
+        categoryIds.filter(
+          (id) => Number.isInteger(id) && id > 0,
+        ),
+      ),
+    ];
 
-    const findDescendants = async (parent_id: number) => {
-      const children = await this.categoriesRepository.find({
-        where: { parent_id },
-        select: {
-          id: true
-        },
-      });
+    if (normalizedIds.length === 0) {
+      return [];
+    }
 
-      for (const child of children) {
-        descendants.push(child.id);
-        await findDescendants(child.id);
+    const childrenByParent = await this.getCategoryChildrenByParent();
+    const expanded = new Set<number>(normalizedIds);
+    const queue = [...normalizedIds];
+
+    while (queue.length > 0) {
+      const categoryId = queue.shift()!;
+      const children = childrenByParent.get(categoryId) ?? [];
+
+      for (const childId of children) {
+        if (!expanded.has(childId)) {
+          expanded.add(childId);
+          queue.push(childId);
+        }
       }
-    };
+    }
 
-    await findDescendants(categoryId);
-    return descendants;
+    return Array.from(expanded);
+  }
+
+  private async getAllDescendantIds(categoryId: number): Promise<number[]> {
+    const expanded = await this.expandCategoryIdsWithDescendants([categoryId]);
+    return expanded.filter((id) => id !== categoryId);
   }
 
   /**
@@ -877,7 +973,7 @@ export class CategoriesService {
     archivedCategories: number;
     archivedProducts: number;
   }> {
-    const category = await this.findOne(id);
+    const category = await this.findOneForAdmin(id);
 
     if (category.status === CategoryStatus.ARCHIVED) {
       throw new BadRequestException('Category is already archived');

@@ -740,6 +740,12 @@ export class ProductsController {
             'اشترِ أفضل السماعات اللاسلكية بتقنية إلغاء الضوضاء.',
         },
       },
+      reference_slug_only: {
+        summary: 'Update only the reference slug',
+        value: {
+          reference_slug: 'samsung-s3-essential-d362-curved-monitor',
+        },
+      },
     },
   })
   patch(

@@ -1,10 +1,13 @@
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   BadRequestException,
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
+import type { Cache } from 'cache-manager';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, TableColumn } from 'typeorm';
 import {
@@ -37,7 +40,13 @@ import { createSitePopupSettingsTableDefinition } from './site-popup-settings.ta
 
 @Injectable()
 export class SettingsService implements OnModuleInit {
-  private ensureSchemaPromise: Promise<void> | null = null;
+  private static readonly SEO_SETTINGS_CACHE_KEY = 'settings:seo';
+  private static readonly FEATURE_TOGGLES_CACHE_KEY = 'settings:features';
+
+  private schemaInitialized = false;
+  private schemaInitPromise: Promise<void> | null = null;
+  private seoSettingsCache: SeoSettings | null = null;
+  private featureTogglesCache: ProductFieldToggles | null = null;
 
   constructor(
     @InjectRepository(SeoSettings)
@@ -51,6 +60,7 @@ export class SettingsService implements OnModuleInit {
     @InjectRepository(SitePopupSettings)
     private readonly sitePopupSettingsRepository: Repository<SitePopupSettings>,
     private readonly dataSource: DataSource,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   async onModuleInit() {
@@ -58,6 +68,53 @@ export class SettingsService implements OnModuleInit {
   }
 
   async getSeoSettings(): Promise<SeoSettings> {
+    if (this.seoSettingsCache) {
+      return this.seoSettingsCache;
+    }
+
+    const cached = await this.cacheManager.get<SeoSettings>(
+      SettingsService.SEO_SETTINGS_CACHE_KEY,
+    );
+    if (cached) {
+      this.seoSettingsCache = cached;
+      return cached;
+    }
+
+    const settings = await this.loadSeoSettingsFromDatabase();
+    this.seoSettingsCache = settings;
+    await this.cacheManager.set(
+      SettingsService.SEO_SETTINGS_CACHE_KEY,
+      settings,
+      0,
+    );
+
+    return settings;
+  }
+
+  async updateSeoSettings(updateSeoSettingsDto: UpdateSeoSettingsDto) {
+    const settings = await this.loadSeoSettingsFromDatabase();
+
+    const normalizedPatch = Object.fromEntries(
+      Object.entries(updateSeoSettingsDto).map(([key, value]) => {
+        if (typeof value !== 'string') {
+          return [key, value];
+        }
+
+        const trimmedValue = value.trim();
+        return [key, trimmedValue.length > 0 ? trimmedValue : null];
+      }),
+    );
+
+    Object.assign(settings, normalizedPatch);
+
+    const savedSettings = await this.seoSettingsRepository.save(settings);
+    this.seoSettingsCache = null;
+    await this.cacheManager.del(SettingsService.SEO_SETTINGS_CACHE_KEY);
+
+    return savedSettings;
+  }
+
+  private async loadSeoSettingsFromDatabase(): Promise<SeoSettings> {
     await this.ensureSchemaReady();
 
     const existingSettings = await this.seoSettingsRepository.findOne({
@@ -73,26 +130,57 @@ export class SettingsService implements OnModuleInit {
     return this.seoSettingsRepository.save(defaultSettings);
   }
 
-  async updateSeoSettings(updateSeoSettingsDto: UpdateSeoSettingsDto) {
-    const settings = await this.getSeoSettings();
+  async getProductFieldToggles(): Promise<ProductFieldToggles> {
+    if (this.featureTogglesCache) {
+      return this.featureTogglesCache;
+    }
 
-    const normalizedPatch = Object.fromEntries(
-      Object.entries(updateSeoSettingsDto).map(([key, value]) => {
-        if (typeof value !== 'string') {
-          return [key, value];
-        }
+    const cached = await this.cacheManager.get<ProductFieldToggles>(
+      SettingsService.FEATURE_TOGGLES_CACHE_KEY,
+    );
+    if (cached) {
+      this.featureTogglesCache = cached;
+      return cached;
+    }
 
-        const trimmedValue = value.trim();
-        return [key, trimmedValue.length > 0 ? trimmedValue : null];
-      }),
+    await this.ensureSchemaReady();
+
+    const existingToggles = await this.productFieldTogglesRepository.findOne({
+      where: {},
+      order: { id: 'ASC' },
+    });
+
+    const toggles =
+      existingToggles ??
+      (await this.productFieldTogglesRepository.save(
+        this.productFieldTogglesRepository.create({}),
+      ));
+
+    this.featureTogglesCache = toggles;
+    await this.cacheManager.set(
+      SettingsService.FEATURE_TOGGLES_CACHE_KEY,
+      toggles,
+      0,
     );
 
-    Object.assign(settings, normalizedPatch);
-
-    return this.seoSettingsRepository.save(settings);
+    return toggles;
   }
 
-  async getProductFieldToggles(): Promise<ProductFieldToggles> {
+  async updateProductFieldToggles(
+    updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
+  ): Promise<ProductFieldToggles> {
+    const toggles = await this.loadProductFieldTogglesFromDatabase();
+
+    Object.assign(toggles, updateProductFieldTogglesDto);
+
+    const savedToggles = await this.productFieldTogglesRepository.save(toggles);
+    this.featureTogglesCache = null;
+    await this.cacheManager.del(SettingsService.FEATURE_TOGGLES_CACHE_KEY);
+
+    return savedToggles;
+  }
+
+  private async loadProductFieldTogglesFromDatabase(): Promise<ProductFieldToggles> {
     await this.ensureSchemaReady();
 
     const existingToggles = await this.productFieldTogglesRepository.findOne({
@@ -106,16 +194,6 @@ export class SettingsService implements OnModuleInit {
 
     const defaultToggles = this.productFieldTogglesRepository.create({});
     return this.productFieldTogglesRepository.save(defaultToggles);
-  }
-
-  async updateProductFieldToggles(
-    updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
-  ): Promise<ProductFieldToggles> {
-    const toggles = await this.getProductFieldToggles();
-
-    Object.assign(toggles, updateProductFieldTogglesDto);
-
-    return this.productFieldTogglesRepository.save(toggles);
   }
 
   async getSitePopupSettings(): Promise<SitePopupSettings> {
@@ -372,17 +450,21 @@ export class SettingsService implements OnModuleInit {
   }
 
   private async ensureSchemaReady(): Promise<void> {
-    if (this.ensureSchemaPromise) {
-      return this.ensureSchemaPromise;
+    if (this.schemaInitialized) {
+      return;
     }
 
-    this.ensureSchemaPromise = this.createMissingSchemaArtifacts();
-
-    try {
-      await this.ensureSchemaPromise;
-    } finally {
-      this.ensureSchemaPromise = null;
+    if (!this.schemaInitPromise) {
+      this.schemaInitPromise = this.createMissingSchemaArtifacts()
+        .then(() => {
+          this.schemaInitialized = true;
+        })
+        .finally(() => {
+          this.schemaInitPromise = null;
+        });
     }
+
+    return this.schemaInitPromise;
   }
 
   private async createMissingSchemaArtifacts(): Promise<void> {
@@ -393,6 +475,7 @@ export class SettingsService implements OnModuleInit {
     await this.ensureProductPriceRulesTableExists();
     await this.ensureProductVendorPriceColumnsExist();
     await this.ensureProductMeasurementUnitColumnsExist();
+    await this.ensureProductReferenceSlugColumnExists();
     await this.seedDefaultProductPriceRule();
   }
 
@@ -786,6 +869,30 @@ export class SettingsService implements OnModuleInit {
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('products', missingColumns);
       }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureProductReferenceSlugColumnExists(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (await queryRunner.hasColumn('products', 'reference_slug')) {
+        return;
+      }
+
+      await queryRunner.addColumn(
+        'products',
+        new TableColumn({
+          name: 'reference_slug',
+          type: 'varchar',
+          length: '300',
+          isNullable: true,
+        }),
+      );
     } finally {
       await queryRunner.release();
     }

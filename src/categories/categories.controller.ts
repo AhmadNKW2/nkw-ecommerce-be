@@ -48,6 +48,8 @@ import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { AssignProductsToCategoryDto } from './dto/assign-products.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
+import { shouldReturnAdminEntityDetail } from '../common/utils/catalog-access.util';
 import { imageFileFilter } from '../common/utils/file-upload.util';
 import { R2StorageService } from '../common/services/r2-storage.service';
 import { ApiErrorResponseDto } from '../common/swagger/api-response.dto';
@@ -285,16 +287,31 @@ export class CategoriesController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: number, @Query() filterDto: FilterProductDto) {
-    return this.categoriesService.findOne(id, filterDto);
+  @UseGuards(OptionalJwtAuthGuard)
+  findOne(
+    @Param('id') id: number,
+    @Query() filterDto: FilterProductDto,
+    @Req() req: any,
+  ) {
+    return this.categoriesService.findOne(
+      id,
+      filterDto,
+      shouldReturnAdminEntityDetail(req.user, filterDto),
+    );
   }
 
   @Get('slug/:slug')
+  @UseGuards(OptionalJwtAuthGuard)
   async findOneBySlug(
     @Param('slug') slug: string,
     @Query() filterDto: FilterProductDto,
+    @Req() req: any,
   ) {
-    return this.categoriesService.findOneBySlug(slug, filterDto);
+    return this.categoriesService.findOneBySlug(
+      slug,
+      filterDto,
+      shouldReturnAdminEntityDetail(req.user, filterDto),
+    );
   }
 
   // ========== LIFECYCLE MANAGEMENT ==========

@@ -11,6 +11,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import {
   FilterProductDto,
+  FindAllProductsOptions,
   getCategoryIds,
   getOriginalVendorCategoryId,
   getSingleVendorId,
@@ -35,6 +36,7 @@ import { TagsService } from '../search/tags.service';
 import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
 import { SettingsService } from '../settings/settings.service';
+import { TypesenseService } from '../typesense/typesense.service';
 import {
   hasAdminAccess,
   stripProductPricingFields,
@@ -50,6 +52,7 @@ import {
   hydrateProductMedia,
   hydrateProductsMedia,
 } from './utils/product-media.util';
+import { mapProductToTypesenseDoc } from '../typesense/mappers/product.mapper';
 
 import { Like, Not } from 'typeorm';
 
@@ -154,7 +157,57 @@ export class ProductsService {
     private dataSource: DataSource,
     private readonly tagsService: TagsService,
     private readonly settingsService: SettingsService,
+    private readonly typesenseService: TypesenseService,
   ) {}
+
+  private async syncProductToTypesense(productId: number): Promise<void> {
+    try {
+      const product = await this.productsRepository.findOne({
+        where: { id: productId },
+        relations: {
+          productCategories: true,
+          specifications: true,
+        },
+      });
+
+      if (!product) {
+        await this.typesenseService.deleteProduct(String(productId));
+        return;
+      }
+
+      const attributeValues = await this.dataSource
+        .getRepository(ProductAttributeValue)
+        .find({
+          where: { product_id: productId },
+          select: { attribute_value_id: true },
+        });
+
+      await this.typesenseService.upsertProduct(
+        mapProductToTypesenseDoc(product, {
+          attributeValueIds: attributeValues.map(
+            (entry) => entry.attribute_value_id,
+          ),
+          specificationValueIds: (product.specifications ?? []).map(
+            (entry) => entry.specification_value_id,
+          ),
+        }),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to sync product ${productId} to Typesense: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private async deleteProductFromTypesense(productId: number): Promise<void> {
+    try {
+      await this.typesenseService.deleteProduct(String(productId));
+    } catch (error) {
+      this.logger.warn(
+        `Failed to delete product ${productId} from Typesense: ${getErrorMessage(error)}`,
+      );
+    }
+  }
 
   private async shouldShowSalePricing(): Promise<boolean> {
     try {
@@ -377,6 +430,11 @@ export class ProductsService {
   private normalizeReferenceLink(referenceLink?: string | null): string | null {
     const normalizedReferenceLink = referenceLink?.trim();
     return normalizedReferenceLink ? normalizedReferenceLink : null;
+  }
+
+  private normalizeReferenceSlug(referenceSlug?: string | null): string | null {
+    const normalizedReferenceSlug = referenceSlug?.trim();
+    return normalizedReferenceSlug ? normalizedReferenceSlug : null;
   }
 
   private async ensureReferenceLinkIsUnique(
@@ -1276,6 +1334,7 @@ export class ProductsService {
         long_description_en: dto.long_description_en,
         long_description_ar: dto.long_description_ar,
         reference_link: normalizedReferenceLink,
+        reference_slug: this.normalizeReferenceSlug(dto.reference_slug),
         category_id: dto.category_ids?.[0],
         vendor_id: dto.vendor_id,
         original_vendor_categories: originalVendorCategories,
@@ -1352,6 +1411,7 @@ export class ProductsService {
 
       // Return the complete product (admin context — include out-of-stock rows)
       const result = await this.findOne(savedProduct.id, true);
+      await this.syncProductToTypesense(savedProduct.id);
 
       return {
         product: result,
@@ -1371,7 +1431,7 @@ export class ProductsService {
     }
   }
 
-  async findAll(filterDto: FilterProductDto, isAdmin = false) {
+  async findAll(filterDto: FindAllProductsOptions, isAdmin = false) {
     const {
       page = 1,
       limit = 10,
@@ -1696,7 +1756,9 @@ export class ProductsService {
     }
 
     // Count (fast because there are no row-exploding joins)
-    const total = await baseQuery.getCount();
+    const total = filterDto.skipCount
+      ? (filterDto.knownTotal ?? 0)
+      : await baseQuery.getCount();
 
     // Fetch page IDs (fast)
     const pageQuery = baseQuery.clone().select('product.id', 'id');
@@ -1708,6 +1770,8 @@ export class ProductsService {
         'effective_price',
       );
       pageQuery.orderBy('effective_price', sortOrder);
+    } else if (filterDto.randomBrowse) {
+      pageQuery.orderBy('RANDOM()');
     } else {
       pageQuery.orderBy(`product.${sortBy}`, sortOrder);
     }
@@ -1720,6 +1784,18 @@ export class ProductsService {
     const ids = idRows
       .map((r) => Number(r.id))
       .filter((id) => !Number.isNaN(id));
+
+    if (filterDto.idsOnly) {
+      return {
+        data: ids.map((id) => ({ id })),
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    }
 
     if (ids.length === 0) {
       return {
@@ -1734,6 +1810,19 @@ export class ProductsService {
     }
 
     // Load full relations only for products in this page
+    const randomBrowse = Boolean(filterDto.randomBrowse);
+    const productQuery = this.productsRepository
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
+      .leftJoinAndSelect('product.vendor', 'vendor')
+      .leftJoinAndSelect('product.createdByUser', 'createdByUser')
+      .where('product.id IN (:...ids)', { ids });
+
+    if (!randomBrowse) {
+      productQuery.orderBy(`product.${sortBy}`, sortOrder);
+    }
+
     const [
       data,
       productCategories,
@@ -1742,15 +1831,7 @@ export class ProductsService {
       attributeValues,
       specifications,
     ] = await Promise.all([
-      this.productsRepository
-        .createQueryBuilder('product')
-        .leftJoinAndSelect('product.category', 'category')
-        .leftJoinAndSelect('product.brand', 'brand')
-        .leftJoinAndSelect('product.vendor', 'vendor')
-        .leftJoinAndSelect('product.createdByUser', 'createdByUser')
-        .where('product.id IN (:...ids)', { ids })
-        .orderBy(`product.${sortBy}`, sortOrder)
-        .getMany(),
+      productQuery.getMany(),
       this.productCategoriesRepository.find({
         where: { product_id: In(ids) },
         relations: {
@@ -1816,9 +1897,20 @@ export class ProductsService {
 
     // Transform each product using the detailed view structure
     const showSalePricing = isAdmin ? true : await this.shouldShowSalePricing();
-    const transformedData = data.map((product) =>
+    let transformedData = data.map((product) =>
       this.transformProductDetail(product, isAdmin, showSalePricing),
     );
+
+    if (randomBrowse) {
+      const byId = new Map(
+        transformedData.map((product) => [Number(product.id), product]),
+      );
+      transformedData = ids
+        .map((id) => byId.get(id))
+        .filter((product): product is NonNullable<typeof product> =>
+          Boolean(product),
+        );
+    }
 
     return {
       data: transformedData,
@@ -1829,6 +1921,50 @@ export class ProductsService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async findPrimaryImageUrlsByProductIds(
+    productIds: number[],
+  ): Promise<Map<number, string>> {
+    if (productIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.dataSource
+      .getRepository(ProductMedia)
+      .createQueryBuilder('product_media')
+      .innerJoin('product_media.media', 'media')
+      .select([
+        'product_media.product_id AS product_id',
+        'media.url AS url',
+        'product_media.is_primary AS is_primary',
+        'product_media.sort_order AS sort_order',
+      ])
+      .where('product_media.product_id IN (:...productIds)', { productIds })
+      .orderBy('product_media.is_primary', 'DESC')
+      .addOrderBy('product_media.sort_order', 'ASC')
+      .addOrderBy('media.id', 'ASC')
+      .getRawMany<{
+        product_id: number | string;
+        url: string;
+        is_primary: boolean | string | number;
+        sort_order: number | string;
+      }>();
+
+    const imageUrlsByProductId = new Map<number, string>();
+    for (const row of rows) {
+      const productId = Number(row.product_id);
+      const imageUrl = typeof row.url === 'string' ? row.url.trim() : '';
+      if (!Number.isInteger(productId) || productId <= 0 || !imageUrl) {
+        continue;
+      }
+
+      if (!imageUrlsByProductId.has(productId)) {
+        imageUrlsByProductId.set(productId, imageUrl);
+      }
+    }
+
+    return imageUrlsByProductId;
   }
 
   /**
@@ -2462,6 +2598,12 @@ export class ProductsService {
         );
       }
 
+      if (dto.reference_slug !== undefined) {
+        basicInfoChanges.reference_slug = this.normalizeReferenceSlug(
+          dto.reference_slug,
+        );
+      }
+
       if (
         dto.quantity !== undefined ||
         dto.is_out_of_stock !== undefined
@@ -2556,6 +2698,7 @@ export class ProductsService {
 
       // Return updated product (admin context — out-of-stock products are hidden from public findOne)
       const updatedProduct = await this.findOne(id, true);
+      await this.syncProductToTypesense(id);
 
       return {
         product: updatedProduct,
@@ -2817,6 +2960,7 @@ export class ProductsService {
     await this.cartItemsRepository.delete({ product_id: id });
 
     await this.productsRepository.remove(product);
+    await this.deleteProductFromTypesense(id);
 
     return { message: `Product "${product.name_en}" permanently deleted` };
   }
@@ -2872,6 +3016,12 @@ export class ProductsService {
       }
 
       await queryRunner.commitTransaction();
+
+      if (productIds.length > 0) {
+        await Promise.all(
+          productIds.map((productId) => this.deleteProductFromTypesense(productId)),
+        );
+      }
 
       return {
         message:

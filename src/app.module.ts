@@ -33,6 +33,7 @@ import { NotesModule } from './notes/notes.module';
 import { PartnersModule } from './partners/partners.module';
 import { SpecificationsModule } from './specifications/specifications.module';
 import { SettingsModule } from './settings/settings.module';
+import { TypesenseModule } from './typesense/typesense.module';
 
 @Module({
   imports: [
@@ -86,6 +87,7 @@ import { SettingsModule } from './settings/settings.module';
     PartnersModule,
     SpecificationsModule,
     SettingsModule,
+    TypesenseModule,
   ],
 })
 export class AppModule implements NestModule {

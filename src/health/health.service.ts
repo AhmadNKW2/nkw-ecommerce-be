@@ -1,10 +1,14 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
+import { TypesenseService } from '../typesense/typesense.service';
 
 @Injectable()
 export class HealthService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly typesenseService: TypesenseService,
+  ) {}
 
   async check() {
     const timestamp = new Date().toISOString();
@@ -37,5 +41,23 @@ export class HealthService {
         },
       });
     }
+  }
+
+  async checkTypesense() {
+    const result = await this.typesenseService.healthCheck();
+
+    if (result.status === 'down') {
+      throw new ServiceUnavailableException({
+        status: 'unavailable',
+        timestamp: new Date().toISOString(),
+        typesense: result,
+      });
+    }
+
+    return {
+      status: result.status === 'disabled' ? 'ok' : 'ok',
+      timestamp: new Date().toISOString(),
+      typesense: result,
+    };
   }
 }

@@ -98,6 +98,15 @@ export class UpdateProductDto {
   @IsOptional()
   reference_link?: string;
 
+  @ApiPropertyOptional({
+    example: 'wireless-headphones-pro',
+    description: 'Optional slug from the source/reference product URL',
+  })
+  @IsString()
+  @MaxLength(300)
+  @IsOptional()
+  reference_slug?: string;
+
   @ApiProperty({ example: [5, 12, 14], description: 'Updated array of category IDs' })
   @IsArray()
   @IsNumber({}, { each: true })

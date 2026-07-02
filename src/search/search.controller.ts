@@ -1,10 +1,12 @@
-import { Controller, Get, Query, ValidationPipe } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Req } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
 import {
   SearchResponseDto,
   AutocompleteResponseDto,
 } from './dto/search-response.dto';
+import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
+import { isCatalogAdminUser } from '../common/utils/catalog-access.util';
 
 @Controller('search')
 export class SearchController {
@@ -15,11 +17,15 @@ export class SearchController {
    * GET /search?q=iphone&brand=Apple&category=Phones&page=1&per_page=20
    */
   @Get()
+  @UseGuards(OptionalJwtAuthGuard)
   search(
-    @Query(new ValidationPipe({ transform: true, whitelist: true }))
-    query: SearchQueryDto,
+    @Query() query: SearchQueryDto,
+    @Req() req: any,
   ): Promise<any> {
-    return this.searchService.search(query);
+    const isAdminUser = isCatalogAdminUser(req.user);
+    const fullResponse = isAdminUser && query.is_admin === true;
+
+    return this.searchService.search(query, isAdminUser, fullResponse);
   }
 
   /**
@@ -27,10 +33,13 @@ export class SearchController {
    * GET /search/autocomplete?q=iph&per_page=8
    */
   @Get('autocomplete')
+  @UseGuards(OptionalJwtAuthGuard)
   autocomplete(
-    @Query(new ValidationPipe({ transform: true, whitelist: true }))
-    query: AutocompleteQueryDto,
+    @Query() query: AutocompleteQueryDto,
+    @Req() req: any,
   ): Promise<AutocompleteResponseDto> {
-    return this.searchService.autocomplete(query);
+    const isAdminUser = isCatalogAdminUser(req.user);
+
+    return this.searchService.autocomplete(query, isAdminUser);
   }
 }

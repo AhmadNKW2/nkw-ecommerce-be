@@ -1,3 +1,4 @@
+import { config as loadEnv } from 'dotenv';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -9,6 +10,9 @@ import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import cookieParser from 'cookie-parser';
 import { types } from 'pg';
+
+// Prefer project .env over stale shell env (e.g. TYPESENSE_ENABLED=false in terminal).
+loadEnv({ override: true });
 
 // Force the pg driver to treat TIMESTAMP WITHOUT TIME ZONE (OID 1114) as UTC.
 // Without this, the pg driver uses the Node/system local timezone to parse bare

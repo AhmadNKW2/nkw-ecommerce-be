@@ -29,6 +29,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { imageFileFilter } from '../common/utils/file-upload.helper';
 import { R2StorageService } from '../common/services/r2-storage.service';
+import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
+import { shouldReturnAdminEntityDetail } from '../common/utils/catalog-access.util';
 
 @Controller('brands')
 export class BrandsController {
@@ -76,16 +78,31 @@ export class BrandsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Query() filterDto: FilterProductDto) {
-    return this.brandsService.findOne(+id, filterDto);
+  @UseGuards(OptionalJwtAuthGuard)
+  findOne(
+    @Param('id') id: string,
+    @Query() filterDto: FilterProductDto,
+    @Req() req: any,
+  ) {
+    return this.brandsService.findOne(
+      +id,
+      filterDto,
+      shouldReturnAdminEntityDetail(req.user, filterDto),
+    );
   }
 
   @Get('slug/:slug')
+  @UseGuards(OptionalJwtAuthGuard)
   findOneBySlug(
     @Param('slug') slug: string,
     @Query() filterDto: FilterProductDto,
+    @Req() req: any,
   ) {
-    return this.brandsService.findOneBySlug(slug, filterDto);
+    return this.brandsService.findOneBySlug(
+      slug,
+      filterDto,
+      shouldReturnAdminEntityDetail(req.user, filterDto),
+    );
   }
 
   @Patch(':id')

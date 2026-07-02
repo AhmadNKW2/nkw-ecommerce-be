@@ -42,6 +42,8 @@ import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { imageFileFilter } from '../common/utils/file-upload.helper';
 import { R2StorageService } from '../common/services/r2-storage.service';
+import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
+import { shouldReturnAdminEntityDetail } from '../common/utils/catalog-access.util';
 import { CreateVendorCategoryDto } from './dto/create-vendor-category.dto';
 import {
   ReplaceVendorCategoriesTreeDto,
@@ -390,13 +392,31 @@ export class VendorsController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string, @Query() filterDto: FilterProductDto) {
-    return this.vendorsService.findOne(+id, filterDto);
+  @UseGuards(OptionalJwtAuthGuard)
+  findOne(
+    @Param('id') id: string,
+    @Query() filterDto: FilterProductDto,
+    @Req() req: any,
+  ) {
+    return this.vendorsService.findOne(
+      +id,
+      filterDto,
+      shouldReturnAdminEntityDetail(req.user, filterDto),
+    );
   }
 
   @Get('slug/:slug')
-  findOneBySlug(@Param('slug') slug: string, @Query() filterDto: FilterProductDto) {
-    return this.vendorsService.findOneBySlug(slug, filterDto);
+  @UseGuards(OptionalJwtAuthGuard)
+  findOneBySlug(
+    @Param('slug') slug: string,
+    @Query() filterDto: FilterProductDto,
+    @Req() req: any,
+  ) {
+    return this.vendorsService.findOneBySlug(
+      slug,
+      filterDto,
+      shouldReturnAdminEntityDetail(req.user, filterDto),
+    );
   }
 
   @Patch(':id')

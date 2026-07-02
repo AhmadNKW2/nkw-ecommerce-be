@@ -9,4 +9,9 @@ export class HealthController {
   async getHealth() {
     return this.healthService.check();
   }
+
+  @Get('typesense')
+  async getTypesenseHealth() {
+    return this.healthService.checkTypesense();
+  }
 }

@@ -41,6 +41,11 @@ describe('SettingsService', () => {
     create: jest.Mock;
     save: jest.Mock;
   };
+  let cacheManager: {
+    get: jest.Mock;
+    set: jest.Mock;
+    del: jest.Mock;
+  };
   let dataSource: {
     createQueryRunner: jest.Mock;
     transaction: jest.Mock;
@@ -87,6 +92,12 @@ describe('SettingsService', () => {
       save: jest.fn(),
     };
 
+    cacheManager = {
+      get: jest.fn().mockResolvedValue(undefined),
+      set: jest.fn().mockResolvedValue(undefined),
+      del: jest.fn().mockResolvedValue(undefined),
+    };
+
     transactionProductRepository = {
       createQueryBuilder: jest.fn(),
       update: jest.fn().mockResolvedValue(undefined),
@@ -108,6 +119,7 @@ describe('SettingsService', () => {
       productFieldTogglesRepository as never,
       sitePopupSettingsRepository as never,
       dataSource as unknown as DataSource,
+      cacheManager as never,
     );
   });
 

@@ -115,6 +115,9 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   reference_link: string | null;
 
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  reference_slug: string | null;
+
   @Column({
     type: 'enum',
     enum: ProductStatus,
