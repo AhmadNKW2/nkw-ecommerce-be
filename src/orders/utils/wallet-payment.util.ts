@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PaymentMethod, PaymentStatus } from '../entities/order.entity';
+import { PaymentMethod } from '../entities/order.entity';
 
 type ResolveWalletPaymentInput = {
   totalAmount: number;
@@ -9,7 +9,6 @@ type ResolveWalletPaymentInput = {
 
 export type WalletPaymentResolution = {
   paymentMethod: PaymentMethod;
-  paymentStatus: PaymentStatus;
   walletAppliedAmount: number;
   remainingCashAmount: number;
 };
@@ -53,10 +52,6 @@ export function resolveWalletPayment(
 
   return {
     paymentMethod,
-    paymentStatus:
-      paymentMethod === PaymentMethod.WALLET
-        ? PaymentStatus.PAID
-        : PaymentStatus.PENDING,
     walletAppliedAmount,
     remainingCashAmount,
   };

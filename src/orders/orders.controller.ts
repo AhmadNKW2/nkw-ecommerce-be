@@ -7,12 +7,15 @@ import {
   UseGuards,
   Request,
   Patch,
+  Delete,
   Query,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { FilterOrderDto } from './dto/filter-order.dto';
 import { UpdateOrderItemsCostDto } from './dto/update-order-items-cost.dto';
+import { AdminCreateOrderDto } from './dto/admin-create-order.dto';
+import { UpdateOrderDto } from './dto/update-order.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -27,6 +30,13 @@ export class OrdersController {
   @UseGuards(OptionalJwtAuthGuard)
   create(@Request() req, @Body() createOrderDto: CreateOrderDto) {
     return this.ordersService.create(req.user ?? null, createOrderDto);
+  }
+
+  @Post('admin')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  createByAdmin(@Body() dto: AdminCreateOrderDto) {
+    return this.ordersService.createByAdmin(dto);
   }
 
   @Get('admin')
@@ -61,6 +71,13 @@ export class OrdersController {
     return this.ordersService.updateStatus(+id, status);
   }
 
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  update(@Param('id') id: string, @Body() dto: UpdateOrderDto) {
+    return this.ordersService.update(+id, dto);
+  }
+
   @Patch(':id/items/cost')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -69,5 +86,12 @@ export class OrdersController {
     @Body() dto: UpdateOrderItemsCostDto,
   ) {
     return this.ordersService.updateItemsCost(+id, dto);
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  remove(@Param('id') id: string) {
+    return this.ordersService.remove(+id);
   }
 }

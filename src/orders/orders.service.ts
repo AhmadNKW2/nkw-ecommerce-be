@@ -10,17 +10,19 @@ import { Repository, DataSource, QueryRunner, TableColumn } from 'typeorm';
 import {
   Order,
   OrderStatus,
-  PaymentMethod,
-  PaymentStatus,
 } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
+import { OrderStatusHistory } from './entities/order-status-history.entity';
 import { Product } from '../products/entities/product.entity';
 import { CouponsService } from '../coupons/coupons.service';
 import { WalletService } from '../wallet/wallet.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { FilterOrderDto } from './dto/filter-order.dto';
 import { UpdateOrderItemsCostDto } from './dto/update-order-items-cost.dto';
+import { AdminCreateOrderDto } from './dto/admin-create-order.dto';
+import { UpdateOrderDto } from './dto/update-order.dto';
 import { User } from '../users/entities/user.entity';
+import { hydrateProductMedia, getPrimaryMediaUrl } from '../products/utils/product-media.util';
 import { TransactionSource } from '../wallet/entities/wallet-transaction.entity';
 import { CartService } from '../cart/cart.service';
 import { ProductsService } from '../products/products.service';
@@ -69,6 +71,8 @@ export class OrdersService implements OnModuleInit {
     private ordersRepository: Repository<Order>,
     @InjectRepository(OrderItem)
     private orderItemsRepository: Repository<OrderItem>,
+    @InjectRepository(OrderStatusHistory)
+    private orderStatusHistoryRepository: Repository<OrderStatusHistory>,
     private couponsService: CouponsService,
     private walletService: WalletService,
     private cartService: CartService,
@@ -86,13 +90,101 @@ export class OrdersService implements OnModuleInit {
       return this.ensureSchemaPromise;
     }
 
-    this.ensureSchemaPromise = this.ensureWalletPaymentColumnsExist();
+    this.ensureSchemaPromise = Promise.all([
+      this.ensureWalletPaymentColumnsExist(),
+      this.ensureOrderStatusHistoryTableExists(),
+      this.ensureObsoleteOrderStatusesRemoved(),
+    ]).then(() => undefined);
 
     try {
       await this.ensureSchemaPromise;
     } finally {
       this.ensureSchemaPromise = null;
     }
+  }
+
+  private async ensureObsoleteOrderStatusesRemoved(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      await queryRunner.query(`
+        UPDATE orders SET status = 'pending' WHERE status::text IN ('shipped', 'processing')
+      `);
+      await queryRunner.query(`
+        UPDATE orders SET status = 'refunded' WHERE status::text = 'returned'
+      `);
+
+      if (await queryRunner.hasTable('order_status_history')) {
+        await queryRunner.query(`
+          UPDATE order_status_history SET status = 'pending' WHERE status IN ('shipped', 'processing')
+        `);
+        await queryRunner.query(`
+          UPDATE order_status_history SET status = 'refunded' WHERE status = 'returned'
+        `);
+      }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureOrderStatusHistoryTableExists(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (await queryRunner.hasTable('order_status_history')) {
+        return;
+      }
+
+      await queryRunner.query(`
+        CREATE TABLE IF NOT EXISTS order_status_history (
+          id SERIAL PRIMARY KEY,
+          "orderId" integer NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+          status varchar(30) NOT NULL,
+          note character varying,
+          "changedBy" character varying,
+          "createdAt" timestamp without time zone NOT NULL DEFAULT now()
+        );
+      `);
+      await queryRunner.query(`
+        CREATE INDEX IF NOT EXISTS idx_order_status_history_order_id
+        ON order_status_history ("orderId");
+      `);
+
+      // Backfill history for orders created before this table existed.
+      await queryRunner.query(`
+        INSERT INTO order_status_history ("orderId", status, note, "changedBy", "createdAt")
+        SELECT id, 'pending', 'Order placed', 'system', "createdAt" FROM orders
+        WHERE id NOT IN (SELECT DISTINCT "orderId" FROM order_status_history);
+      `);
+      await queryRunner.query(`
+        INSERT INTO order_status_history ("orderId", status, note, "changedBy", "createdAt")
+        SELECT id, status, 'Current status', 'system', "updatedAt" FROM orders
+        WHERE status <> 'pending';
+      `);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async recordStatusHistory(
+    orderId: number,
+    status: OrderStatus,
+    note?: string,
+    entityManager?: QueryRunner['manager'],
+  ): Promise<void> {
+    const repo = entityManager
+      ? entityManager.getRepository(OrderStatusHistory)
+      : this.orderStatusHistoryRepository;
+    await repo.insert({
+      orderId,
+      status,
+      note,
+      changedBy: 'admin',
+    });
   }
 
   private async ensureWalletPaymentColumnsExist(): Promise<void> {
@@ -349,7 +441,6 @@ export class OrdersService implements OnModuleInit {
         billingAddress:
           createOrderDto.billingAddress || createOrderDto.shippingAddress,
         paymentMethod: walletPayment.paymentMethod,
-        paymentStatus: walletPayment.paymentStatus,
         walletAppliedAmount: walletPayment.walletAppliedAmount,
         notes: createOrderDto.notes,
       });
@@ -371,6 +462,13 @@ export class OrdersService implements OnModuleInit {
         });
         await queryRunner.manager.save(OrderItem, orderItem);
       }
+
+      await this.recordStatusHistory(
+        savedOrder.id,
+        OrderStatus.PENDING,
+        'Order placed',
+        queryRunner.manager,
+      );
 
       // 7. Record Coupon Usage
       if (couponId && user) {
@@ -411,31 +509,250 @@ export class OrdersService implements OnModuleInit {
     }
   }
 
+  /**
+   * Admin-facing order creation. Allows an admin to build an order on behalf
+   * of an existing customer (by userId) or a guest, with explicit control
+   * over price overrides, payment/status, and shipping cost.
+   */
+  async createByAdmin(dto: AdminCreateOrderDto) {
+    await this.ensureSchemaReady();
+
+    let targetUser: User | null = null;
+    if (dto.userId) {
+      targetUser = await this.dataSource
+        .getRepository(User)
+        .findOne({ where: { id: dto.userId } });
+      if (!targetUser) {
+        throw new NotFoundException(`Customer #${dto.userId} not found`);
+      }
+    }
+
+    if (!dto.items || dto.items.length === 0) {
+      throw new BadRequestException('An order must contain at least one item');
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      let subtotalAmount = 0;
+      const orderItemsToCreate: any[] = [];
+
+      const sortedItems = [...dto.items].sort((a, b) => {
+        if (a.productId !== b.productId) {
+          return a.productId - b.productId;
+        }
+        return (a.variantId || 0) - (b.variantId || 0);
+      });
+
+      for (const itemDto of sortedItems) {
+        const product = await queryRunner.manager.findOne(Product, {
+          where: { id: itemDto.productId },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!product) {
+          throw new NotFoundException(`Product #${itemDto.productId} not found`);
+        }
+
+        const availableQuantity = Number(product.quantity ?? 0);
+        if (availableQuantity < itemDto.quantity) {
+          throw new BadRequestException(
+            `Insufficient stock for product ${product.name_en}`,
+          );
+        }
+
+        const unitPrice =
+          itemDto.price != null
+            ? Number(itemDto.price)
+            : product.sale_price !== null && Number(product.sale_price) > 0
+              ? Number(product.sale_price)
+              : Number(product.price);
+
+        const itemTotal = unitPrice * itemDto.quantity;
+        subtotalAmount += itemTotal;
+
+        orderItemsToCreate.push({
+          product,
+          variantId: itemDto.variantId ?? null,
+          vendorId: product.vendor_id,
+          quantity: itemDto.quantity,
+          price: unitPrice,
+          cost: itemDto.cost ?? product.cost ?? 0,
+          totalPrice: itemTotal,
+          productSnapshot: {
+            name_en: product.name_en,
+            name_ar: product.name_ar,
+            sku: product.sku,
+          },
+        });
+
+        product.quantity = availableQuantity - itemDto.quantity;
+        if (product.quantity === 0) {
+          product.is_out_of_stock = true;
+        }
+        await queryRunner.manager.save(Product, product);
+      }
+
+      const taxAmount = 0;
+      const shippingAmount =
+        dto.shippingAmount !== undefined
+          ? Number(dto.shippingAmount)
+          : calculateOrderShippingAmount(
+              subtotalAmount,
+              await this.settingsService.getSeoSettings(),
+            );
+      const discountAmount = Number(dto.discountAmount ?? 0);
+      const totalAmount = subtotalAmount + taxAmount + shippingAmount - discountAmount;
+
+      if (totalAmount < 0) {
+        throw new BadRequestException('Total amount cannot be negative');
+      }
+
+      const order = this.ordersRepository.create({
+        userId: targetUser?.id ?? null,
+        status: dto.status ?? OrderStatus.PENDING,
+        subtotalAmount,
+        taxAmount,
+        shippingAmount,
+        discountAmount,
+        totalAmount,
+        shippingAddress: dto.shippingAddress,
+        billingAddress: dto.billingAddress || dto.shippingAddress,
+        paymentMethod: dto.paymentMethod,
+        walletAppliedAmount: 0,
+        notes: dto.notes,
+        trackingNumber: dto.trackingNumber,
+        ...(dto.orderDate ? { createdAt: new Date(dto.orderDate) } : {}),
+      });
+
+      const savedOrder = await queryRunner.manager.save(Order, order);
+
+      for (const itemData of orderItemsToCreate) {
+        const orderItem = this.orderItemsRepository.create({
+          orderId: savedOrder.id,
+          productId: itemData.product.id,
+          variantId: itemData.variantId,
+          vendorId: itemData.vendorId,
+          quantity: itemData.quantity,
+          price: itemData.price,
+          cost: itemData.cost,
+          totalPrice: itemData.totalPrice,
+          productSnapshot: itemData.productSnapshot,
+        });
+        await queryRunner.manager.save(OrderItem, orderItem);
+      }
+
+      await this.recordStatusHistory(
+        savedOrder.id,
+        savedOrder.status,
+        'Order created by admin',
+        queryRunner.manager,
+      );
+
+      await queryRunner.commitTransaction();
+
+      return this.findOne(savedOrder.id);
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * Admin-facing general order update: shipping/billing address, notes,
+   * tracking number, payment method/status, and status. Status transitions
+   * to cancelled/refunded (and their stock/wallet side effects) are delegated
+   * to the existing specialized handlers.
+   */
+  async update(id: number, dto: UpdateOrderDto) {
+    const existingOrder = await this.findOne(id);
+
+    if (dto.status && dto.status !== existingOrder.status) {
+      if (dto.status === OrderStatus.CANCELLED || dto.status === OrderStatus.REFUNDED) {
+        await this.processCancellation(existingOrder, dto.status);
+      } else {
+        await this.updateStatus(id, dto.status);
+      }
+    }
+
+    const fieldsToUpdate: Record<string, any> = {};
+    if (dto.shippingAddress !== undefined) {
+      fieldsToUpdate.shippingAddress = dto.shippingAddress;
+    }
+    if (dto.billingAddress !== undefined) {
+      fieldsToUpdate.billingAddress = dto.billingAddress;
+    }
+    if (dto.notes !== undefined) {
+      fieldsToUpdate.notes = dto.notes;
+    }
+    if (dto.trackingNumber !== undefined) {
+      fieldsToUpdate.trackingNumber = dto.trackingNumber;
+    }
+    if (dto.orderDate !== undefined) {
+      fieldsToUpdate.createdAt = new Date(dto.orderDate);
+    }
+    if (dto.paymentMethod !== undefined) {
+      fieldsToUpdate.paymentMethod = dto.paymentMethod;
+    }
+    if (Object.keys(fieldsToUpdate).length > 0) {
+      await this.ordersRepository.update(id, fieldsToUpdate);
+    }
+
+    return this.findOne(id);
+  }
+
+  /**
+   * Attach a resolved `image` URL to each order item's product by hydrating
+   * the productMedia -> media relation chain (loaded via `attachOrderItemImages`
+   * relations/joins). Mutates and returns the same order.
+   */
+  private attachOrderImages(order: Order): Order {
+    order.items?.forEach((item) => {
+      if (item.product) {
+        const hydrated = hydrateProductMedia(item.product as any, true);
+        (item.product as any).image = getPrimaryMediaUrl(hydrated as any) ?? null;
+      }
+    });
+    return order;
+  }
+
   async findOne(id: number) {
     const order = await this.ordersRepository.findOne({
       where: { id },
       relations: {
         items: {
-          product: true
+          product: {
+            productMedia: { media: true },
+          },
         },
-
-        user: true
+        user: true,
+        statusHistory: true,
+      },
+      order: {
+        statusHistory: { createdAt: 'ASC' },
       },
     });
     if (!order) throw new NotFoundException('Order not found');
-    return order;
+    return this.attachOrderImages(order);
   }
 
   async findAll(userId: number) {
-    return this.ordersRepository.find({
+    const orders = await this.ordersRepository.find({
       where: { userId },
       order: { createdAt: 'DESC' },
       relations: {
         items: {
-          product: true
-        }
+          product: {
+            productMedia: { media: true },
+          },
+        },
       },
     });
+    return orders.map((order) => this.attachOrderImages(order));
   }
 
   async findAllAdmin(filterDto: FilterOrderDto) {
@@ -447,6 +764,8 @@ export class OrdersService implements OnModuleInit {
       .leftJoinAndSelect('order.user', 'user')
       .leftJoinAndSelect('order.items', 'items')
       .leftJoinAndSelect('items.product', 'product')
+      .leftJoinAndSelect('product.productMedia', 'productMedia')
+      .leftJoinAndSelect('productMedia.media', 'media')
       .skip(skip)
       .take(limit)
       .orderBy('order.createdAt', 'DESC');
@@ -466,7 +785,8 @@ export class OrdersService implements OnModuleInit {
       );
     }
 
-    const [data, total] = await query.getManyAndCount();
+    const [rawData, total] = await query.getManyAndCount();
+    const data = rawData.map((order) => this.attachOrderImages(order));
 
     return {
       data,
@@ -517,20 +837,9 @@ export class OrdersService implements OnModuleInit {
 
       order.status = status;
 
-      if (
-        status === OrderStatus.DELIVERED &&
-        order.paymentMethod === PaymentMethod.COD
-      ) {
-        order.paymentStatus = PaymentStatus.PAID;
-      }
-
       await queryRunner.manager.save(Order, order);
 
-      if (
-        status === OrderStatus.DELIVERED &&
-        order.userId &&
-        order.paymentStatus === PaymentStatus.PAID
-      ) {
+      if (status === OrderStatus.DELIVERED && order.userId) {
         await this.walletService.applyCashback(
           order.userId,
           Number(order.totalAmount),
@@ -538,6 +847,8 @@ export class OrdersService implements OnModuleInit {
           queryRunner.manager,
         );
       }
+
+      await this.recordStatusHistory(id, status, undefined, queryRunner.manager);
 
       await queryRunner.commitTransaction();
 
@@ -569,6 +880,66 @@ export class OrdersService implements OnModuleInit {
 
     await this.orderItemsRepository.save(toSave);
     return this.findOne(orderId);
+  }
+
+  /**
+   * Permanently remove an order. Restores stock (and refunds any wallet
+   * amount applied) unless the order was already cancelled/refunded, since
+   * those side effects were already handled at that point.
+   */
+  async remove(id: number) {
+    const order = await this.findOne(id);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const alreadyReconciled =
+        order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED;
+
+      if (!alreadyReconciled) {
+        for (const item of order.items) {
+          if (item.productId) {
+            const product = await queryRunner.manager.findOne(Product, {
+              where: { id: item.productId },
+              lock: { mode: 'pessimistic_write' },
+            });
+
+            if (product) {
+              product.quantity = Number(product.quantity ?? 0) + item.quantity;
+              product.is_out_of_stock = false;
+              await queryRunner.manager.save(Product, product);
+            }
+          }
+        }
+
+        const walletAppliedAmount = Number(order.walletAppliedAmount ?? 0);
+        if (walletAppliedAmount > 0 && order.userId) {
+          await this.walletService.addFunds(
+            order.userId,
+            {
+              amount: walletAppliedAmount,
+              source: TransactionSource.REFUND,
+              description: `Refund for deleted Order #${order.id}`,
+            },
+            queryRunner.manager,
+          );
+        }
+      }
+
+      await queryRunner.manager.delete(OrderItem, { orderId: id });
+      await queryRunner.manager.delete(Order, id);
+
+      await queryRunner.commitTransaction();
+
+      return { success: true, id };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   private async processCancellation(order: Order, newStatus: OrderStatus) {
@@ -607,14 +978,17 @@ export class OrdersService implements OnModuleInit {
           },
           queryRunner.manager,
         );
-
-        if (walletAppliedAmount >= Number(order.totalAmount)) {
-          order.paymentStatus = PaymentStatus.REFUNDED;
-        }
       }
 
       order.status = newStatus;
       await queryRunner.manager.save(order);
+
+      await this.recordStatusHistory(
+        order.id,
+        newStatus,
+        newStatus === OrderStatus.REFUNDED ? 'Order refunded' : 'Order cancelled',
+        queryRunner.manager,
+      );
 
       await queryRunner.commitTransaction();
 

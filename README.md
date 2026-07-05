@@ -57,7 +57,7 @@ This backend supports two search providers:
 docker run -d --name typesense \
   -p 8108:8108 \
   -v %cd%/typesense-data:/data \
-  typesense/typesense:27.1 \
+  typesense/typesense:30.2 \
   --data-dir /data --api-key=LOCAL_DEV_KEY --enable-cors
 ```
 

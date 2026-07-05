@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { PaymentMethod, PaymentStatus } from '../entities/order.entity';
+import { PaymentMethod } from '../entities/order.entity';
 import { resolveWalletPayment } from './wallet-payment.util';
 
 describe('resolveWalletPayment', () => {
@@ -11,7 +11,6 @@ describe('resolveWalletPayment', () => {
       }),
     ).toEqual({
       paymentMethod: PaymentMethod.WALLET,
-      paymentStatus: PaymentStatus.PAID,
       walletAppliedAmount: 120,
       remainingCashAmount: 0,
     });
@@ -26,7 +25,6 @@ describe('resolveWalletPayment', () => {
       }),
     ).toEqual({
       paymentMethod: PaymentMethod.COD,
-      paymentStatus: PaymentStatus.PENDING,
       walletAppliedAmount: 35,
       remainingCashAmount: 85,
     });
@@ -41,7 +39,6 @@ describe('resolveWalletPayment', () => {
       }),
     ).toEqual({
       paymentMethod: PaymentMethod.WALLET,
-      paymentStatus: PaymentStatus.PAID,
       walletAppliedAmount: 120,
       remainingCashAmount: 0,
     });

@@ -20,6 +20,21 @@ import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
 import { AutocompleteResponseDto } from './dto/search-response.dto';
 import type { SearchParams } from 'typesense/lib/Typesense/Documents';
 import { TypesenseService } from '../typesense/typesense.service';
+import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
+
+// Matches current production behavior (previously hardcoded at two call sites:
+// buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
+// product-team sign-off — review-status visibility is a pending decision.
+const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
+
+// Field priority for relevance ranking: name (title) highest, short
+// description second, long description lowest of the text fields. Order and
+// weights must stay in sync with PRODUCT_QUERY_BY below.
+// name_en, name_ar, short_description_en, short_description_ar,
+// long_description_en, long_description_ar, sku, slug
+const PRODUCT_QUERY_BY =
+  'name_en,name_ar,short_description_en,short_description_ar,long_description_en,long_description_ar,sku,slug';
+const PRODUCT_QUERY_BY_WEIGHTS = '5,5,3,3,1,1,4,2';
 
 @Injectable()
 export class SearchService {
@@ -200,7 +215,11 @@ export class SearchService {
     return !q || q === '*';
   }
 
-  private shouldUseRandomBrowseSort(dto: SearchQueryDto): boolean {
+  private shouldUseRandomBrowseSort(dto: SearchQueryDto, isAdmin = false): boolean {
+    if (isAdmin) {
+      return false;
+    }
+
     if (!this.isWildcardBrowseQuery(dto)) {
       return false;
     }
@@ -276,6 +295,7 @@ export class SearchService {
     productIds: number[],
     isAdmin: boolean,
     fullResponse: boolean,
+    dto?: SearchQueryDto,
   ): Promise<any[]> {
     if (productIds.length === 0) {
       return [];
@@ -286,7 +306,7 @@ export class SearchService {
         page: 1,
         limit: productIds.length,
         ids: productIds,
-        visible: isAdmin ? undefined : true,
+        visible: this.resolveAdminVisibleFilter(dto ?? ({} as SearchQueryDto), isAdmin),
       } as any,
       isAdmin,
     );
@@ -384,9 +404,11 @@ export class SearchService {
       minRating,
       sortBy,
       sortOrder,
-      randomBrowse: this.shouldUseRandomBrowseSort(dto),
-      visible: isAdmin ? (dto as any).visible : ((dto as any).visible ?? true),
-      status: (dto as any).status,
+      randomBrowse: this.shouldUseRandomBrowseSort(dto, isAdmin),
+      visible: this.resolveAdminVisibleFilter(dto, isAdmin),
+      status: Array.isArray((dto as any).status)
+        ? (dto as any).status[0]
+        : (dto as any).status,
       ids: filterIds,
       sku: (dto as any).sku,
       has_no_vendor: (dto as any).has_no_vendor,
@@ -498,6 +520,17 @@ export class SearchService {
     };
   }
 
+  /**
+   * Resolves the effective `visible` filter: customers always get visible-only
+   * results, while admins default to visible-only too but can explicitly
+   * request hidden products via `?visible=false`.
+   */
+  private resolveAdminVisibleFilter(dto: SearchQueryDto, isAdmin: boolean): boolean {
+    if (!isAdmin) return true;
+    const visibleOverride = (dto as any).visible as boolean | undefined;
+    return visibleOverride !== undefined ? visibleOverride : true;
+  }
+
   private buildTypesenseFilterBy(dto: SearchQueryDto, isAdmin = false): string | undefined {
     const filters: string[] = [];
 
@@ -561,14 +594,23 @@ export class SearchService {
 
     if (!isAdmin) {
       filters.push('visible:=true');
-      filters.push('status:=[active,updated,review]');
+      filters.push(`status:=[${SEARCHABLE_STATUSES.join(',')}]`);
       filters.push('is_out_of_stock:=false');
+    } else {
+      // Admin defaults mirror the storefront's default catalog (active/updated/review,
+      // visible only), but can be overridden via explicit `status`/`visible` params.
+      const statusOverride = (dto as any).status as string[] | undefined;
+      filters.push(
+        `status:=[${(statusOverride && statusOverride.length > 0 ? statusOverride : SEARCHABLE_STATUSES).join(',')}]`,
+      );
+
+      filters.push(`visible:=${this.resolveAdminVisibleFilter(dto, isAdmin)}`);
     }
 
     return filters.length > 0 ? filters.join(' && ') : undefined;
   }
 
-  private buildTypesenseSortBy(sortBy?: string): string {
+  private buildTypesenseSortBy(sortBy?: string, isAdmin = false): string {
     switch (sortBy) {
       case 'price_min:asc':
         return 'effective_price:asc';
@@ -577,8 +619,9 @@ export class SearchService {
       case 'rating:desc':
         return 'average_rating:desc';
       case 'created_at:desc':
+        return isAdmin ? 'created_at_ts:desc' : '_text_match:desc,created_at_ts:desc';
       default:
-        return 'created_at_ts:desc';
+        return isAdmin ? 'created_at_ts:desc' : '_text_match:desc,created_at_ts:desc';
     }
   }
 
@@ -989,7 +1032,10 @@ export class SearchService {
     const [facetResult, idsResult] = await Promise.all([
       this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar,short_description_en,long_description_en,sku,slug',
+        query_by: PRODUCT_QUERY_BY,
+        query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+        text_match_type: 'max_weight',
+        prioritize_token_position: true,
         filter_by: filterBy,
         facet_by: facetFields,
         max_facet_values: 100,
@@ -1009,7 +1055,7 @@ export class SearchService {
 
     const [products, facets] = await Promise.all([
       fullResponse
-        ? this.buildSearchResultsFromProductIds(productIds, isAdmin, true)
+        ? this.buildSearchResultsFromProductIds(productIds, isAdmin, true, dto)
         : this.buildSearchCardsFromTypesenseIds(productIds, isAdmin),
       this.enrichSearchFacets(
         this.mapTypesenseFacetCounts(facetResult.facet_counts),
@@ -1035,15 +1081,18 @@ export class SearchService {
     isAdmin: boolean,
     fullResponse: boolean,
   ): Promise<any> {
-    if (this.shouldUseRandomBrowseSort(dto)) {
+    if (this.shouldUseRandomBrowseSort(dto, isAdmin)) {
       return this.searchWithTypesenseRandomBrowse(dto, isAdmin, fullResponse);
     }
 
     const params: SearchParams<Record<string, any>> = {
-      q: dto.q && dto.q !== '*' ? dto.q : '*',
-      query_by: 'name_en,name_ar,short_description_en,long_description_en,sku,slug',
+      q: normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*'),
+      query_by: PRODUCT_QUERY_BY,
+      query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+      text_match_type: 'max_weight',
+      prioritize_token_position: true,
       filter_by: this.buildTypesenseFilterBy(dto, isAdmin),
-      sort_by: this.buildTypesenseSortBy(dto.sort_by),
+      sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin),
       facet_by: this.getTypesenseFacetFields(),
       max_facet_values: 100,
       page: dto.page ?? 1,
@@ -1066,7 +1115,7 @@ export class SearchService {
               page: 1,
               limit: Math.max(productIds.length, fallbackLimit),
               ids: productIds,
-              visible: isAdmin ? undefined : true,
+              visible: this.resolveAdminVisibleFilter(dto, isAdmin),
             } as any,
             isAdmin,
           )
@@ -1119,13 +1168,20 @@ export class SearchService {
   ): Promise<AutocompleteResponseDto> {
     const filterBy = isAdmin
       ? undefined
-      : 'visible:=true && status:=[active,updated,review] && is_out_of_stock:=false';
+      : `visible:=true && status:=[${SEARCHABLE_STATUSES.join(',')}] && is_out_of_stock:=false`;
 
     const result = await this.typesenseService.search({
-      q: dto.q,
+      q: normalizeSearchQuery(dto.q),
       query_by: 'name_en,name_ar,sku,slug',
+      query_by_weights: '5,5,4,2',
+      text_match_type: 'max_weight',
+      prioritize_token_position: true,
       ...(filterBy ? { filter_by: filterBy } : {}),
-      sort_by: 'created_at_ts:desc',
+      // Must lead with relevance, same as the main search path — sorting by
+      // created_at_ts alone (as this used to) ignores how well the query
+      // actually matched and surfaces recently-added, loosely-matching
+      // products ahead of exact/early-position matches.
+      sort_by: '_text_match:desc,created_at_ts:desc',
       page: 1,
       per_page: dto.per_page ?? 8,
     });
@@ -1187,8 +1243,25 @@ export class SearchService {
     fullResponse = false,
   ): Promise<any> {
     const preparedDto = await this.prepareSearchQuery(dto);
-    const useRandomBrowse = this.shouldUseRandomBrowseSort(preparedDto);
-    const cacheKey = `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}:${JSON.stringify(preparedDto)}`;
+    const useRandomBrowse = this.shouldUseRandomBrowseSort(preparedDto, isAdmin);
+    const hasUnsupportedFilters = this.hasUnsupportedTypesenseFilters(preparedDto);
+    const canUseTypesense =
+      this.searchProvider === 'typesense' &&
+      this.typesenseService.isEnabled() &&
+      !hasUnsupportedFilters;
+
+    // The cache key's query text must match what will actually be searched.
+    // This only matters for the non-random-browse Typesense path, since
+    // that's the only path where `q` is matched against normalized indexed
+    // text — the random-browse path always searches '*' regardless of `q`,
+    // and the DB fallback searches raw, unnormalized column text (two raw
+    // queries that only look equal after normalization can legitimately
+    // produce different ILIKE results there).
+    const willNormalizeQueryForCacheKey = canUseTypesense && !useRandomBrowse;
+    const cacheDto = willNormalizeQueryForCacheKey
+      ? { ...preparedDto, q: normalizeSearchQuery(preparedDto.q) }
+      : preparedDto;
+    const cacheKey = `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}:${JSON.stringify(cacheDto)}`;
     const cached = useRandomBrowse
       ? null
       : await this.cacheManager.get<any>(cacheKey);
@@ -1197,12 +1270,7 @@ export class SearchService {
     let response: any;
     const start = Date.now();
 
-    const hasUnsupportedFilters = this.hasUnsupportedTypesenseFilters(preparedDto);
-    if (
-      this.searchProvider === 'typesense' &&
-      this.typesenseService.isEnabled() &&
-      !hasUnsupportedFilters
-    ) {
+    if (canUseTypesense) {
       try {
         response = await this.searchWithTypesense(
           preparedDto,
@@ -1241,14 +1309,19 @@ export class SearchService {
     dto: AutocompleteQueryDto,
     isAdmin = false,
   ): Promise<AutocompleteResponseDto> {
-    const cacheKey = `autocomplete:${dto.q}:${dto.per_page}`;
+    const willUseTypesense =
+      this.searchProvider === 'typesense' && this.typesenseService.isEnabled();
+    // Same reasoning as search(): only normalize the cache key's query text
+    // when Typesense (whose index is normalized) is what will actually run.
+    const cacheQ = willUseTypesense ? normalizeSearchQuery(dto.q) : dto.q;
+    const cacheKey = `autocomplete:${cacheQ}:${dto.per_page}`;
     const cached =
       await this.cacheManager.get<AutocompleteResponseDto>(cacheKey);
     if (cached) return cached;
 
     let response: AutocompleteResponseDto | null = null;
 
-    if (this.searchProvider === 'typesense' && this.typesenseService.isEnabled()) {
+    if (willUseTypesense) {
       try {
         response = await this.autocompleteWithTypesense(dto, isAdmin);
       } catch (error) {

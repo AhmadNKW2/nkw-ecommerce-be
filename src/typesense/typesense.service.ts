@@ -8,11 +8,26 @@ import { ConfigService } from '@nestjs/config';
 import type { SearchParams } from 'typesense/lib/Typesense/Documents';
 import { TYPESENSE_CLIENT, TYPESENSE_PRODUCT_COLLECTION_DEFAULT } from './typesense.constants';
 import { productSchema } from './schemas/product.schema';
+import {
+  PRODUCT_SYNONYM_GROUPS,
+  PRODUCT_SYNONYM_SET_NAME,
+} from './config/synonyms';
+
+// Typesense v30 replaced the classic per-collection Synonyms API with a new
+// `synonym_sets` API (the old one still logs a deprecation warning via the
+// client, and isn't guaranteed to keep working). Since production and local
+// dev can run different major versions at different times, we detect the
+// server's version at boot and use whichever API actually exists there.
+const SYNONYM_SETS_MIN_MAJOR_VERSION = 30;
 
 @Injectable()
 export class TypesenseService implements OnModuleInit {
   private readonly logger = new Logger(TypesenseService.name);
   private readonly collectionName: string;
+  private readonly host: string;
+  private readonly port: number;
+  private readonly protocol: string;
+  private readonly apiKey: string;
 
   constructor(
     @Inject(TYPESENSE_CLIENT) private readonly client: any,
@@ -22,6 +37,10 @@ export class TypesenseService implements OnModuleInit {
       'TYPESENSE_COLLECTION_PRODUCTS',
       TYPESENSE_PRODUCT_COLLECTION_DEFAULT,
     );
+    this.host = this.configService.get<string>('TYPESENSE_HOST', 'localhost');
+    this.port = Number(this.configService.get<string>('TYPESENSE_PORT', '8108'));
+    this.protocol = this.configService.get<string>('TYPESENSE_PROTOCOL', 'http');
+    this.apiKey = this.configService.get<string>('TYPESENSE_API_KEY', '');
   }
 
   isEnabled(): boolean {
@@ -37,6 +56,85 @@ export class TypesenseService implements OnModuleInit {
 
     await this.ensureCollection();
     await this.ensureCollectionSchema();
+    await this.ensureSynonyms();
+  }
+
+  private async detectServerMajorVersion(): Promise<number | null> {
+    try {
+      const url = `${this.protocol}://${this.host}:${this.port}/debug`;
+      const response = await fetch(url, {
+        headers: { 'X-TYPESENSE-API-KEY': this.apiKey },
+      });
+      if (!response.ok) return null;
+
+      const body = (await response.json()) as { version?: string };
+      const match = String(body?.version ?? '').match(/^(\d+)/);
+      return match ? Number(match[1]) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async ensureSynonyms() {
+    try {
+      const majorVersion = await this.detectServerMajorVersion();
+      if (majorVersion !== null && majorVersion >= SYNONYM_SETS_MIN_MAJOR_VERSION) {
+        await this.ensureSynonymsViaSynonymSets();
+      } else {
+        await this.ensureSynonymsViaClassicApi();
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to register Typesense synonyms: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async ensureSynonymsViaSynonymSets() {
+    const items = Object.entries(PRODUCT_SYNONYM_GROUPS).map(([id, synonyms]) => ({
+      id,
+      synonyms,
+    }));
+
+    await this.client.synonymSets(PRODUCT_SYNONYM_SET_NAME).upsert({ items });
+
+    const collection = await this.client.collections(this.collectionName).retrieve();
+    const linkedSets: string[] = Array.isArray(collection.synonym_sets)
+      ? collection.synonym_sets
+      : [];
+
+    if (!linkedSets.includes(PRODUCT_SYNONYM_SET_NAME)) {
+      await this.client.collections(this.collectionName).update({
+        synonym_sets: [...linkedSets, PRODUCT_SYNONYM_SET_NAME],
+      });
+    }
+
+    this.logger.log(
+      `Registered Typesense synonym set "${PRODUCT_SYNONYM_SET_NAME}" (${items.length} groups)`,
+    );
+  }
+
+  private async ensureSynonymsViaClassicApi() {
+    for (const [id, synonyms] of Object.entries(PRODUCT_SYNONYM_GROUPS)) {
+      try {
+        await this.client
+          .collections(this.collectionName)
+          .synonyms(id)
+          .upsert({ synonyms });
+      } catch (error) {
+        this.logger.warn(
+          `Failed to register Typesense synonym "${id}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `Registered ${Object.keys(PRODUCT_SYNONYM_GROUPS).length} classic Typesense synonym groups`,
+    );
   }
 
   private async ensureCollectionSchema() {
@@ -45,10 +143,15 @@ export class TypesenseService implements OnModuleInit {
       const existingFieldNames = new Set(
         (collection.fields ?? []).map((field: { name: string }) => field.name),
       );
+      const autoMigrateFieldNames = new Set([
+        'attributes_values_ids',
+        'specifications_values_ids',
+        'short_description_ar',
+        'long_description_ar',
+      ]);
       const fieldsToEnsure = productSchema.fields.filter(
         (field) =>
-          (field.name === 'attributes_values_ids' ||
-            field.name === 'specifications_values_ids') &&
+          autoMigrateFieldNames.has(field.name) &&
           !existingFieldNames.has(field.name),
       );
 

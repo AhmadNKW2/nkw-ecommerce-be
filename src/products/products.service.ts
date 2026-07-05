@@ -1523,10 +1523,10 @@ export class ProductsService {
       baseQuery.andWhere('product.id IN (:...filterIds)', { filterIds });
     }
 
-    // Filter by visible
-    if (visible !== undefined) {
-      baseQuery.andWhere('product.visible = :visible', { visible });
-    }
+    // Filter by visible (default to visible-only; an explicit query param overrides this)
+    baseQuery.andWhere('product.visible = :visible', {
+      visible: visible !== undefined ? visible : true,
+    });
 
     // Filter by single category (backward compat or "none")
     if (categoryId) {

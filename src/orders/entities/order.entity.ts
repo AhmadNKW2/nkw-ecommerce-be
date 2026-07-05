@@ -12,28 +12,19 @@ import {
 import { User } from '../../users/entities/user.entity';
 import { Coupon } from '../../coupons/entities/coupon.entity';
 import { OrderItem } from './order-item.entity';
+import { OrderStatusHistory } from './order-status-history.entity';
 
 export enum OrderStatus {
   PENDING = 'pending',
-  PROCESSING = 'processing',
-  SHIPPED = 'shipped',
   DELIVERED = 'delivered',
   CANCELLED = 'cancelled',
   REFUNDED = 'refunded',
-  RETURNED = 'returned',
 }
 
 export enum PaymentMethod {
   CARD = 'card',
   COD = 'cod',
   WALLET = 'wallet',
-}
-
-export enum PaymentStatus {
-  PENDING = 'pending',
-  PAID = 'paid',
-  FAILED = 'failed',
-  REFUNDED = 'refunded',
 }
 
 @Entity('orders')
@@ -53,6 +44,9 @@ export class Order {
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items: OrderItem[];
+
+  @OneToMany(() => OrderStatusHistory, (history) => history.order, { cascade: true })
+  statusHistory: OrderStatusHistory[];
 
   @Column({
     type: 'enum',
@@ -97,13 +91,6 @@ export class Order {
 
   @Column('decimal', { precision: 10, scale: 2, default: 0 })
   walletAppliedAmount: number;
-
-  @Column({
-    type: 'enum',
-    enum: PaymentStatus,
-    default: PaymentStatus.PENDING,
-  })
-  paymentStatus: PaymentStatus;
 
   @Column({ nullable: true })
   notes: string;

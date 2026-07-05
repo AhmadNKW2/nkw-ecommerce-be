@@ -1,4 +1,5 @@
 import { Product } from '../../products/entities/product.entity';
+import { stripHtml, normalizeArabic } from '../utils/text-normalize';
 
 type TypesenseProductDocument = Record<string, string | number | boolean | number[] | null>;
 
@@ -63,9 +64,11 @@ export function mapProductToTypesenseDoc(
   return {
     id: String(product.id),
     name_en: product.name_en ?? '',
-    name_ar: product.name_ar ?? '',
-    short_description_en: product.short_description_en ?? '',
-    long_description_en: product.long_description_en ?? '',
+    name_ar: normalizeArabic(product.name_ar ?? ''),
+    short_description_en: stripHtml(product.short_description_en),
+    short_description_ar: normalizeArabic(stripHtml(product.short_description_ar)),
+    long_description_en: stripHtml(product.long_description_en),
+    long_description_ar: normalizeArabic(stripHtml(product.long_description_ar)),
     sku: product.sku ?? '',
     slug: product.slug ?? '',
     status: product.status ?? '',

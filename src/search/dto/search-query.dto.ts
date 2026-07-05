@@ -25,6 +25,29 @@ export class SearchQueryDto {
   @IsBoolean()
   is_admin?: boolean;
 
+  /**
+   * Admin-only override of the default status set (active/updated/review).
+   * Comma-separated for multiple values, e.g. ?status=archived or ?status=active,review
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean),
+  )
+  @IsArray()
+  @IsString({ each: true })
+  status?: string[];
+
+  /**
+   * Admin-only override of the default visible-only filter.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  visible?: boolean;
+
   // ── Text filters ────────────────────────────────────────────────────────────
 
 
@@ -204,6 +227,35 @@ export class SearchQueryDto {
     'created_at:desc',
   ])
   sort_by?: string;
+
+  // ── Admin-only filters (DB fallback; not indexed in Typesense) ─────────────
+
+  @IsOptional()
+  @IsString()
+  start_date?: string;
+
+  @IsOptional()
+  @IsString()
+  end_date?: string;
+
+  @IsOptional()
+  @IsString()
+  created_by?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  has_no_vendor?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  has_no_brand?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  has_duplicate_reference_link?: boolean;
 }
 
 export class AutocompleteQueryDto {
