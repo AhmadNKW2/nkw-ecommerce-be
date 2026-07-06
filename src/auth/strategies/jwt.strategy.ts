@@ -10,24 +10,50 @@ import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 import { AuthService, TokenPayload } from '../auth.service';
 
+const decodeJwtPayload = (token: string): { exp?: number } | null => {
+  try {
+    const segment = token.split('.')[1];
+    if (!segment) return null;
+    const normalized = segment.replace(/-/g, '+').replace(/_/g, '/');
+    const json = Buffer.from(normalized, 'base64').toString('utf8');
+    return JSON.parse(json) as { exp?: number };
+  } catch {
+    return null;
+  }
+};
+
+const isJwtExpired = (token: string): boolean => {
+  const payload = decodeJwtPayload(token);
+  if (!payload?.exp) return false;
+  return payload.exp <= Math.floor(Date.now() / 1000);
+};
+
 /**
  * Custom extractor that tries to get the JWT from:
- * 1. Authorization header as Bearer token
+ * 1. Authorization header as Bearer token (unless expired)
  * 2. HTTP-only cookie named 'access_token' (fallback for browser auth)
  */
 const cookieOrBearerExtractor = (req: Request): string | null => {
-  // Prefer an explicit bearer token over ambient cookies.
   const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.substring(7);
+  const bearerToken =
+    authHeader && authHeader.startsWith('Bearer ')
+      ? authHeader.substring(7)
+      : null;
+
+  const cookieToken =
+    req.cookies && req.cookies.access_token
+      ? (req.cookies.access_token as string)
+      : null;
+
+  if (bearerToken && !isJwtExpired(bearerToken)) {
+    return bearerToken;
   }
 
-  // Fallback to cookie-based auth for browser clients.
-  if (req.cookies && req.cookies.access_token) {
-    return req.cookies.access_token;
+  if (cookieToken) {
+    return cookieToken;
   }
 
-  return null;
+  return bearerToken;
 };
 
 @Injectable()

@@ -455,11 +455,10 @@ export class AuthService {
         const revokedRecently =
           revokedAtMs > 0 && Date.now() - revokedAtMs < 10_000;
 
-        // Benign client race: a parallel refresh already rotated this token.
+        // Benign client race: another tab/request already rotated this token.
+        // Re-use the replacement refresh token instead of logging the user out.
         if (storedToken.replacedByToken && revokedRecently) {
-          throw new UnauthorizedException(
-            'Session expired. Please login again.',
-          );
+          return this.refreshTokens(storedToken.replacedByToken, metadata);
         }
 
         // Token reuse detected - possible theft
