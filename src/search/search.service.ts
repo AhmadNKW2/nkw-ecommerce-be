@@ -610,7 +610,22 @@ export class SearchService {
     return filters.length > 0 ? filters.join(' && ') : undefined;
   }
 
-  private buildTypesenseSortBy(sortBy?: string, isAdmin = false): string {
+  private buildTypesenseSortBy(
+    sortBy?: string,
+    isAdmin = false,
+    q?: string,
+  ): string {
+    const normalizedQuery = typeof q === 'string' ? q.trim() : '';
+    const hasTextQuery =
+      normalizedQuery.length > 0 && normalizedQuery !== '*';
+
+    if (
+      hasTextQuery &&
+      (!sortBy || sortBy === 'created_at:desc')
+    ) {
+      return '_text_match:desc,created_at_ts:desc';
+    }
+
     switch (sortBy) {
       case 'price_min:asc':
         return 'effective_price:asc';
@@ -1092,7 +1107,7 @@ export class SearchService {
       text_match_type: 'max_weight',
       prioritize_token_position: true,
       filter_by: this.buildTypesenseFilterBy(dto, isAdmin),
-      sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin),
+      sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin, dto.q),
       facet_by: this.getTypesenseFacetFields(),
       max_facet_values: 100,
       page: dto.page ?? 1,

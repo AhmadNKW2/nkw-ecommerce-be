@@ -54,9 +54,17 @@ export class TypesenseService implements OnModuleInit {
       return;
     }
 
-    await this.ensureCollection();
-    await this.ensureCollectionSchema();
-    await this.ensureSynonyms();
+    try {
+      await this.ensureCollection();
+      await this.ensureCollectionSchema();
+      await this.ensureSynonyms();
+    } catch (error) {
+      this.logger.warn(
+        `Typesense initialization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }. Search indexing may be unavailable until Typesense is reachable.`,
+      );
+    }
   }
 
   private async detectServerMajorVersion(): Promise<number | null> {
@@ -180,11 +188,20 @@ export class TypesenseService implements OnModuleInit {
     try {
       await this.client.collections(this.collectionName).retrieve();
     } catch {
-      await this.client.collections().create({
-        ...productSchema,
-        name: this.collectionName,
-      });
-      this.logger.log(`Created Typesense collection: ${this.collectionName}`);
+      try {
+        await this.client.collections().create({
+          ...productSchema,
+          name: this.collectionName,
+        });
+        this.logger.log(`Created Typesense collection: ${this.collectionName}`);
+      } catch (error) {
+        this.logger.warn(
+          `Failed to create Typesense collection "${this.collectionName}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        throw error;
+      }
     }
   }
 

@@ -50,6 +50,9 @@ scripts/reset-password/config.js
 .temp
 .tmp
 
+# Local Typesense Docker volume (see README docker run -v typesense-data:/data)
+/typesense-data/
+
 # Runtime data
 pids
 *.pid

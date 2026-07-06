@@ -451,6 +451,17 @@ export class AuthService {
       }
 
       if (storedToken.revoked) {
+        const revokedAtMs = storedToken.revokedAt?.getTime() ?? 0;
+        const revokedRecently =
+          revokedAtMs > 0 && Date.now() - revokedAtMs < 10_000;
+
+        // Benign client race: a parallel refresh already rotated this token.
+        if (storedToken.replacedByToken && revokedRecently) {
+          throw new UnauthorizedException(
+            'Session expired. Please login again.',
+          );
+        }
+
         // Token reuse detected - possible theft
         // Revoke all tokens for this user as security measure
         await this.revokeAllUserTokens(payload.sub, 'token_reuse_detected');
