@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
 import {
@@ -18,11 +18,29 @@ export class SearchController {
    */
   @Get()
   @UseGuards(OptionalJwtAuthGuard)
-  search(
+  async search(
     @Query() query: SearchQueryDto,
     @Req() req: any,
+    @Res({ passthrough: true }) res: any,
   ): Promise<any> {
     const isAdminUser = isCatalogAdminUser(req.user);
+
+    if (query.is_admin === true && !isAdminUser) {
+      throw new UnauthorizedException(
+        'Admin authentication is required for admin search',
+      );
+    }
+
+    if (query.is_admin === true) {
+      res.setHeader(
+        'Cache-Control',
+        'private, no-store, no-cache, must-revalidate, proxy-revalidate',
+      );
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.setHeader('Vary', 'Cookie');
+    }
+
     const fullResponse = isAdminUser && query.is_admin === true;
 
     return this.searchService.search(query, isAdminUser, fullResponse);

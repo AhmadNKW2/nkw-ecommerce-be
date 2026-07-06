@@ -1277,9 +1277,11 @@ export class SearchService {
       ? { ...preparedDto, q: normalizeSearchQuery(preparedDto.q) }
       : preparedDto;
     const cacheKey = `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}:${JSON.stringify(cacheDto)}`;
-    const cached = useRandomBrowse
-      ? null
-      : await this.cacheManager.get<any>(cacheKey);
+    const skipResponseCache = dto.is_admin === true;
+    const cached =
+      useRandomBrowse || skipResponseCache
+        ? null
+        : await this.cacheManager.get<any>(cacheKey);
     if (cached) return cached;
 
     let response: any;
@@ -1314,7 +1316,7 @@ export class SearchService {
       };
     }
 
-    if (!useRandomBrowse) {
+    if (!useRandomBrowse && !skipResponseCache) {
       await this.cacheManager.set(cacheKey, response, 300 * 1000);
     }
     return response;
