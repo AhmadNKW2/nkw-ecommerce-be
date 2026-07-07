@@ -109,8 +109,16 @@ export class BrandsService {
 
     const savedBrand = await this.brandsRepository.save(brand);
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToBrand(savedBrand.id, product_changes);
+      changedProductIds = await this.applyProductChangesToBrand(
+        savedBrand.id,
+        product_changes,
+      );
+    }
+    await this.productsService.syncProductsByBrandToTypesense(savedBrand.id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
     }
 
     return savedBrand;
@@ -295,8 +303,13 @@ export class BrandsService {
       }
     }
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToBrand(id, product_changes);
+      changedProductIds = await this.applyProductChangesToBrand(id, product_changes);
+    }
+    await this.productsService.syncProductsByBrandToTypesense(id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
     }
 
     return savedBrand;
@@ -305,7 +318,7 @@ export class BrandsService {
   private async applyProductChangesToBrand(
     brandId: number,
     productChanges?: ProductChangesDto,
-  ): Promise<void> {
+  ): Promise<number[]> {
     const {
       addProductIds,
       removeProductIds,
@@ -331,6 +344,8 @@ export class BrandsService {
         { brand_id: brandId },
       );
     }
+
+    return [...new Set([...addProductIds, ...removeProductIds])];
   }
 
   // ========== LIFECYCLE MANAGEMENT ==========

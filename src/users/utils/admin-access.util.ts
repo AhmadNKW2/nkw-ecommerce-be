@@ -66,6 +66,8 @@ export function stripProductPricingFields<T extends object>(dto: T): T {
     cost?: unknown;
     original_vendor_price?: unknown;
     original_vendor_sale_price?: unknown;
+    original_price?: unknown;
+    original_sale_price?: unknown;
   };
 
   delete next.price;
@@ -73,6 +75,8 @@ export function stripProductPricingFields<T extends object>(dto: T): T {
   delete next.cost;
   delete next.original_vendor_price;
   delete next.original_vendor_sale_price;
+  delete next.original_price;
+  delete next.original_sale_price;
 
   return next;
 }

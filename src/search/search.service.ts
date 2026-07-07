@@ -4,6 +4,8 @@ import type { Cache } from 'cache-manager';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { Category } from '../categories/entities/category.entity';
 import { Brand } from '../brands/entities/brand.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
@@ -21,6 +23,7 @@ import { AutocompleteResponseDto } from './dto/search-response.dto';
 import type { SearchParams } from 'typesense/lib/Typesense/Documents';
 import { TypesenseService } from '../typesense/typesense.service';
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
+import { parsePriceFromQuery } from './utils/parse-price-from-query';
 
 // Matches current production behavior (previously hardcoded at two call sites:
 // buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
@@ -30,11 +33,22 @@ const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
 // Field priority for relevance ranking: name (title) highest, short
 // description second, long description lowest of the text fields. Order and
 // weights must stay in sync with PRODUCT_QUERY_BY below.
-// name_en, name_ar, short_description_en, short_description_ar,
-// long_description_en, long_description_ar, sku, slug
+// name_en, name_ar, brand_name_en, brand_name_ar, category_names_en, category_names_ar,
+// short_description_en, short_description_ar, long_description_en, long_description_ar, sku, slug
 const PRODUCT_QUERY_BY =
-  'name_en,name_ar,short_description_en,short_description_ar,long_description_en,long_description_ar,sku,slug';
-const PRODUCT_QUERY_BY_WEIGHTS = '5,5,3,3,1,1,4,2';
+  'name_en,name_ar,brand_name_en,brand_name_ar,category_names_en,category_names_ar,short_description_en,short_description_ar,long_description_en,long_description_ar,sku,slug';
+const PRODUCT_QUERY_BY_WEIGHTS = '5,5,4,4,3,3,3,3,1,1,4,2';
+const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
+
+type ExpansionTierKey =
+  | 'primary'
+  | 'strong_partial'
+  | 'category_brand'
+  | 'cross_brand_spec'
+  | 'category'
+  | 'brand'
+  | 'specification'
+  | 'keyword';
 
 @Injectable()
 export class SearchService {
@@ -53,6 +67,44 @@ export class SearchService {
     'ids',
     'sku',
   ]);
+  private readonly expansionTierOrder: ExpansionTierKey[] = [
+    'primary',
+    'strong_partial',
+    'cross_brand_spec',
+    'category_brand',
+    'category',
+    'brand',
+    'specification',
+    'keyword',
+  ];
+  private readonly defaultEnabledExpansionLevels = new Set<ExpansionTierKey>([
+    'strong_partial',
+    'category_brand',
+    'cross_brand_spec',
+    'category',
+    'brand',
+    'specification',
+    'keyword',
+  ]);
+  private brandLexiconCache:
+    | {
+        loadedAt: number;
+        entries: Array<{ id: number; normalizedTokens: string[] }>;
+      }
+    | null = null;
+  private categoryLexiconCache:
+    | {
+        loadedAt: number;
+        entries: Array<{ id: number; normalizedTokens: string[] }>;
+      }
+    | null = null;
+  private readonly entityLexiconCacheTtlMs = 5 * 60 * 1000;
+  private lastQueryPreparationDebug: {
+    originalQuery?: string;
+    normalizedQuery?: string;
+    tokens?: string[];
+    priceParse?: ReturnType<typeof parsePriceFromQuery>;
+  } | null = null;
 
   constructor(
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
@@ -338,6 +390,401 @@ export class SearchService {
     return parsed.length > 0 ? parsed : undefined;
   }
 
+  private getLatencyBudgetMs(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_LATENCY_BUDGET_MS', '350'),
+    );
+    return Number.isFinite(configured) && configured > 0 ? configured : 350;
+  }
+
+  private isProgressiveExpansionEnabled(): boolean {
+    const value = this.configService.get<string>('SEARCH_EXPANSION_ENABLED', 'true');
+    return value.toLowerCase() === 'true';
+  }
+
+  private getMaxExpansionCandidates(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_EXPANSION_MAX_CANDIDATES', '240'),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 240;
+    }
+    return Math.min(500, configured);
+  }
+
+  private getMinTextMatchRatioForExpansion(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_EXPANSION_MIN_TEXT_MATCH_RATIO', '0.4'),
+    );
+    if (!Number.isFinite(configured)) return 0.4;
+    return Math.max(0, Math.min(1, configured));
+  }
+
+  private getEnabledExpansionLevels(): Set<ExpansionTierKey> {
+    const configured = this.configService.get<string>(
+      'SEARCH_EXPANSION_LEVELS',
+      '',
+    );
+    if (!configured.trim()) {
+      return new Set(this.defaultEnabledExpansionLevels);
+    }
+
+    const enabled = configured
+      .split(',')
+      .map((item) => item.trim() as ExpansionTierKey)
+      .filter((item) => this.defaultEnabledExpansionLevels.has(item));
+
+    return new Set(enabled);
+  }
+
+  private getPrimaryEnoughCount(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_EXPANSION_PRIMARY_ENOUGH_COUNT', '125'),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 125;
+    }
+    return configured;
+  }
+
+  private getExpansionExtraWhenLow(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_EXPANSION_EXTRA_WHEN_LOW', '100'),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 100;
+    }
+    return configured;
+  }
+
+  private isSearchDebugEnabledByEnv(): boolean {
+    const value = this.configService.get<string>('SEARCH_DEBUG_ENABLED', 'false');
+    return value.trim().toLowerCase() === 'true';
+  }
+
+  private formatSearchDebugReport(payload: Record<string, unknown>): string {
+    const line = '═'.repeat(62);
+    const thin = '─'.repeat(62);
+    const lines: string[] = [
+      line,
+      '  SEARCH DEBUG  (latest request — file is overwritten each time)',
+      line,
+      '',
+      '▶ WHAT YOU SEARCHED',
+      `  Query:        "${String(payload.query ?? '')}"`,
+      `  Page:         ${payload.page ?? 1}     Results per page: ${payload.limit ?? 20}`,
+      `  Engine:       ${payload.provider ?? 'unknown'}`,
+    ];
+
+    if (payload.cache_hit) {
+      lines.push('  Note:         Returned from cache (no new search run)');
+    }
+    if (payload.reason) {
+      lines.push(`  Note:         ${payload.reason}`);
+    }
+
+    lines.push('', '▶ WHAT WE UNDERSTOOD');
+    if (payload.normalized_query != null) {
+      lines.push(`  Clean query:  "${payload.normalized_query}"`);
+    }
+    if (Array.isArray(payload.tokens) && payload.tokens.length > 0) {
+      lines.push(`  Words:        ${(payload.tokens as string[]).join(' · ')}`);
+    }
+    if (payload.detected_brand_labels) {
+      lines.push(`  Brand:        ${payload.detected_brand_labels}`);
+    } else if (payload.detected_brand_ids) {
+      lines.push(`  Brand id(s):  ${payload.detected_brand_ids}`);
+    }
+    if (payload.detected_category_labels) {
+      lines.push(`  Category:     ${payload.detected_category_labels}`);
+    } else if (payload.detected_category_ids) {
+      lines.push(`  Category id(s): ${payload.detected_category_ids}`);
+    }
+
+    if (
+      payload.price_stripped_phrases ||
+      payload.price_min != null ||
+      payload.price_max != null
+    ) {
+      lines.push('', '▶ PRICE FROM QUERY');
+      if (Array.isArray(payload.price_stripped_phrases) && payload.price_stripped_phrases.length > 0) {
+        lines.push(`  Removed text: "${(payload.price_stripped_phrases as string[]).join('" | "')}"`);
+      }
+      if (payload.price_min != null) {
+        lines.push(`  Min price:    ${payload.price_min}`);
+      }
+      if (payload.price_max != null) {
+        lines.push(`  Max price:    ${payload.price_max}`);
+      }
+      if (!payload.price_min && !payload.price_max) {
+        lines.push('  No price filter detected in query');
+      }
+    }
+
+    lines.push('', thin);
+    lines.push('▶ STEP 1 — Primary text search (best matches first)');
+    lines.push(`  Found:        ${payload.primary_found ?? '—'} products`);
+    lines.push(`  Skip expansion when ≥ ${payload.primary_enough_threshold ?? '—'}`);
+    lines.push(
+      `  Decision:     ${
+        payload.primary_enough === true
+          ? 'Enough matches → expansion skipped'
+          : payload.primary_enough === false
+            ? 'Not enough → expansion runs'
+            : '—'
+      }`,
+    );
+
+    if (payload.expansion_applied != null) {
+      lines.push('', thin);
+      lines.push('▶ STEP 2 — Expansion (adds more products in this order)');
+      const tiers = payload.expansion_tier_details as
+        | Array<{ tier: string; added: number; total: number; note?: string }>
+        | undefined;
+
+      if (tiers && tiers.length > 0) {
+        tiers.forEach((entry) => {
+          const label = entry.tier.padEnd(20);
+          if (entry.tier === 'primary') {
+            lines.push(`  ${label} ${entry.added} products  (starting list)`);
+            return;
+          }
+          if (entry.added > 0) {
+            lines.push(
+              `  ${label} +${entry.added} → ${entry.total} total${entry.note ? `  ${entry.note}` : ''}`,
+            );
+            return;
+          }
+          lines.push(
+            `  ${label} skipped${entry.note ? `  (${entry.note})` : ''}`,
+          );
+        });
+      }
+
+      lines.push(
+        `  Expansion:    ${payload.expansion_applied ? 'YES' : 'NO'}`,
+      );
+    }
+
+    lines.push('', thin);
+    lines.push('▶ STEP 3 — Final response');
+    lines.push(`  Pool size:    ${payload.final_candidates ?? '—'} products`);
+    lines.push(`  Total shown:  ${payload.response_total ?? '—'}`);
+    lines.push(`  This page:    ${payload.response_count ?? '—'} products`);
+    if (payload.search_time_ms != null) {
+      lines.push(`  Time:         ${payload.search_time_ms} ms`);
+    }
+    lines.push(line);
+
+    return `${lines.join('\n')}\n`;
+  }
+
+  private async writeSearchDebugLog(payload: Record<string, unknown>): Promise<void> {
+    try {
+      const logDir = join(process.cwd(), 'logs');
+      await mkdir(logDir, { recursive: true });
+      const report = this.formatSearchDebugReport({
+        ts: new Date().toISOString(),
+        ...payload,
+      });
+      await writeFile(join(logDir, 'search-debug.log'), report, 'utf8');
+    } catch (error) {
+      this.logger.warn(
+        `Failed to write search debug log: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private tokenizeQueryForExpansion(query?: string): string[] {
+    const normalized = normalizeSearchQuery(query).toLowerCase();
+    if (!normalized) return [];
+
+    return normalized
+      .split(/[^\p{L}\p{N}]+/u)
+      .map((token) => token.trim())
+      .filter(Boolean);
+  }
+
+  private getTypoBudget(tokens: string[]): 0 | 1 | 2 {
+    const longest = tokens.reduce((max, token) => Math.max(max, token.length), 0);
+    if (longest < SEARCH_TYPO_TOKENS_MIN_LENGTH) return 0;
+    if (longest >= 7) return 2;
+    return 1;
+  }
+
+  private getSpecTokensFromQuery(tokens: string[]): string[] {
+    const unique = new Set<string>();
+    const specPatterns = [
+      /^i[3579]$/i,
+      /^ryzen$/i,
+      /^ryzen[3579]$/i,
+      /^rtx$/i,
+      /^gtx$/i,
+      /^[3456]\d{3}$/,
+      /^\d{2,4}gb$/i,
+      /^\d{3,4}ssd$/i,
+      /^ssd$/i,
+      /^hdd$/i,
+      /^nvme$/i,
+      /^ddr[345]$/i,
+    ];
+
+    tokens.forEach((token) => {
+      if (specPatterns.some((pattern) => pattern.test(token))) {
+        unique.add(token);
+      }
+    });
+
+    return Array.from(unique);
+  }
+
+  private async getBrandTokensForIds(brandIds: number[]): Promise<Set<string>> {
+    if (brandIds.length === 0) {
+      return new Set();
+    }
+
+    const lexicon = await this.getBrandLexicon();
+    const tokens = new Set<string>();
+    const idSet = new Set(brandIds);
+
+    lexicon.forEach((entry) => {
+      if (!idSet.has(entry.id)) return;
+      entry.normalizedTokens.forEach((token) => tokens.add(token));
+    });
+
+    return tokens;
+  }
+
+  private buildExpansionTierDebugDetails(
+    tiers: Record<ExpansionTierKey, number[]>,
+    notes: Partial<Record<ExpansionTierKey, string>>,
+  ): Array<{ tier: string; added: number; total: number; note?: string }> {
+    let runningTotal = 0;
+
+    return this.expansionTierOrder.map((tier) => {
+      const added = tiers[tier]?.length ?? 0;
+      if (tier === 'primary') {
+        runningTotal = added;
+        return { tier, added, total: runningTotal, note: notes[tier] };
+      }
+
+      if (added > 0) {
+        runningTotal += added;
+      }
+
+      return {
+        tier,
+        added,
+        total: runningTotal,
+        note: notes[tier],
+      };
+    });
+  }
+
+  private async getBrandLexicon(): Promise<
+    Array<{ id: number; normalizedTokens: string[] }>
+  > {
+    const now = Date.now();
+    if (
+      this.brandLexiconCache &&
+      now - this.brandLexiconCache.loadedAt < this.entityLexiconCacheTtlMs
+    ) {
+      return this.brandLexiconCache.entries;
+    }
+
+    const brands = await this.brandsRepository.find({
+      select: { id: true, name_en: true, name_ar: true },
+    });
+    const entries = brands
+      .map((brand) => {
+        const tokens = [
+          ...this.tokenizeQueryForExpansion(brand.name_en ?? ''),
+          ...this.tokenizeQueryForExpansion(brand.name_ar ?? ''),
+        ];
+        return {
+          id: brand.id,
+          normalizedTokens: Array.from(new Set(tokens)),
+        };
+      })
+      .filter((entry) => entry.normalizedTokens.length > 0);
+
+    this.brandLexiconCache = { loadedAt: now, entries };
+    return entries;
+  }
+
+  private async getCategoryLexicon(): Promise<
+    Array<{ id: number; normalizedTokens: string[] }>
+  > {
+    const now = Date.now();
+    if (
+      this.categoryLexiconCache &&
+      now - this.categoryLexiconCache.loadedAt < this.entityLexiconCacheTtlMs
+    ) {
+      return this.categoryLexiconCache.entries;
+    }
+
+    const categories = await this.categoriesRepository.find({
+      select: { id: true, name_en: true, name_ar: true },
+    });
+    const entries = categories
+      .map((category) => {
+        const tokens = [
+          ...this.tokenizeQueryForExpansion(category.name_en ?? ''),
+          ...this.tokenizeQueryForExpansion(category.name_ar ?? ''),
+        ];
+        return {
+          id: category.id,
+          normalizedTokens: Array.from(new Set(tokens)),
+        };
+      })
+      .filter((entry) => entry.normalizedTokens.length > 0);
+
+    this.categoryLexiconCache = { loadedAt: now, entries };
+    return entries;
+  }
+
+  private async detectEntityIdsFromTokens(
+    tokens: string[],
+    normalizedQuery: string,
+  ): Promise<{ brandIds: number[]; categoryIds: number[] }> {
+    if (tokens.length === 0) {
+      return { brandIds: [], categoryIds: [] };
+    }
+
+    const tokenSet = new Set(tokens);
+    const [brandLexicon, categoryLexicon] = await Promise.all([
+      this.getBrandLexicon(),
+      this.getCategoryLexicon(),
+    ]);
+
+    const normalizedQueryWithSpaces = ` ${normalizedQuery.trim()} `;
+    const hasPhraseMatch = (entryTokens: string[]) =>
+      entryTokens.some((token) => {
+        const normalizedToken = token.trim();
+        if (!normalizedToken) return false;
+        return normalizedQueryWithSpaces.includes(` ${normalizedToken} `);
+      });
+
+    const brandIds = brandLexicon
+      .filter(
+        (entry) =>
+          entry.normalizedTokens.some((token) => tokenSet.has(token)) ||
+          hasPhraseMatch(entry.normalizedTokens),
+      )
+      .map((entry) => entry.id);
+    const categoryIds = categoryLexicon
+      .filter(
+        (entry) =>
+          entry.normalizedTokens.some((token) => tokenSet.has(token)) ||
+          hasPhraseMatch(entry.normalizedTokens),
+      )
+      .map((entry) => entry.id);
+
+    return { brandIds, categoryIds };
+  }
+
   private hasUnsupportedTypesenseFilters(dto: SearchQueryDto): boolean {
     return Object.keys(dto).some((key) => {
       if (!this.unsupportedTypesenseFilterKeys.has(key)) {
@@ -504,17 +951,49 @@ export class SearchService {
   }
 
   private async prepareSearchQuery(dto: SearchQueryDto): Promise<SearchQueryDto> {
-    const categoryIds = this.extractCategoryIds(dto);
+    let next: SearchQueryDto = { ...dto };
+    const originalQuery = dto.q;
+
+    if (next.q && next.q !== '*') {
+      const priceParse = parsePriceFromQuery(next.q, {
+        minPrice: next.min_price,
+        maxPrice: next.max_price,
+      });
+      const normalizedQuery = normalizeSearchQuery(priceParse.cleanedQuery);
+      const tokens = this.tokenizeQueryForExpansion(normalizedQuery);
+
+      this.lastQueryPreparationDebug = {
+        originalQuery,
+        normalizedQuery,
+        tokens,
+        priceParse,
+      };
+
+      next = {
+        ...next,
+        q: priceParse.cleanedQuery,
+        ...(priceParse.minPrice !== undefined ? { min_price: priceParse.minPrice } : {}),
+        ...(priceParse.maxPrice !== undefined ? { max_price: priceParse.maxPrice } : {}),
+      };
+    } else {
+      this.lastQueryPreparationDebug = {
+        originalQuery,
+        normalizedQuery: next.q,
+        tokens: [],
+      };
+    }
+
+    const categoryIds = this.extractCategoryIds(next);
 
     if (categoryIds.length === 0) {
-      return dto;
+      return next;
     }
 
     const expandedCategoryIds =
       await this.expandCategoryIdsWithDescendants(categoryIds);
 
     return {
-      ...dto,
+      ...next,
       category_id: undefined,
       category_ids: expandedCategoryIds,
     };
@@ -1091,6 +1570,323 @@ export class SearchService {
     };
   }
 
+  private async searchTypesenseIds(params: {
+    q: string;
+    filterBy?: string;
+    sortBy?: string;
+    limit: number;
+  }): Promise<number[]> {
+    const result = await this.typesenseService.search({
+      q: normalizeSearchQuery(params.q || '*') || '*',
+      query_by: PRODUCT_QUERY_BY,
+      query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+      text_match_type: 'max_weight',
+      prioritize_token_position: true,
+      ...(params.filterBy ? { filter_by: params.filterBy } : {}),
+      sort_by: params.sortBy ?? '_text_match:desc,created_at_ts:desc',
+      include_fields: 'id',
+      page: 1,
+      per_page: params.limit,
+      num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(params.q)),
+    } as SearchParams<Record<string, any>>);
+
+    const hits = Array.isArray(result.hits) ? result.hits : [];
+    return hits
+      .map((hit: any) => Number(hit?.document?.id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+  }
+
+  private mergeFilterByClauses(...clauses: Array<string | undefined>): string | undefined {
+    const items = clauses
+      .map((item) => item?.trim())
+      .filter((item): item is string => Boolean(item));
+    if (items.length === 0) return undefined;
+    return items.join(' && ');
+  }
+
+  private async resolveDebugEntityLabels(
+    brandIds?: number[],
+    categoryIds?: number[],
+  ): Promise<{ brands?: string; categories?: string }> {
+    const [brands, categories] = await Promise.all([
+      brandIds && brandIds.length > 0
+        ? this.brandsRepository.find({
+            where: { id: In(brandIds) },
+            select: { id: true, name_en: true, name_ar: true },
+          })
+        : Promise.resolve([]),
+      categoryIds && categoryIds.length > 0
+        ? this.categoriesRepository.find({
+            where: { id: In(categoryIds) },
+            select: { id: true, name_en: true, name_ar: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    return {
+      brands:
+        brands.length > 0
+          ? brands
+              .map((brand) => `${brand.name_en || brand.name_ar} (id ${brand.id})`)
+              .join(', ')
+          : undefined,
+      categories:
+        categories.length > 0
+          ? categories
+              .map(
+                (category) =>
+                  `${category.name_en || category.name_ar} (id ${category.id})`,
+              )
+              .join(', ')
+          : undefined,
+    };
+  }
+
+  private async collectExpandedTypesenseIds(params: {
+    dto: SearchQueryDto;
+    isAdmin: boolean;
+    baseFilterBy?: string;
+    primaryIds: number[];
+    requestedLimit: number;
+    debug: boolean;
+  }): Promise<{
+    idsByTier: Record<ExpansionTierKey, number[]>;
+    orderedIds: number[];
+    primaryFoundCount: number;
+    detectedBrandIds: number[];
+    detectedCategoryIds: number[];
+    tierNotes: Partial<Record<ExpansionTierKey, string>>;
+  }> {
+    const maxCandidates = Math.max(
+      params.requestedLimit,
+      this.getMaxExpansionCandidates(),
+    );
+    const enabledLevels = this.getEnabledExpansionLevels();
+    const normalizedQ = normalizeSearchQuery(params.dto.q);
+    const tokens = this.tokenizeQueryForExpansion(normalizedQ);
+    const minTokenMatchRatio = this.getMinTextMatchRatioForExpansion();
+    const minStrongTokens = Math.max(
+      2,
+      Math.ceil(tokens.length * Math.max(0.5, minTokenMatchRatio)),
+    );
+    const idsByTier: Record<ExpansionTierKey, number[]> = {
+      primary: [...params.primaryIds],
+      strong_partial: [],
+      category_brand: [],
+      cross_brand_spec: [],
+      category: [],
+      brand: [],
+      specification: [],
+      keyword: [],
+    };
+    const tierNotes: Partial<Record<ExpansionTierKey, string>> = {};
+    const uniqueIds = new Set<number>(params.primaryIds);
+    const primaryFoundCount = params.primaryIds.length;
+    const addIds = (tier: ExpansionTierKey, ids: number[]) => {
+      ids.forEach((id) => {
+        if (uniqueIds.size >= maxCandidates || uniqueIds.has(id)) return;
+        uniqueIds.add(id);
+        idsByTier[tier].push(id);
+      });
+    };
+
+    if (
+      tokens.length > 1 &&
+      enabledLevels.has('strong_partial') &&
+      uniqueIds.size < params.requestedLimit
+    ) {
+      for (let size = tokens.length - 1; size >= minStrongTokens; size -= 1) {
+        if (uniqueIds.size >= params.requestedLimit) break;
+        const phraseQuery = tokens.slice(0, size).join(' ');
+        const ids = await this.searchTypesenseIds({
+          q: phraseQuery,
+          filterBy: params.baseFilterBy,
+          sortBy: '_text_match:desc,created_at_ts:desc',
+          limit: Math.min(40, maxCandidates - uniqueIds.size),
+        });
+        addIds('strong_partial', ids);
+      }
+    }
+
+    const detected = await this.detectEntityIdsFromTokens(tokens, normalizedQ);
+    const categoryIdsFromFilters = this.extractCategoryIds(params.dto);
+    const brandIdsFromFilters =
+      this.parseCsvNumbers((params.dto as any).brand_ids) ??
+      (params.dto.brand_id != null ? [params.dto.brand_id] : []);
+    const effectiveCategoryIds = Array.from(
+      new Set([...detected.categoryIds, ...categoryIdsFromFilters]),
+    );
+    const effectiveBrandIds = Array.from(
+      new Set([...detected.brandIds, ...brandIdsFromFilters]),
+    );
+    const brandIdsFromQueryOnly = detected.brandIds;
+    const hasBrandInQuery = brandIdsFromQueryOnly.length > 0;
+    const brandTokensFromQuery = hasBrandInQuery
+      ? await this.getBrandTokensForIds(brandIdsFromQueryOnly)
+      : new Set<string>();
+    const intentTokensWithoutBrand = tokens.filter(
+      (token) => !brandTokensFromQuery.has(token),
+    );
+    const specTokens = this.getSpecTokensFromQuery(tokens);
+
+    if (
+      enabledLevels.has('cross_brand_spec') &&
+      hasBrandInQuery &&
+      uniqueIds.size < params.requestedLimit &&
+      (specTokens.length > 0 || intentTokensWithoutBrand.length > 0)
+    ) {
+      const crossBrandQuery = Array.from(
+        new Set([...specTokens, ...intentTokensWithoutBrand]),
+      ).join(' ');
+      const crossBrandFilters = [params.baseFilterBy];
+      if (effectiveCategoryIds.length > 0) {
+        crossBrandFilters.push(
+          `category_ids:=[${effectiveCategoryIds.join(',')}]`,
+        );
+      }
+      crossBrandFilters.push(
+        `brand_id:!=[${brandIdsFromQueryOnly.join(',')}]`,
+      );
+
+      const ids = await this.searchTypesenseIds({
+        q: crossBrandQuery,
+        filterBy: this.mergeFilterByClauses(...crossBrandFilters),
+        sortBy: '_text_match:desc,created_at_ts:desc',
+        limit: Math.min(60, maxCandidates - uniqueIds.size),
+      });
+      addIds('cross_brand_spec', ids);
+      tierNotes.cross_brand_spec = 'same specs/category, other brands';
+    }
+
+    if (
+      enabledLevels.has('category_brand') &&
+      uniqueIds.size < params.requestedLimit &&
+      effectiveCategoryIds.length > 0 &&
+      effectiveBrandIds.length > 0
+    ) {
+      const ids = await this.searchTypesenseIds({
+        q: '*',
+        filterBy: this.mergeFilterByClauses(
+          params.baseFilterBy,
+          `category_ids:=[${effectiveCategoryIds.join(',')}]`,
+          `brand_id:=[${effectiveBrandIds.join(',')}]`,
+        ),
+        sortBy: 'average_rating:desc,_text_match:desc,created_at_ts:desc',
+        limit: Math.min(40, maxCandidates - uniqueIds.size),
+      });
+      addIds('category_brand', ids);
+      if (ids.length > 0) {
+        tierNotes.category_brand = 'same brand + category';
+      }
+    }
+
+    if (
+      enabledLevels.has('category') &&
+      uniqueIds.size < params.requestedLimit &&
+      effectiveCategoryIds.length > 0 &&
+      !hasBrandInQuery
+    ) {
+      const ids = await this.searchTypesenseIds({
+        q: '*',
+        filterBy: this.mergeFilterByClauses(
+          params.baseFilterBy,
+          `category_ids:=[${effectiveCategoryIds.join(',')}]`,
+        ),
+        sortBy: 'average_rating:desc,_text_match:desc,created_at_ts:desc',
+        limit: Math.min(50, maxCandidates - uniqueIds.size),
+      });
+      addIds('category', ids);
+    } else if (hasBrandInQuery) {
+      tierNotes.category = 'skipped when brand is in query';
+    }
+
+    if (
+      enabledLevels.has('brand') &&
+      uniqueIds.size < params.requestedLimit &&
+      effectiveBrandIds.length > 0 &&
+      !hasBrandInQuery
+    ) {
+      const ids = await this.searchTypesenseIds({
+        q: '*',
+        filterBy: this.mergeFilterByClauses(
+          params.baseFilterBy,
+          `brand_id:=[${effectiveBrandIds.join(',')}]`,
+        ),
+        sortBy: 'average_rating:desc,_text_match:desc,created_at_ts:desc',
+        limit: Math.min(50, maxCandidates - uniqueIds.size),
+      });
+      addIds('brand', ids);
+    } else if (hasBrandInQuery) {
+      tierNotes.brand = 'skipped to avoid weak same-brand matches (e.g. i5)';
+    }
+
+    if (
+      enabledLevels.has('specification') &&
+      uniqueIds.size < params.requestedLimit &&
+      specTokens.length > 0 &&
+      !hasBrandInQuery
+    ) {
+      const ids = await this.searchTypesenseIds({
+        q: specTokens.join(' '),
+        filterBy: params.baseFilterBy,
+        sortBy: '_text_match:desc,created_at_ts:desc',
+        limit: Math.min(60, maxCandidates - uniqueIds.size),
+      });
+      addIds('specification', ids);
+    } else if (hasBrandInQuery && specTokens.length > 0) {
+      tierNotes.specification = 'handled by cross_brand_spec';
+    }
+
+    if (
+      enabledLevels.has('keyword') &&
+      uniqueIds.size < params.requestedLimit &&
+      tokens.length > 0
+    ) {
+      const keywordTokens = (hasBrandInQuery ? intentTokensWithoutBrand : tokens).filter(
+        (token) => token.length > 2,
+      );
+      const fallbackQuery = (
+        keywordTokens.length > 0 ? keywordTokens : tokens
+      ).join(' ');
+      const keywordFilters = [params.baseFilterBy];
+      if (hasBrandInQuery) {
+        keywordFilters.push(
+          `brand_id:!=[${brandIdsFromQueryOnly.join(',')}]`,
+        );
+      }
+      const ids = await this.searchTypesenseIds({
+        q: fallbackQuery,
+        filterBy: this.mergeFilterByClauses(...keywordFilters),
+        sortBy: '_text_match:desc,created_at_ts:desc',
+        limit: Math.min(80, maxCandidates - uniqueIds.size),
+      });
+      addIds('keyword', ids);
+      if (hasBrandInQuery && ids.length > 0) {
+        tierNotes.keyword = 'brand words removed, other brands only';
+      }
+    }
+
+    const orderedIds = this.expansionTierOrder.flatMap((tier) => idsByTier[tier]);
+    if (params.debug) {
+      this.logger.log(
+        `[search-expansion] q="${params.dto.q ?? ''}" primary=${primaryFoundCount} requested=${params.requestedLimit} final=${orderedIds.length} tiers=${JSON.stringify(
+          Object.fromEntries(
+            this.expansionTierOrder.map((tier) => [tier, idsByTier[tier].length]),
+          ),
+        )}`,
+      );
+    }
+
+    return {
+      idsByTier,
+      orderedIds,
+      primaryFoundCount,
+      detectedBrandIds: effectiveBrandIds,
+      detectedCategoryIds: effectiveCategoryIds,
+      tierNotes,
+    };
+  }
+
   private async searchWithTypesense(
     dto: SearchQueryDto,
     isAdmin: boolean,
@@ -1100,36 +1896,89 @@ export class SearchService {
       return this.searchWithTypesenseRandomBrowse(dto, isAdmin, fullResponse);
     }
 
+    const perPage = (dto as any).per_page ?? (dto as any).limit ?? 20;
+    const page = dto.page ?? 1;
+    const debugSearchEnabled = this.isDebugSearchEnabled();
+    const startOffset = (page - 1) * perPage;
+    const maxCandidates = this.getMaxExpansionCandidates();
+    const expansionEnabled = this.isProgressiveExpansionEnabled();
+    const primaryEnoughCount = this.getPrimaryEnoughCount();
+    const primaryFetchLimit = Math.min(
+      maxCandidates,
+      Math.max(startOffset + perPage, primaryEnoughCount),
+    );
+    const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
+    const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const params: SearchParams<Record<string, any>> = {
-      q: normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*'),
+      q: normalizedQuery,
       query_by: PRODUCT_QUERY_BY,
       query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
       text_match_type: 'max_weight',
       prioritize_token_position: true,
-      filter_by: this.buildTypesenseFilterBy(dto, isAdmin),
+      filter_by: filterBy,
       sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin, dto.q),
       facet_by: this.getTypesenseFacetFields(),
       max_facet_values: 100,
-      page: dto.page ?? 1,
-      per_page: (dto as any).per_page ?? (dto as any).limit ?? 20,
+      page: 1,
+      per_page: primaryFetchLimit,
+      num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(normalizedQuery)),
       ...(fullResponse ? { include_fields: 'id' } : {}),
     };
 
     const result = await this.typesenseService.search(params);
     const hits = Array.isArray(result.hits) ? result.hits : [];
-    const productIds = hits
+    let orderedProductIds = hits
       .map((hit: any) => Number(hit?.document?.id))
       .filter((id) => Number.isInteger(id) && id > 0);
+    const primaryCount = orderedProductIds.length;
+    const primaryIsEnough = primaryCount >= primaryEnoughCount;
+    const shouldExpand =
+      expansionEnabled &&
+      !primaryIsEnough &&
+      perPage > 0 &&
+      startOffset + perPage <= maxCandidates;
+    let expansionMeta:
+      | {
+          tiers: Record<ExpansionTierKey, number[]>;
+          primaryFoundCount: number;
+          detectedBrandIds: number[];
+          detectedCategoryIds: number[];
+          tierNotes: Partial<Record<ExpansionTierKey, string>>;
+        }
+      | undefined;
+
+    if (shouldExpand) {
+      const requestedExpansionCount = Math.max(
+        startOffset + perPage,
+        primaryCount + this.getExpansionExtraWhenLow(),
+      );
+      const expanded = await this.collectExpandedTypesenseIds({
+        dto,
+        isAdmin,
+        baseFilterBy: filterBy,
+        primaryIds: orderedProductIds,
+        requestedLimit: requestedExpansionCount,
+        debug: debugSearchEnabled,
+      });
+      orderedProductIds = expanded.orderedIds;
+      expansionMeta = {
+        tiers: expanded.idsByTier,
+        primaryFoundCount: expanded.primaryFoundCount,
+        detectedBrandIds: expanded.detectedBrandIds,
+        detectedCategoryIds: expanded.detectedCategoryIds,
+        tierNotes: expanded.tierNotes,
+      };
+    }
+    const pageProductIds = orderedProductIds.slice(startOffset, startOffset + perPage);
 
     let products: any[] = [];
     if (fullResponse) {
-      const fallbackLimit = (dto as any).per_page ?? (dto as any).limit ?? 20;
-      const productsResult = productIds.length
+      const productsResult = pageProductIds.length
         ? await this.productsService.findAll(
             {
               page: 1,
-              limit: Math.max(productIds.length, fallbackLimit),
-              ids: productIds,
+              limit: Math.max(pageProductIds.length, perPage),
+              ids: pageProductIds,
               visible: this.resolveAdminVisibleFilter(dto, isAdmin),
             } as any,
             isAdmin,
@@ -1137,44 +1986,143 @@ export class SearchService {
         : { data: [] };
       products = this.mapSearchResults(
         productsResult.data ?? [],
-        productIds,
+        pageProductIds,
         true,
       );
     } else {
       const imageUrlsByProductId =
-        await this.productsService.findPrimaryImageUrlsByProductIds(productIds);
-      products = hits
+        await this.productsService.findPrimaryImageUrlsByProductIds(pageProductIds);
+      const hitsById = new Map<number, any>();
+      hits.forEach((hit: any) => {
+        const id = Number(hit?.document?.id);
+        if (Number.isInteger(id) && id > 0) {
+          hitsById.set(id, hit);
+        }
+      });
+      const mappedFromHits = pageProductIds
         .map((hit: any) => {
-          const productId = Number(hit?.document?.id);
-          if (!Number.isInteger(productId) || productId <= 0 || !hit?.document) {
-            return null;
+          const sourceHit = typeof hit === 'number' ? hitsById.get(hit) : hit;
+          const productId = Number(sourceHit?.document?.id ?? hit);
+          if (!Number.isInteger(productId) || productId <= 0 || !sourceHit?.document) {
+            return undefined;
           }
 
           return this.mapTypesenseDocumentToSearchCard(
-            hit.document,
+            sourceHit.document,
             imageUrlsByProductId.get(productId),
           );
         })
         .filter((product): product is Record<string, any> => Boolean(product));
+      const missingIds = pageProductIds.filter((id) => !hitsById.has(Number(id)));
+      const missingCards =
+        shouldExpand && missingIds.length > 0
+          ? await this.buildSearchCardsFromTypesenseIds(missingIds, isAdmin)
+          : [];
+      products = [...mappedFromHits, ...missingCards];
     }
 
-    return {
+    let facetCountsSource = result.facet_counts;
+    if (shouldExpand && orderedProductIds.length > 0) {
+      const facetsFromExpandedPool = await this.typesenseService.search({
+        q: '*',
+        query_by: 'name_en,name_ar,sku,slug',
+        filter_by: `id:=[${orderedProductIds.join(',')}]`,
+        facet_by: this.getTypesenseFacetFields(),
+        max_facet_values: 100,
+        page: 1,
+        per_page: 1,
+      });
+      facetCountsSource = facetsFromExpandedPool.facet_counts;
+    }
+
+    const totalCount = shouldExpand
+      ? Math.max(Number(result.found ?? 0), orderedProductIds.length)
+      : Number(result.found ?? products.length);
+    const response = {
       data: products,
       meta: {
-        total: result.found ?? products.length,
-        page: dto.page ?? 1,
-        limit: (dto as any).per_page ?? (dto as any).limit ?? 20,
+        total: totalCount,
+        page,
+        limit: perPage,
         totalPages:
-          result.found && ((dto as any).per_page ?? (dto as any).limit ?? 20) > 0
-            ? Math.ceil(result.found / ((dto as any).per_page ?? (dto as any).limit ?? 20))
+          totalCount && perPage > 0
+            ? Math.ceil(totalCount / perPage)
             : 1,
       },
       facets: await this.enrichSearchFacets(
-        this.mapTypesenseFacetCounts(result.facet_counts),
+        this.mapTypesenseFacetCounts(facetCountsSource),
         dto,
       ),
       search_time_ms: result.search_time_ms,
     };
+
+    if (debugSearchEnabled) {
+      const prep = this.lastQueryPreparationDebug;
+      const queryTokens =
+        prep?.tokens ?? this.tokenizeQueryForExpansion(normalizedQuery);
+      let detectedBrandIds = expansionMeta?.detectedBrandIds;
+      let detectedCategoryIds = expansionMeta?.detectedCategoryIds;
+      if (!expansionMeta && queryTokens.length > 0) {
+        const detected = await this.detectEntityIdsFromTokens(
+          queryTokens,
+          normalizedQuery,
+        );
+        detectedBrandIds = detected.brandIds;
+        detectedCategoryIds = detected.categoryIds;
+      }
+
+      const entityLabels = await this.resolveDebugEntityLabels(
+        detectedBrandIds,
+        detectedCategoryIds,
+      );
+      const tierCounts: Record<ExpansionTierKey, number[]> = expansionMeta?.tiers ?? {
+        primary: Array.from({ length: primaryCount }),
+        strong_partial: [],
+        category_brand: [],
+        cross_brand_spec: [],
+        category: [],
+        brand: [],
+        specification: [],
+        keyword: [],
+      };
+
+      await this.writeSearchDebugLog({
+        kind: 'search',
+        provider: 'typesense',
+        query: prep?.originalQuery ?? dto.q ?? '',
+        normalized_query: prep?.normalizedQuery ?? normalizedQuery,
+        tokens: queryTokens,
+        price_stripped_phrases: prep?.priceParse?.strippedPhrases,
+        price_min: dto.min_price,
+        price_max: dto.max_price,
+        page,
+        limit: perPage,
+        expansion_applied: shouldExpand,
+        expansion_tier_details: this.buildExpansionTierDebugDetails(
+          tierCounts,
+          expansionMeta?.tierNotes ?? {},
+        ),
+        detected_brand_ids:
+          detectedBrandIds && detectedBrandIds.length
+            ? detectedBrandIds.join(', ')
+            : undefined,
+        detected_brand_labels: entityLabels.brands,
+        detected_category_ids:
+          detectedCategoryIds && detectedCategoryIds.length
+            ? detectedCategoryIds.join(', ')
+            : undefined,
+        detected_category_labels: entityLabels.categories,
+        primary_found: expansionMeta?.primaryFoundCount ?? primaryCount,
+        final_candidates: orderedProductIds.length,
+        primary_enough_threshold: primaryEnoughCount,
+        primary_enough: primaryIsEnough,
+        response_total: response.meta.total,
+        response_count: response.data.length,
+        search_time_ms: result.search_time_ms,
+      });
+    }
+
+    return response;
   }
 
   private async autocompleteWithTypesense(
@@ -1187,8 +2135,9 @@ export class SearchService {
 
     const result = await this.typesenseService.search({
       q: normalizeSearchQuery(dto.q),
-      query_by: 'name_en,name_ar,sku,slug',
-      query_by_weights: '5,5,4,2',
+      query_by:
+        'name_en,name_ar,brand_name_en,brand_name_ar,category_names_en,category_names_ar,sku,slug',
+      query_by_weights: '5,5,4,4,3,3,4,2',
       text_match_type: 'max_weight',
       prioritize_token_position: true,
       ...(filterBy ? { filter_by: filterBy } : {}),
@@ -1252,12 +2201,17 @@ export class SearchService {
     );
   }
 
+  private isDebugSearchEnabled(): boolean {
+    return this.isSearchDebugEnabledByEnv();
+  }
+
   async search(
     dto: SearchQueryDto,
     isAdmin = false,
     fullResponse = false,
   ): Promise<any> {
     const preparedDto = await this.prepareSearchQuery(dto);
+    const debugSearchEnabled = this.isDebugSearchEnabled();
     const useRandomBrowse = this.shouldUseRandomBrowseSort(preparedDto, isAdmin);
     const hasUnsupportedFilters = this.hasUnsupportedTypesenseFilters(preparedDto);
     const canUseTypesense =
@@ -1277,12 +2231,31 @@ export class SearchService {
       ? { ...preparedDto, q: normalizeSearchQuery(preparedDto.q) }
       : preparedDto;
     const cacheKey = `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}:${JSON.stringify(cacheDto)}`;
-    const skipResponseCache = dto.is_admin === true;
+    const skipResponseCache = dto.is_admin === true || debugSearchEnabled;
     const cached =
       useRandomBrowse || skipResponseCache
         ? null
         : await this.cacheManager.get<any>(cacheKey);
-    if (cached) return cached;
+    const bypassCacheForBrandCategoryQuery = canUseTypesense && Boolean(
+      preparedDto.q &&
+        this.tokenizeQueryForExpansion(preparedDto.q).length > 0 &&
+        (cached?.meta?.total ?? 0) === 0,
+    );
+    if (cached && !bypassCacheForBrandCategoryQuery) {
+      if (debugSearchEnabled) {
+        await this.writeSearchDebugLog({
+          kind: 'search',
+          provider: 'cache',
+          query: preparedDto.q ?? '',
+          page: preparedDto.page ?? 1,
+          limit: (preparedDto as any).per_page ?? (preparedDto as any).limit ?? 20,
+          cache_hit: true,
+          response_total: cached?.meta?.total,
+          response_count: Array.isArray(cached?.data) ? cached.data.length : 0,
+        });
+      }
+      return cached;
+    }
 
     let response: any;
     const start = Date.now();
@@ -1314,6 +2287,36 @@ export class SearchService {
         facets: [],
         search_time_ms: Date.now() - start,
       };
+
+      if (debugSearchEnabled) {
+        await this.writeSearchDebugLog({
+          kind: 'search',
+          provider: 'db',
+          query: preparedDto.q ?? '',
+          page: preparedDto.page ?? 1,
+          limit: (preparedDto as any).per_page ?? (preparedDto as any).limit ?? 20,
+          expansion_applied: false,
+          reason:
+            canUseTypesense
+              ? 'typesense_runtime_fallback'
+              : this.searchProvider !== 'typesense'
+                ? 'provider_not_typesense'
+                : !this.typesenseService.isEnabled()
+                  ? 'typesense_disabled'
+                  : hasUnsupportedFilters
+                    ? 'unsupported_filters'
+                    : 'db_path',
+          response_total: response.meta?.total,
+          response_count: Array.isArray(response.data) ? response.data.length : 0,
+        });
+      }
+    }
+
+    const elapsedMs = Date.now() - start;
+    if (elapsedMs > this.getLatencyBudgetMs()) {
+      this.logger.warn(
+        `[search-latency] q="${preparedDto.q ?? ''}" provider=${canUseTypesense ? 'typesense' : 'db'} elapsed_ms=${elapsedMs} budget_ms=${this.getLatencyBudgetMs()}`,
+      );
     }
 
     if (!useRandomBrowse && !skipResponseCache) {

@@ -461,8 +461,12 @@ export class CategoriesService {
 
     const savedCategory = await this.categoriesRepository.save(category);
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToCategory(savedCategory.id, product_changes);
+      changedProductIds = await this.applyProductChangesToCategory(
+        savedCategory.id,
+        product_changes,
+      );
     }
 
     if (attribute_ids !== undefined) {
@@ -474,6 +478,11 @@ export class CategoriesService {
         savedCategory.id,
         specification_ids,
       );
+    }
+
+    await this.productsService.syncProductsByCategoryToTypesense(savedCategory.id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
     }
 
     return this.findOneForAdmin(savedCategory.id);
@@ -517,7 +526,7 @@ export class CategoriesService {
   private async applyProductChangesToCategory(
     categoryId: number,
     productChanges?: ProductChangesDto,
-  ): Promise<void> {
+  ): Promise<number[]> {
     const {
       addProductIds,
       removeProductIds,
@@ -540,6 +549,8 @@ export class CategoriesService {
     if (addProductIds.length > 0) {
       await this.addProductsToCategory(categoryId, addProductIds);
     }
+
+    return [...new Set([...addProductIds, ...removeProductIds])];
   }
 
   async findAll(filterDto?: FilterCategoryDto) {
@@ -859,8 +870,9 @@ export class CategoriesService {
       }
     }
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToCategory(id, product_changes);
+      changedProductIds = await this.applyProductChangesToCategory(id, product_changes);
     }
 
     if (attribute_ids !== undefined) {
@@ -869,6 +881,11 @@ export class CategoriesService {
 
     if (specification_ids !== undefined) {
       await this.syncSpecificationsToCategory(id, specification_ids);
+    }
+
+    await this.productsService.syncProductsByCategoryToTypesense(id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
     }
 
     // Re-fetch to get updated relations

@@ -165,8 +165,12 @@ export class ProductsService {
       const product = await this.productsRepository.findOne({
         where: { id: productId },
         relations: {
-          productCategories: true,
+          productCategories: {
+            category: true,
+          },
           specifications: true,
+          brand: true,
+          category: true,
         },
       });
 
@@ -207,6 +211,51 @@ export class ProductsService {
         `Failed to delete product ${productId} from Typesense: ${getErrorMessage(error)}`,
       );
     }
+  }
+
+  async syncProductsToTypesense(productIds: number[]): Promise<void> {
+    if (!this.typesenseService.isEnabled()) {
+      return;
+    }
+
+    const normalizedIds = [
+      ...new Set(
+        productIds.filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    ];
+    if (normalizedIds.length === 0) {
+      return;
+    }
+
+    const concurrency = 20;
+    for (let index = 0; index < normalizedIds.length; index += concurrency) {
+      const chunk = normalizedIds.slice(index, index + concurrency);
+      await Promise.all(chunk.map((id) => this.syncProductToTypesense(id)));
+    }
+  }
+
+  async syncProductsByBrandToTypesense(brandId: number): Promise<void> {
+    if (!this.typesenseService.isEnabled()) {
+      return;
+    }
+
+    const rows = await this.productsRepository.find({
+      where: { brand_id: brandId },
+      select: { id: true },
+    });
+    await this.syncProductsToTypesense(rows.map((row) => row.id));
+  }
+
+  async syncProductsByCategoryToTypesense(categoryId: number): Promise<void> {
+    if (!this.typesenseService.isEnabled()) {
+      return;
+    }
+
+    const rows = await this.productCategoriesRepository.find({
+      where: { category_id: categoryId },
+      select: { product_id: true },
+    });
+    await this.syncProductsToTypesense(rows.map((row) => row.product_id));
   }
 
   private async shouldShowSalePricing(): Promise<boolean> {

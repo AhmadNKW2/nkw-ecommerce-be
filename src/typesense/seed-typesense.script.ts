@@ -43,8 +43,12 @@ async function seedTypesense() {
     while (true) {
       const products: Product[] = await repository.find({
         relations: {
-          productCategories: true,
+          productCategories: {
+            category: true,
+          },
           specifications: true,
+          brand: true,
+          category: true,
         },
         order: {
           id: 'ASC',

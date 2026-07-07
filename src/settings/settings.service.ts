@@ -21,12 +21,17 @@ import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
 import { SeoSettings } from './entities/seo-settings.entity';
 import {
+  AppliedProductPriceRule,
   assertProductPriceRuleValues,
   calculateManagedPrice,
-  doProductPriceRulesOverlap,
+  doScopedProductPriceRulesConflict,
   ensureSalePriceBelowPrice,
-  findMatchingProductPriceRule,
+  findBestMatchingProductPriceRule,
   MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
+  normalizeCategoryIds,
+  normalizeProductPriceRuleShape,
+  ProductPricingContext,
+  toAppliedProductPriceRule,
 } from './product-pricing.util';
 import { createProductPriceRulesTableDefinition } from './product-price-rule.table';
 import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
@@ -245,11 +250,13 @@ export class SettingsService implements OnModuleInit {
     await this.ensureSchemaReady();
 
     const candidate = this.normalizeProductPriceRulePayload(dto);
-    await this.assertNoOverlappingProductPriceRule(candidate);
+    await this.assertNoConflictingProductPriceRule(candidate);
 
     const rule = this.productPriceRuleRepository.create(candidate);
+    const savedRule = await this.productPriceRuleRepository.save(rule);
+    await this.repriceAllProductsByActiveRules();
 
-    return this.productPriceRuleRepository.save(rule);
+    return savedRule;
   }
 
   async updateProductPriceRule(id: number, dto: UpdateProductPriceRuleDto) {
@@ -264,6 +271,18 @@ export class SettingsService implements OnModuleInit {
     }
 
     const candidate = this.normalizeProductPriceRulePayload({
+      vendor_id:
+        dto.vendor_id !== undefined ? dto.vendor_id : existingRule.vendor_id,
+      brand_id:
+        dto.brand_id !== undefined ? dto.brand_id : existingRule.brand_id,
+      category_ids:
+        dto.category_ids !== undefined
+          ? dto.category_ids
+          : existingRule.category_ids,
+      price_condition:
+        dto.price_condition ?? existingRule.price_condition ?? 'between',
+      adjustment_type:
+        dto.adjustment_type ?? existingRule.adjustment_type ?? 'decrease',
       min_vendor_price: dto.min_vendor_price ?? existingRule.min_vendor_price,
       max_vendor_price:
         dto.max_vendor_price !== undefined
@@ -273,11 +292,14 @@ export class SettingsService implements OnModuleInit {
       is_active: dto.is_active ?? existingRule.is_active,
     });
 
-    await this.assertNoOverlappingProductPriceRule(candidate, id);
+    await this.assertNoConflictingProductPriceRule(candidate, id);
 
     Object.assign(existingRule, candidate);
 
-    return this.productPriceRuleRepository.save(existingRule);
+    const savedRule = await this.productPriceRuleRepository.save(existingRule);
+    await this.repriceAllProductsByActiveRules();
+
+    return savedRule;
   }
 
   async deleteProductPriceRule(id: number) {
@@ -289,6 +311,8 @@ export class SettingsService implements OnModuleInit {
       throw new NotFoundException('Product price rule not found');
     }
 
+    await this.repriceAllProductsByActiveRules();
+
     return { message: 'Product price rule deleted successfully' };
   }
 
@@ -296,48 +320,140 @@ export class SettingsService implements OnModuleInit {
     originalVendorPrice: number;
     originalVendorSalePrice: number | null;
     fixedPercentage?: number;
+    fixedAdjustmentType?: 'increase' | 'decrease';
+    vendorId?: number | null;
+    brandId?: number | null;
+    categoryIds?: number[];
   }) {
     await this.ensureSchemaReady();
 
     const activeRules = params.fixedPercentage
       ? []
-      : await this.productPriceRuleRepository.find({
+      : (await this.productPriceRuleRepository.find({
           where: { is_active: true },
-          order: { min_vendor_price: 'ASC', id: 'ASC' },
-        });
+          order: { id: 'ASC' },
+        })).map((rule) => normalizeProductPriceRuleShape(rule));
 
-    const pricePercentage = params.fixedPercentage
-      ?? findMatchingProductPriceRule(activeRules, params.originalVendorPrice)
-        ?.percentage
-      ?? MIN_PRODUCT_PRICE_RULE_PERCENTAGE;
+    const pricingContext: ProductPricingContext = {
+      vendorId: params.vendorId ?? null,
+      brandId: params.brandId ?? null,
+      categoryIds: params.categoryIds ?? [],
+      originalPrice: params.originalVendorPrice,
+    };
+
+    const matchedPriceRule = params.fixedPercentage
+      ? null
+      : findBestMatchingProductPriceRule(activeRules, pricingContext);
+    const pricePercentage =
+      params.fixedPercentage ??
+      matchedPriceRule?.percentage ??
+      MIN_PRODUCT_PRICE_RULE_PERCENTAGE;
+    const priceAdjustmentType =
+      params.fixedAdjustmentType ??
+      matchedPriceRule?.adjustment_type ??
+      'decrease';
     const price = calculateManagedPrice(
       params.originalVendorPrice,
       pricePercentage,
+      priceAdjustmentType,
     );
 
     let salePrice: number | null = null;
+    let matchedSaleRule: AppliedProductPriceRule | null = null;
 
     if (
       params.originalVendorSalePrice !== null &&
       params.originalVendorSalePrice !== undefined
     ) {
-      const salePercentage = params.fixedPercentage
-        ?? findMatchingProductPriceRule(
-          activeRules,
-          params.originalVendorSalePrice,
-        )?.percentage
-        ?? MIN_PRODUCT_PRICE_RULE_PERCENTAGE;
+      const salePricingContext: ProductPricingContext = {
+        ...pricingContext,
+        originalPrice: params.originalVendorSalePrice,
+      };
+      const matchedSalePriceRule = params.fixedPercentage
+        ? null
+        : findBestMatchingProductPriceRule(activeRules, salePricingContext);
+      const salePercentage =
+        params.fixedPercentage ??
+        matchedSalePriceRule?.percentage ??
+        MIN_PRODUCT_PRICE_RULE_PERCENTAGE;
+      const saleAdjustmentType =
+        params.fixedAdjustmentType ??
+        matchedSalePriceRule?.adjustment_type ??
+        'decrease';
 
       salePrice = calculateManagedPrice(
         params.originalVendorSalePrice,
         salePercentage,
+        saleAdjustmentType,
       );
       salePrice = ensureSalePriceBelowPrice(price, salePrice);
+      matchedSaleRule = matchedSalePriceRule
+        ? toAppliedProductPriceRule(matchedSalePriceRule)
+        : null;
     }
 
     return {
       price,
       salePrice,
+      appliedPriceRule: matchedPriceRule
+        ? toAppliedProductPriceRule(matchedPriceRule)
+        : null,
+      appliedSalePriceRule: matchedSaleRule,
+    };
+  }
+
+  async repriceAllProductsByActiveRules() {
+    await this.ensureSchemaReady();
+
+    const updatedCount = await this.dataSource.transaction(async (manager) => {
+      const productRepository = manager.getRepository(Product);
+      const products = await productRepository
+        .createQueryBuilder('product')
+        .leftJoinAndSelect('product.productCategories', 'productCategories')
+        .select([
+          'product.id',
+          'product.vendor_id',
+          'product.brand_id',
+          'product.category_id',
+          'product.original_vendor_price',
+          'product.original_vendor_sale_price',
+          'productCategories.category_id',
+        ])
+        .getMany();
+
+      for (const product of products) {
+        const categoryIds = this.resolveProductCategoryIds(product);
+        const originalVendorPrice = Number(product.original_vendor_price ?? 0);
+        const originalVendorSalePrice =
+          product.original_vendor_sale_price === null ||
+          product.original_vendor_sale_price === undefined
+            ? null
+            : Number(product.original_vendor_sale_price);
+
+        if (!Number.isFinite(originalVendorPrice) || originalVendorPrice <= 0) {
+          continue;
+        }
+
+        const nextPricing = await this.calculateManagedProductPrices({
+          originalVendorPrice,
+          originalVendorSalePrice,
+          vendorId: product.vendor_id ?? null,
+          brandId: product.brand_id ?? null,
+          categoryIds,
+        });
+
+        await productRepository.update(product.id, {
+          price: nextPricing.price,
+          sale_price: nextPricing.salePrice,
+        });
+      }
+
+      return products.length;
+    });
+
+    return {
+      updated_count: updatedCount,
+      message: 'Product prices were recalculated from active pricing rules.',
     };
   }
 
@@ -367,6 +483,7 @@ export class SettingsService implements OnModuleInit {
           originalVendorPrice,
           originalVendorSalePrice,
           fixedPercentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
+          fixedAdjustmentType: 'decrease',
         });
 
         await productRepository.update(product.id, {
@@ -473,6 +590,7 @@ export class SettingsService implements OnModuleInit {
     await this.ensureProductFieldTogglesTableExists();
     await this.ensureSitePopupSettingsTableExists();
     await this.ensureProductPriceRulesTableExists();
+    await this.ensureProductPriceRuleColumnsExist();
     await this.ensureProductVendorPriceColumnsExist();
     await this.ensureProductMeasurementUnitColumnsExist();
     await this.ensureProductReferenceSlugColumnExists();
@@ -794,6 +912,82 @@ export class SettingsService implements OnModuleInit {
     }
   }
 
+  private async ensureProductPriceRuleColumnsExist(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasTable('product_price_rules'))) {
+        return;
+      }
+
+      const missingColumns: TableColumn[] = [];
+
+      if (!(await queryRunner.hasColumn('product_price_rules', 'vendor_id'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'vendor_id',
+            type: 'int',
+            isNullable: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_price_rules', 'brand_id'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'brand_id',
+            type: 'int',
+            isNullable: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_price_rules', 'category_ids'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'category_ids',
+            type: 'jsonb',
+            isNullable: true,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn('product_price_rules', 'price_condition'))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'price_condition',
+            type: 'varchar',
+            length: '20',
+            default: `'between'`,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn('product_price_rules', 'adjustment_type'))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'adjustment_type',
+            type: 'varchar',
+            length: '20',
+            default: `'decrease'`,
+          }),
+        );
+      }
+
+      if (missingColumns.length > 0) {
+        await queryRunner.addColumns('product_price_rules', missingColumns);
+      }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   private async ensureProductVendorPriceColumnsExist(): Promise<void> {
     const queryRunner = this.dataSource.createQueryRunner();
 
@@ -907,6 +1101,11 @@ export class SettingsService implements OnModuleInit {
 
     await this.productPriceRuleRepository.save(
       this.productPriceRuleRepository.create({
+        vendor_id: null,
+        brand_id: null,
+        category_ids: null,
+        price_condition: 'between',
+        adjustment_type: 'decrease',
         min_vendor_price: 0,
         max_vendor_price: null,
         percentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
@@ -916,12 +1115,17 @@ export class SettingsService implements OnModuleInit {
   }
 
   private normalizeProductPriceRulePayload(input: {
+    vendor_id?: number | null;
+    brand_id?: number | null;
+    category_ids?: number[] | null;
+    price_condition?: 'any' | 'more_than' | 'less_than' | 'between';
+    adjustment_type?: 'increase' | 'decrease';
     min_vendor_price: number;
     max_vendor_price?: number | null;
     percentage: number;
     is_active?: boolean;
   }) {
-    const normalized = {
+    const normalized = normalizeProductPriceRuleShape({
       min_vendor_price: Number(input.min_vendor_price),
       max_vendor_price:
         input.max_vendor_price === undefined || input.max_vendor_price === null
@@ -929,11 +1133,40 @@ export class SettingsService implements OnModuleInit {
           : Number(input.max_vendor_price),
       percentage: Number(input.percentage),
       is_active: input.is_active ?? true,
-    };
+      vendor_id:
+        input.vendor_id === undefined || input.vendor_id === null
+          ? null
+          : Number(input.vendor_id),
+      brand_id:
+        input.brand_id === undefined || input.brand_id === null
+          ? null
+          : Number(input.brand_id),
+      category_ids: normalizeCategoryIds(input.category_ids),
+      price_condition: input.price_condition ?? 'between',
+      adjustment_type: input.adjustment_type ?? 'decrease',
+    });
 
     assertProductPriceRuleValues(normalized);
 
     return normalized;
+  }
+
+  private resolveProductCategoryIds(
+    product: Pick<Product, 'category_id' | 'productCategories'>,
+  ) {
+    const categoryIds = new Set<number>();
+
+    if (product.category_id) {
+      categoryIds.add(product.category_id);
+    }
+
+    for (const productCategory of product.productCategories ?? []) {
+      if (productCategory.category_id) {
+        categoryIds.add(productCategory.category_id);
+      }
+    }
+
+    return Array.from(categoryIds);
   }
 
   private resolveVendorOriginalPricesFromCurrentCatalog(input: {
@@ -1008,17 +1241,12 @@ export class SettingsService implements OnModuleInit {
     return Math.max(0, Number(value.toFixed(2)));
   }
 
-  private async assertNoOverlappingProductPriceRule(
-    candidate: {
-      min_vendor_price: number;
-      max_vendor_price: number | null;
-      percentage: number;
-      is_active: boolean;
-    },
+  private async assertNoConflictingProductPriceRule(
+    candidate: ReturnType<SettingsService['normalizeProductPriceRulePayload']>,
     excludedRuleId?: number,
   ) {
     const existingRules = await this.productPriceRuleRepository.find({
-      order: { min_vendor_price: 'ASC', id: 'ASC' },
+      order: { id: 'ASC' },
     });
 
     const conflictingRule = existingRules.find((rule) => {
@@ -1026,12 +1254,15 @@ export class SettingsService implements OnModuleInit {
         return false;
       }
 
-      return doProductPriceRulesOverlap(candidate, rule);
+      return doScopedProductPriceRulesConflict(
+        candidate,
+        normalizeProductPriceRuleShape(rule),
+      );
     });
 
     if (conflictingRule) {
       throw new ConflictException(
-        `This price range overlaps with existing rule #${conflictingRule.id}.`,
+        `This rule conflicts with existing rule #${conflictingRule.id} for the same scope and price range.`,
       );
     }
   }

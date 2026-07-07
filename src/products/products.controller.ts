@@ -746,6 +746,19 @@ export class ProductsController {
           reference_slug: 'samsung-s3-essential-d362-curved-monitor',
         },
       },
+      original_price_only: {
+        summary: 'Update original price and auto-recalculate managed price',
+        value: {
+          original_price: 60,
+        },
+      },
+      original_prices_with_sale: {
+        summary: 'Update original price and original sale price',
+        value: {
+          original_price: 100,
+          original_sale_price: 85,
+        },
+      },
     },
   })
   patch(

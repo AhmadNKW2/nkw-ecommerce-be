@@ -204,6 +204,22 @@ export class UpdateProductDto {
   @IsOptional()
   original_vendor_sale_price?: number;
 
+  @ApiPropertyOptional({
+    example: 100,
+    description: 'Alias for original_vendor_price.',
+  })
+  @IsNumber()
+  @IsOptional()
+  original_price?: number;
+
+  @ApiPropertyOptional({
+    example: 89.9,
+    description: 'Alias for original_vendor_sale_price.',
+  })
+  @IsNumber()
+  @IsOptional()
+  original_sale_price?: number | null;
+
   // ============== Weight & Dimensions ==============
 
   @ApiPropertyOptional({ example: 1.4, description: 'Weight in kg' })

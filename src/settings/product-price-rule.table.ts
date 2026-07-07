@@ -10,6 +10,33 @@ export function createProductPriceRulesTableDefinition() {
         isPrimary: true,
       },
       {
+        name: 'vendor_id',
+        type: 'int',
+        isNullable: true,
+      },
+      {
+        name: 'brand_id',
+        type: 'int',
+        isNullable: true,
+      },
+      {
+        name: 'category_ids',
+        type: 'jsonb',
+        isNullable: true,
+      },
+      {
+        name: 'price_condition',
+        type: 'varchar',
+        length: '20',
+        default: `'between'`,
+      },
+      {
+        name: 'adjustment_type',
+        type: 'varchar',
+        length: '20',
+        default: `'decrease'`,
+      },
+      {
         name: 'min_vendor_price',
         type: 'decimal',
         precision: 10,
@@ -52,6 +79,14 @@ export function createProductPriceRulesTableDefinition() {
       {
         name: 'idx_product_price_rules_min_vendor_price',
         columnNames: ['min_vendor_price'],
+      },
+      {
+        name: 'idx_product_price_rules_vendor_id',
+        columnNames: ['vendor_id'],
+      },
+      {
+        name: 'idx_product_price_rules_brand_id',
+        columnNames: ['brand_id'],
       },
     ],
   });

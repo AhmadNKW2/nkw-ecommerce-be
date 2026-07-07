@@ -156,6 +156,10 @@ export class TypesenseService implements OnModuleInit {
         'specifications_values_ids',
         'short_description_ar',
         'long_description_ar',
+        'brand_name_en',
+        'brand_name_ar',
+        'category_names_en',
+        'category_names_ar',
       ]);
       const fieldsToEnsure = productSchema.fields.filter(
         (field) =>

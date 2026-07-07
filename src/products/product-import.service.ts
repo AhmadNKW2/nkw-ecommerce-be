@@ -582,6 +582,8 @@ export class ProductImportService {
           originalVendorPrice: expectedOriginalPricing.originalVendorPrice,
           originalVendorSalePrice:
             expectedOriginalPricing.originalVendorSalePrice,
+          vendorId: request.vendorId,
+          categoryIds: request.categoryIds,
         });
 
       const expected: ImportedPricingSnapshot = {
@@ -1332,6 +1334,9 @@ export class ProductImportService {
     const pricing = await this.settingsService.calculateManagedProductPrices({
       originalVendorPrice: vendorOriginalPricing.originalVendorPrice,
       originalVendorSalePrice: vendorOriginalPricing.originalVendorSalePrice,
+      vendorId: request.vendorId,
+      brandId: brandId ?? null,
+      categoryIds: request.categoryIds,
     });
     const isOutOfStock = this.resolveOutOfStock(request.payload);
     const quantity = this.resolveQuantity(request.payload, isOutOfStock);
