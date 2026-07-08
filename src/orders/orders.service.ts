@@ -31,6 +31,7 @@ import { isStorefrontAvailableProduct } from '../products/utils/storefront-produ
 import { resolveWalletPayment } from './utils/wallet-payment.util';
 import { SettingsService } from '../settings/settings.service';
 import { calculateOrderShippingAmount } from '../settings/delivery-fee.util';
+import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 
 // ... imports
 
@@ -78,6 +79,7 @@ export class OrdersService implements OnModuleInit {
     private cartService: CartService,
     private productsService: ProductsService,
     private settingsService: SettingsService,
+    private adminNotificationsService: AdminNotificationsService,
     private dataSource: DataSource,
   ) {}
 
@@ -500,6 +502,7 @@ export class OrdersService implements OnModuleInit {
         }
       }
 
+      this.adminNotificationsService.publishOrderCreated(savedOrder.id);
       return this.findOne(savedOrder.id);
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -653,6 +656,7 @@ export class OrdersService implements OnModuleInit {
 
       await queryRunner.commitTransaction();
 
+      this.adminNotificationsService.publishOrderCreated(savedOrder.id);
       return this.findOne(savedOrder.id);
     } catch (error) {
       await queryRunner.rollbackTransaction();

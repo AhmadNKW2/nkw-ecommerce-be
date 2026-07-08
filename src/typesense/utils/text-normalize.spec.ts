@@ -44,15 +44,13 @@ describe('text-normalize', () => {
       expect(normalizeArabic('احمد')).toBe(normalizeArabic('أحمد'));
     });
 
-    it('strips the leading definite article so معالج = المعالج (QA table case)', () => {
-      expect(normalizeArabic('المعالج')).toBe(normalizeArabic('معالج'));
-      expect(normalizeArabic('المعالج')).toBe('معالج');
+    it('keeps the leading definite article to preserve original words', () => {
+      expect(normalizeArabic('المعالج')).toBe('المعالج');
     });
 
-    it('strips the definite article per word in a multi-word phrase', () => {
-      // Ta-marbuta normalization (ة -> ه) applies before article stripping,
-      // so both words end in ه rather than ة in the final output.
-      expect(normalizeArabic('اللغة العربية')).toBe('لغه عربيه');
+    it('keeps the definite article in multi-word phrases', () => {
+      // Ta-marbuta normalization (ة -> ه) still applies to both words.
+      expect(normalizeArabic('اللغة العربية')).toBe('اللغه العربيه');
     });
 
     it('does not strip short words that merely start with the same two letters as the article', () => {

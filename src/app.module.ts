@@ -34,6 +34,7 @@ import { PartnersModule } from './partners/partners.module';
 import { SpecificationsModule } from './specifications/specifications.module';
 import { SettingsModule } from './settings/settings.module';
 import { TypesenseModule } from './typesense/typesense.module';
+import { AdminNotificationsModule } from './admin-notifications/admin-notifications.module';
 
 @Module({
   imports: [
@@ -88,6 +89,7 @@ import { TypesenseModule } from './typesense/typesense.module';
     SpecificationsModule,
     SettingsModule,
     TypesenseModule,
+    AdminNotificationsModule,
   ],
 })
 export class AppModule implements NestModule {

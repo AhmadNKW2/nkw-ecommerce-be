@@ -43,6 +43,20 @@ export class ResponseInterceptor<T> implements NestInterceptor<
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<ApiResponse<T>> {
+    const response = context.switchToHttp().getResponse();
+    const request = context.switchToHttp().getRequest();
+    const acceptHeader = String(request?.headers?.accept ?? '').toLowerCase();
+    const contentTypeHeader = String(
+      response?.getHeader?.('content-type') ?? '',
+    ).toLowerCase();
+
+    if (
+      acceptHeader.includes('text/event-stream') ||
+      contentTypeHeader.includes('text/event-stream')
+    ) {
+      return next.handle() as any;
+    }
+
     const now = toUtcPlus6(new Date()) as string;
 
     return next.handle().pipe(
