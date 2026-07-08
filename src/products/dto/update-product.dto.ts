@@ -98,6 +98,15 @@ export class UpdateProductDto {
   @IsOptional()
   reference_link?: string;
 
+  @ApiPropertyOptional({
+    example: 'wireless-headphones-pro',
+    description: 'Optional slug from the source/reference product URL',
+  })
+  @IsString()
+  @MaxLength(300)
+  @IsOptional()
+  reference_slug?: string;
+
   @ApiProperty({ example: [5, 12, 14], description: 'Updated array of category IDs' })
   @IsArray()
   @IsNumber({}, { each: true })
@@ -195,6 +204,22 @@ export class UpdateProductDto {
   @IsOptional()
   original_vendor_sale_price?: number;
 
+  @ApiPropertyOptional({
+    example: 100,
+    description: 'Alias for original_vendor_price.',
+  })
+  @IsNumber()
+  @IsOptional()
+  original_price?: number;
+
+  @ApiPropertyOptional({
+    example: 89.9,
+    description: 'Alias for original_vendor_sale_price.',
+  })
+  @IsNumber()
+  @IsOptional()
+  original_sale_price?: number | null;
+
   // ============== Weight & Dimensions ==============
 
   @ApiPropertyOptional({ example: 1.4, description: 'Weight in kg' })
@@ -240,12 +265,6 @@ export class UpdateProductDto {
   @Min(0)
   @IsOptional()
   quantity?: number;
-
-  @ApiPropertyOptional({ example: 15, description: 'Threshold to trigger low stock warnings' })
-  @IsNumber()
-  @Min(0)
-  @IsOptional()
-  low_stock_threshold?: number;
 
   @ApiPropertyOptional({ example: false, description: 'Manual override to mark product as out of stock' })
   @IsBoolean()

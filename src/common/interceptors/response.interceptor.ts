@@ -43,6 +43,20 @@ export class ResponseInterceptor<T> implements NestInterceptor<
     context: ExecutionContext,
     next: CallHandler,
   ): Observable<ApiResponse<T>> {
+    const response = context.switchToHttp().getResponse();
+    const request = context.switchToHttp().getRequest();
+    const acceptHeader = String(request?.headers?.accept ?? '').toLowerCase();
+    const contentTypeHeader = String(
+      response?.getHeader?.('content-type') ?? '',
+    ).toLowerCase();
+
+    if (
+      acceptHeader.includes('text/event-stream') ||
+      contentTypeHeader.includes('text/event-stream')
+    ) {
+      return next.handle() as any;
+    }
+
     const now = toUtcPlus6(new Date()) as string;
 
     return next.handle().pipe(
@@ -62,11 +76,25 @@ export class ResponseInterceptor<T> implements NestInterceptor<
           'data' in data &&
           'meta' in data
         ) {
+          const payload = data as {
+            data: unknown;
+            meta: unknown;
+            facets?: unknown;
+            search_time_ms?: number;
+            message?: string;
+          };
+
           return {
             success: true,
-            data: toUtcPlus6(data.data),
-            meta: toUtcPlus6(data.meta),
-            message: data.message || 'Success',
+            data: toUtcPlus6(payload.data),
+            meta: toUtcPlus6(payload.meta),
+            ...(Array.isArray(payload.facets)
+              ? { facets: toUtcPlus6(payload.facets) }
+              : {}),
+            ...(payload.search_time_ms != null
+              ? { search_time_ms: payload.search_time_ms }
+              : {}),
+            message: payload.message || 'Success',
             time: now,
           };
         }

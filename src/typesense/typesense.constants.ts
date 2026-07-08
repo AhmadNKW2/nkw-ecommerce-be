@@ -1,0 +1,2 @@
+export const TYPESENSE_CLIENT = 'TYPESENSE_CLIENT';
+export const TYPESENSE_PRODUCT_COLLECTION_DEFAULT = 'products';

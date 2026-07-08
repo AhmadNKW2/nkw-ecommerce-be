@@ -34,6 +34,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { DeleteReviewProductsDto } from './dto/delete-review-products.dto';
 import { ImportedPricingAuditQueryDto } from './dto/imported-pricing-audit-query.dto';
 import { ReimportReviewProductsDto } from './dto/reimport-review-products.dto';
+import { BulkUpdateProductStatusDto } from './dto/bulk-update-product-status.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { PatchProductDto } from './dto/patch-product.dto';
 import { FilterProductDto, AssignProductsDto } from './dto/filter-product.dto';
@@ -72,95 +73,6 @@ export class ProductsController {
   ) {}
 
   // ========== PRODUCT CRUD ==========
-
-  /**
-   * POST /products/reindex?rebuild=true
-   * Rebuild the entire Typesense products index from the database.
-   * Pass ?rebuild=true to drop+recreate the collection schema first (for schema changes).
-   * Admin-only, safe to run multiple times.
-   */
-  @Post('reindex')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN)
-  @HttpCode(HttpStatus.ACCEPTED)
-  reindexSearch(@Query('rebuild') rebuild?: string) {
-    const jobId = this.productsService.startReindexJob({
-      dropFirst: rebuild === 'true',
-    });
-    return {
-      job_id: jobId,
-      message:
-        'Reindex started. Poll GET /products/jobs/:job_id to track progress.',
-    };
-  }
-
-  /**
-   * POST /products/reindex/:id
-   * Reindex a single product by ID. Useful for debugging.
-   */
-  @Post('reindex/:id')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN)
-  reindexOne(@Param('id', ParseIntPipe) id: number) {
-    return this.productsService.reindexOne(id);
-  }
-
-  /**
-   * POST /products/generate-concepts
-   * Trigger AI synonym concept generation for ALL products (all statuses).
-   * Already-existing concept_keys are skipped — safe to re-run.
-   * Admin-only. Returns 202 immediately; poll GET /products/jobs/:job_id for status.
-   */
-  @Post('generate-concepts')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN)
-  @HttpCode(HttpStatus.ACCEPTED)
-  generateAiConcepts() {
-    const jobId = this.productsService.startGenerateConceptsJob();
-    return {
-      job_id: jobId,
-      message:
-        'AI concept generation started. Poll GET /products/jobs/:job_id to track progress.',
-    };
-  }
-
-  /**
-   * GET /products/jobs/:jobId
-   * Poll the status of a background reindex or generate-concepts job.
-   * Returns status: 'running' | 'done' | 'failed', duration_seconds, and the final result.
-   */
-  @Get('jobs/:jobId')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN)
-  getJobStatus(@Param('jobId') jobId: string) {
-    const status = this.productsService.getJobStatus(jobId);
-    if (!status)
-      throw new NotFoundException(
-        `Job '${jobId}' not found (may have expired after 24 h)`,
-      );
-    return status;
-  }
-
-  @Sse('jobs/:jobId/stream')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN)
-  streamJobStatus(@Param('jobId') jobId: string): Observable<MessageEvent> {
-    const status = this.productsService.getJobStatus(jobId);
-    if (!status) {
-      throw new NotFoundException(`Job '${jobId}' not found.`);
-    }
-
-    return timer(0, 1500).pipe(
-      map(() => {
-        const currentStatus = this.productsService.getJobStatus(jobId);
-        return { data: currentStatus } as MessageEvent;
-      }),
-      takeWhile((event) => {
-        const payload = event.data as any;
-        return payload?.status === 'running';
-      }, true),
-    );
-  }
 
   @Get('import-jobs/:jobId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
@@ -434,7 +346,15 @@ export class ProductsController {
     },
   })
   create(@Body() createProductDto: CreateProductDto, @Req() req: any) {
-    return this.productsService.create(createProductDto, req.user?.id);
+    return this.productsService.create(createProductDto, req.user?.id, req.user);
+  }
+
+  @Patch('bulk-status')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(...PRODUCTS_MANAGER_ROLES)
+  @ApiOperation({ summary: 'Bulk update product workflow status' })
+  bulkUpdateProductStatus(@Body() dto: BulkUpdateProductStatusDto) {
+    return this.productsService.bulkUpdateProductStatus(dto);
   }
 
   @Put('linked-products')
@@ -761,8 +681,12 @@ export class ProductsController {
       },
     },
   })
-  update(@Param('id') id: string, @Body() updateProductDto: UpdateProductDto) {
-    return this.productsService.update(+id, updateProductDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateProductDto: UpdateProductDto,
+    @Req() req: any,
+  ) {
+    return this.productsService.update(+id, updateProductDto, req.user);
   }
 
   @Patch(':id')
@@ -832,12 +756,36 @@ export class ProductsController {
             'اشترِ أفضل السماعات اللاسلكية بتقنية إلغاء الضوضاء.',
         },
       },
+      reference_slug_only: {
+        summary: 'Update only the reference slug',
+        value: {
+          reference_slug: 'samsung-s3-essential-d362-curved-monitor',
+        },
+      },
+      original_price_only: {
+        summary: 'Update original price and auto-recalculate managed price',
+        value: {
+          original_price: 60,
+        },
+      },
+      original_prices_with_sale: {
+        summary: 'Update original price and original sale price',
+        value: {
+          original_price: 100,
+          original_sale_price: 85,
+        },
+      },
     },
   })
-  patch(@Param('id') id: string, @Body() patchProductDto: PatchProductDto) {
+  patch(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() patchProductDto: PatchProductDto,
+    @Req() req: any,
+  ) {
     return this.productsService.update(
-      +id,
+      id,
       patchProductDto as UpdateProductDto,
+      req.user,
     );
   }
 
@@ -952,6 +900,7 @@ export class ProductsController {
         'Review product re-import started in background. Matching review products will be processed one by one. Poll GET /products/import-jobs/:job_id to track progress.',
     };
   }
+
 
   @Get('import-pricing/audit')
   @UseGuards(AuthGuard('jwt'), RolesGuard)

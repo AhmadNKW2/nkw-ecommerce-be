@@ -9,11 +9,44 @@ import {
   IsIn,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
+import { parseQueryBoolean } from '../../common/utils/query-boolean.util';
 
 export class SearchQueryDto {
   @IsOptional()
   @IsString()
   q?: string = '*';
+
+  @IsOptional()
+  @IsString()
+  locale?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_admin?: boolean;
+
+  /**
+   * Admin-only override of the default status set (active/updated/review).
+   * Comma-separated for multiple values, e.g. ?status=archived or ?status=active,review
+   */
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean),
+  )
+  @IsArray()
+  @IsString({ each: true })
+  status?: string[];
+
+  /**
+   * Admin-only override of the default visible-only filter.
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  visible?: boolean;
 
   // ── Text filters ────────────────────────────────────────────────────────────
 
@@ -38,13 +71,32 @@ export class SearchQueryDto {
   brand_id?: number;
 
   @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  brand_ids?: number[];
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   vendor_id?: number;
 
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  vendor_ids?: number[];
+
   /**
    * Filter by a single category ID.
-   * The field in Typesense is category_ids (array), so this does: category_ids:=[X]
    */
   @IsOptional()
   @Type(() => Number)
@@ -84,9 +136,14 @@ export class SearchQueryDto {
   // ── Availability ────────────────────────────────────────────────────────────
 
   @IsOptional()
-  @Transform(({ value }: { value: string }) => value === 'true')
+  @Transform(({ value }) => parseQueryBoolean(value))
   @IsBoolean()
   in_stock?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_out_of_stock?: boolean;
 
   // ── Rating filter ────────────────────────────────────────────────────────────
 
@@ -110,6 +167,32 @@ export class SearchQueryDto {
   })
   attrs?: string[];
 
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  attributes_values_ids?: number[];
+
+  @IsOptional()
+  @Transform(({ value }: { value: string }) =>
+    String(value)
+      .split(',')
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => !isNaN(n)),
+  )
+  @IsArray()
+  specifications_values_ids?: number[];
+
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0)
+  @Max(5)
+  average_rating_min?: number;
+
   // ── Pagination ──────────────────────────────────────────────────────────────
 
   @IsOptional()
@@ -125,23 +208,66 @@ export class SearchQueryDto {
   @Max(100)
   per_page?: number;
 
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
   // ── Sorting ─────────────────────────────────────────────────────────────────
 
   @IsOptional()
   @IsString()
   @IsIn([
     'popularity_score:desc',
+    'price:asc',
+    'price:desc',
     'price_min:asc',
     'price_min:desc',
     'rating:desc',
     'created_at:desc',
   ])
-  sort_by?: string = 'popularity_score:desc';
+  sort_by?: string;
+
+  // ── Admin-only filters (DB fallback; not indexed in Typesense) ─────────────
+
+  @IsOptional()
+  @IsString()
+  start_date?: string;
+
+  @IsOptional()
+  @IsString()
+  end_date?: string;
+
+  @IsOptional()
+  @IsString()
+  created_by?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  has_no_vendor?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  has_no_brand?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  has_duplicate_reference_link?: boolean;
 }
 
 export class AutocompleteQueryDto {
   @IsString()
   q: string;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_admin?: boolean;
 
   @IsOptional()
   @Type(() => Number)

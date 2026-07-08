@@ -22,6 +22,12 @@ export function createSeoSettingsTableDefinition() {
         default: `'المتجر الإلكتروني'`,
       },
       {
+        name: 'site_logo',
+        type: 'varchar',
+        length: '2048',
+        isNullable: true,
+      },
+      {
         name: 'default_meta_title_en',
         type: 'varchar',
         length: '70',
@@ -86,6 +92,23 @@ export function createSeoSettingsTableDefinition() {
         precision: 10,
         scale: 2,
         default: '50.00',
+      },
+      {
+        name: 'free_delivery_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
+        name: 'delivery_fee',
+        type: 'decimal',
+        precision: 10,
+        scale: 2,
+        default: '2.00',
+      },
+      {
+        name: 'low_stock_threshold',
+        type: 'int',
+        default: 10,
       },
       {
         name: 'created_at',

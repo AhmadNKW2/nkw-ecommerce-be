@@ -12,6 +12,7 @@ import { CreateBrandDto } from './dto/create-brand.dto';
 import { UpdateBrandDto } from './dto/update-brand.dto';
 import { FilterBrandDto } from './dto/filter-brand.dto';
 import { FilterProductDto } from '../products/dto/filter-product.dto';
+import { serializePublicBrand } from '../common/serializers/public-entity.serializer';
 import { ProductsService } from '../products/products.service';
 import { Product, ProductStatus } from '../products/entities/product.entity';
 import {
@@ -62,7 +63,10 @@ export class BrandsService {
     let counter = 1;
 
     const existing = await this.brandsRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -105,8 +109,16 @@ export class BrandsService {
 
     const savedBrand = await this.brandsRepository.save(brand);
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToBrand(savedBrand.id, product_changes);
+      changedProductIds = await this.applyProductChangesToBrand(
+        savedBrand.id,
+        product_changes,
+      );
+    }
+    await this.productsService.syncProductsByBrandToTypesense(savedBrand.id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
     }
 
     return savedBrand;
@@ -139,7 +151,6 @@ export class BrandsService {
 
     const [data, total] = await this.brandsRepository.findAndCount({
       where: searchWhere || where,
-      relations: ['products'],
       order: { [sortBy]: sortOrder },
       skip: (page - 1) * limit,
       take: limit,
@@ -156,7 +167,48 @@ export class BrandsService {
     };
   }
 
-  async findOne(id: number, productFilter?: FilterProductDto): Promise<Brand> {
+  async findOne(
+    id: number,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Brand | ReturnType<typeof serializePublicBrand>> {
+    const brand = await this.brandsRepository.findOne({
+      where: { id },
+    });
+    if (!brand) {
+      throw new NotFoundException('Brand not found');
+    }
+
+    if (!isAdmin) {
+      return serializePublicBrand(brand);
+    }
+
+    return this.findOneForAdmin(id, productFilter);
+  }
+
+  async findOneBySlug(
+    slug: string,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Brand | ReturnType<typeof serializePublicBrand>> {
+    const brand = await this.brandsRepository.findOne({
+      where: { slug },
+    });
+    if (!brand) {
+      throw new NotFoundException(`Brand with slug ${slug} not found`);
+    }
+
+    if (!isAdmin) {
+      return serializePublicBrand(brand);
+    }
+
+    return this.findOneBySlugForAdmin(slug, productFilter);
+  }
+
+  private async findOneForAdmin(
+    id: number,
+    productFilter?: FilterProductDto,
+  ): Promise<Brand> {
     const brand = await this.brandsRepository.findOne({
       where: { id },
     });
@@ -176,7 +228,7 @@ export class BrandsService {
     return brand;
   }
 
-  async findOneBySlug(
+  private async findOneBySlugForAdmin(
     slug: string,
     productFilter?: FilterProductDto,
   ): Promise<Brand> {
@@ -204,7 +256,7 @@ export class BrandsService {
     dto: UpdateBrandDto,
     logoUrl?: string,
   ): Promise<Brand> {
-    const brand = await this.findOne(id);
+    const brand = await this.findOneForAdmin(id);
     const oldLogoUrl = brand.logo;
 
     // Check for name conflicts
@@ -251,8 +303,13 @@ export class BrandsService {
       }
     }
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToBrand(id, product_changes);
+      changedProductIds = await this.applyProductChangesToBrand(id, product_changes);
+    }
+    await this.productsService.syncProductsByBrandToTypesense(id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
     }
 
     return savedBrand;
@@ -261,7 +318,7 @@ export class BrandsService {
   private async applyProductChangesToBrand(
     brandId: number,
     productChanges?: ProductChangesDto,
-  ): Promise<void> {
+  ): Promise<number[]> {
     const {
       addProductIds,
       removeProductIds,
@@ -287,6 +344,8 @@ export class BrandsService {
         { brand_id: brandId },
       );
     }
+
+    return [...new Set([...addProductIds, ...removeProductIds])];
   }
 
   // ========== LIFECYCLE MANAGEMENT ==========
@@ -409,15 +468,19 @@ export class BrandsService {
       brands.map(async (brand) => {
         const archivedProductsRaw = await this.productsRepository.find({
           where: { brand_id: brand.id, status: ProductStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'sku',
-            'archived_at',
-            'archived_by',
-          ],
-          relations: ['productMedia', 'productMedia.media'],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            sku: true,
+            archived_at: true,
+            archived_by: true
+          },
+          relations: {
+            productMedia: {
+              media: true
+            }
+          },
         });
 
         const archivedProducts = archivedProductsRaw.map((product) => {

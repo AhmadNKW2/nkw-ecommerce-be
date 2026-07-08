@@ -11,12 +11,14 @@ import { Note } from './entities/note.entity';
 
 import { FilterNoteDto } from './dto/filter-note.dto';
 import { hydrateProductMedia } from '../products/utils/product-media.util';
+import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 
 @Injectable()
 export class NotesService {
   constructor(
     @InjectRepository(Note)
     private readonly notesRepository: Repository<Note>,
+    private readonly adminNotificationsService: AdminNotificationsService,
   ) {}
 
   async create(user: any, createNoteDto: CreateNoteDto): Promise<Note> {
@@ -29,7 +31,9 @@ export class NotesService {
       guest_phone: !userId ? createNoteDto.guest_phone : null,
       guest_email: !userId ? createNoteDto.guest_email : null,
     });
-    return await this.notesRepository.save(note);
+    const savedNote = await this.notesRepository.save(note);
+    this.adminNotificationsService.publishNoteCreated(savedNote.id);
+    return savedNote;
   }
 
   async findAll(user: any, filterDto: FilterNoteDto) {
@@ -43,7 +47,15 @@ export class NotesService {
 
     const [notes, total] = await this.notesRepository.findAndCount({
       where: whereCondition,
-      relations: ['product', 'product.productMedia', 'product.productMedia.media', 'user'],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          }
+        },
+
+        user: true
+      },
       order: { created_at: 'DESC' },
       skip,
       take: per_page,
@@ -85,7 +97,15 @@ export class NotesService {
 
     const [notes, total] = await this.notesRepository.findAndCount({
       where: whereCondition,
-      relations: ['product', 'product.productMedia', 'product.productMedia.media', 'user'],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          }
+        },
+
+        user: true
+      },
       order: { created_at: 'DESC' },
       skip,
       take: per_page,
@@ -120,7 +140,15 @@ export class NotesService {
 
     const note = await this.notesRepository.findOne({
       where: { id },
-      relations: ['product', 'product.productMedia', 'product.productMedia.media', 'user'],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          }
+        },
+
+        user: true
+      },
     });
 
     if (!note) {

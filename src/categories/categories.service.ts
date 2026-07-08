@@ -16,6 +16,7 @@ import { CreateCategoryUrlDto } from './dto/create-category-url.dto';
 import { UpdateCategoryUrlDto } from './dto/update-category-url.dto';
 import { FilterCategoryUrlDto } from './dto/filter-category-url.dto';
 import { FilterProductDto } from '../products/dto/filter-product.dto';
+import { serializePublicCategory } from '../common/serializers/public-entity.serializer';
 import {
   RestoreCategoryDto,
   PermanentDeleteCategoryDto,
@@ -25,6 +26,7 @@ import {
 import { Product, ProductStatus } from '../products/entities/product.entity';
 import { ProductCategory } from '../products/entities/product-category.entity';
 import { ProductsService } from '../products/products.service';
+import { GenerateCategoryTagsDto } from './dto/generate-category-tags.dto';
 import { VendorStatus } from '../vendors/entities/vendor.entity';
 import { R2StorageService } from '../common/services/r2-storage.service';
 import { Attribute } from '../attributes/entities/attribute.entity';
@@ -42,6 +44,20 @@ import {
 @Injectable()
 export class CategoriesService {
   private readonly logger = new Logger(CategoriesService.name);
+  private readonly categoryTagsJobs = new Map<
+    string,
+    {
+      status: 'running' | 'done' | 'failed';
+      startedAt: Date;
+      finishedAt?: Date;
+      progress: number;
+      total: number;
+      current_category_id?: number;
+      current_category_name_en?: string;
+      result?: Record<string, unknown>;
+      error?: string;
+    }
+  >();
 
   constructor(
     @InjectRepository(Category)
@@ -59,6 +75,216 @@ export class CategoriesService {
     private r2StorageService: R2StorageService,
     private productsService: ProductsService,
   ) {}
+
+  private createCategoryTagsJob(): string {
+    const jobId = `category-tags-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    this.categoryTagsJobs.set(jobId, {
+      status: 'running',
+      startedAt: new Date(),
+      progress: 0,
+      total: 0,
+    });
+    setTimeout(() => this.categoryTagsJobs.delete(jobId), 24 * 60 * 60 * 1000).unref?.();
+    return jobId;
+  }
+
+  private normalizeWhitespace(value: string): string {
+    return value.replace(/\s+/g, ' ').trim();
+  }
+
+  private normalizeArabic(value: string): string {
+    return this.normalizeWhitespace(value)
+      .replace(/[\u064B-\u065F\u0670]/g, '')
+      .replace(/[ـ]/g, '');
+  }
+
+  private isLikelyInvalidTag(value: string): boolean {
+    const normalized = value.trim();
+    if (!normalized) {
+      return true;
+    }
+
+    const lower = normalized.toLowerCase();
+    const hasModelPattern = /\b[a-z]*\d+[a-z0-9-]*\b/i.test(normalized);
+    const containsBlockedWords =
+      lower.includes('model') ||
+      lower.includes('brand') ||
+      normalized.includes('موديل') ||
+      normalized.includes('ماركة');
+
+    return hasModelPattern || containsBlockedWords;
+  }
+
+  private normalizeAndDedupeTags(
+    tags: string[],
+    language: 'en' | 'ar',
+    maxItems: number,
+  ): string[] {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+
+    for (const tag of tags) {
+      if (typeof tag !== 'string') {
+        continue;
+      }
+
+      const cleaned = this.normalizeWhitespace(tag);
+      if (!cleaned || this.isLikelyInvalidTag(cleaned)) {
+        continue;
+      }
+
+      const key =
+        language === 'ar'
+          ? this.normalizeArabic(cleaned)
+          : cleaned.toLowerCase();
+      if (!key || seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(cleaned);
+      if (deduped.length >= maxItems) {
+        break;
+      }
+    }
+
+    return deduped;
+  }
+
+  private getOpenAiApiKey(): string {
+    const openAiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!openAiKey) {
+      throw new BadRequestException('Missing OPENAI_API_KEY environment variable.');
+    }
+    return openAiKey;
+  }
+
+  private extractOpenAiText(body: Record<string, unknown>): string {
+    if (typeof body.output_text === 'string' && body.output_text.trim().length > 0) {
+      return body.output_text;
+    }
+
+    const output = Array.isArray(body.output)
+      ? (body.output as Array<Record<string, unknown>>)
+      : [];
+
+    for (const item of output) {
+      const content = Array.isArray(item.content)
+        ? (item.content as Array<Record<string, unknown>>)
+        : [];
+
+      for (const contentItem of content) {
+        if (typeof contentItem.text === 'string' && contentItem.text.trim().length > 0) {
+          return contentItem.text;
+        }
+      }
+    }
+
+    throw new BadRequestException('OpenAI response did not include text output.');
+  }
+
+  private async generateCategoryTagsWithOpenAi(input: {
+    categoryNameEn: string;
+    categoryNameAr: string;
+    productNamesEn: string[];
+    productNamesAr: string[];
+    model?: string;
+  }): Promise<{ tags_en: string[]; tags_ar: string[] }> {
+    const model =
+      input.model?.trim() ||
+      process.env.CATEGORY_TAGS_OPENAI_MODEL?.trim() ||
+      process.env.OPENAI_MODEL?.trim() ||
+      'gpt-5.4';
+    const openAiKey = this.getOpenAiApiKey();
+
+    const requestBody = {
+      model,
+      input: [
+        {
+          role: 'system',
+          content:
+            'You generate search tags for e-commerce categories. Return strict JSON only with keys tags_en and tags_ar (arrays of unique strings). Never include brand names or model numbers. Keep tags concise and natural for search intent.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            task: 'Generate all likely product search tags for this leaf category.',
+            rules: {
+              include: [
+                'Category and product-title based search phrases',
+                'Common intent variations people type in search',
+              ],
+              exclude: [
+                'Brand names',
+                'Model numbers',
+                'Duplicated terms',
+              ],
+              output_json_shape: {
+                tags_en: ['string'],
+                tags_ar: ['string'],
+              },
+            },
+            category: {
+              name_en: input.categoryNameEn,
+              name_ar: input.categoryNameAr,
+            },
+            product_names: {
+              en: input.productNamesEn,
+              ar: input.productNamesAr,
+            },
+          }),
+        },
+      ],
+    };
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${openAiKey}`,
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    const responseText = await response.text();
+    if (!response.ok) {
+      throw new BadRequestException(
+        `OpenAI request failed (${response.status}): ${responseText}`,
+      );
+    }
+
+    let parsedBody: Record<string, unknown>;
+    try {
+      parsedBody = JSON.parse(responseText) as Record<string, unknown>;
+    } catch {
+      throw new BadRequestException('OpenAI response was not valid JSON.');
+    }
+
+    const rawText = this.extractOpenAiText(parsedBody)
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .trim();
+
+    let parsedOutput: Record<string, unknown>;
+    try {
+      parsedOutput = JSON.parse(rawText) as Record<string, unknown>;
+    } catch {
+      throw new BadRequestException('OpenAI output was not valid JSON.');
+    }
+
+    return {
+      tags_en: Array.isArray(parsedOutput.tags_en)
+        ? (parsedOutput.tags_en as unknown[])
+            .filter((value) => typeof value === 'string')
+            .map((value) => String(value))
+        : [],
+      tags_ar: Array.isArray(parsedOutput.tags_ar)
+        ? (parsedOutput.tags_ar as unknown[])
+            .filter((value) => typeof value === 'string')
+            .map((value) => String(value))
+        : [],
+    };
+  }
 
   private normalizeAttributeIds(attributeIds?: number[]): number[] {
     return [
@@ -102,7 +328,9 @@ export class CategoriesService {
     if (normalizedAttributeIds.length > 0) {
       const attributes = await this.attributesRepository.find({
         where: { id: In(normalizedAttributeIds) },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       if (attributes.length !== normalizedAttributeIds.length) {
@@ -132,7 +360,9 @@ export class CategoriesService {
 
     const relationCategories = await this.categoriesRepository.find({
       where: { id: In(nodes.map((category) => category.id)) },
-      relations: ['attributes'],
+      relations: {
+        attributes: true
+      },
     });
 
     const attributesByCategoryId = new Map(
@@ -160,7 +390,9 @@ export class CategoriesService {
     if (normalizedSpecificationIds.length > 0) {
       const specifications = await this.specificationsRepository.find({
         where: { id: In(normalizedSpecificationIds) },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       if (specifications.length !== normalizedSpecificationIds.length) {
@@ -191,7 +423,9 @@ export class CategoriesService {
 
     const relationCategories = await this.categoriesRepository.find({
       where: { id: In(nodes.map((category) => category.id)) },
-      relations: ['specifications'],
+      relations: {
+        specifications: true
+      },
     });
 
     const specificationsByCategoryId = new Map(
@@ -210,7 +444,7 @@ export class CategoriesService {
   }
 
   private async validateCategoryUrlReferences(categoryId: number): Promise<void> {
-    const categoryExists = await this.categoriesRepository.exist({
+    const categoryExists = await this.categoriesRepository.exists({
       where: { id: categoryId },
     });
 
@@ -292,7 +526,7 @@ export class CategoriesService {
     categoryId: number,
     filterDto?: FilterCategoryUrlDto,
   ): Promise<CategoryUrl[]> {
-    const categoryExists = await this.categoriesRepository.exist({
+    const categoryExists = await this.categoriesRepository.exists({
       where: { id: categoryId },
     });
 
@@ -309,7 +543,9 @@ export class CategoriesService {
   async findOneCategoryUrl(id: number): Promise<CategoryUrl> {
     const categoryUrl = await this.categoryUrlsRepository.findOne({
       where: { id },
-      relations: ['category'],
+      relations: {
+        category: true
+      },
     });
 
     if (!categoryUrl) {
@@ -375,7 +611,10 @@ export class CategoriesService {
     let counter = 1;
 
     const existing = await this.categoriesRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -447,8 +686,12 @@ export class CategoriesService {
 
     const savedCategory = await this.categoriesRepository.save(category);
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToCategory(savedCategory.id, product_changes);
+      changedProductIds = await this.applyProductChangesToCategory(
+        savedCategory.id,
+        product_changes,
+      );
     }
 
     if (attribute_ids !== undefined) {
@@ -462,7 +705,12 @@ export class CategoriesService {
       );
     }
 
-    return this.findOne(savedCategory.id);
+    await this.productsService.syncProductsByCategoryToTypesense(savedCategory.id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
+    }
+
+    return this.findOneForAdmin(savedCategory.id);
   }
 
   private async addProductsToCategory(
@@ -503,7 +751,7 @@ export class CategoriesService {
   private async applyProductChangesToCategory(
     categoryId: number,
     productChanges?: ProductChangesDto,
-  ): Promise<void> {
+  ): Promise<number[]> {
     const {
       addProductIds,
       removeProductIds,
@@ -526,6 +774,8 @@ export class CategoriesService {
     if (addProductIds.length > 0) {
       await this.addProductsToCategory(categoryId, addProductIds);
     }
+
+    return [...new Set([...addProductIds, ...removeProductIds])];
   }
 
   async findAll(filterDto?: FilterCategoryDto) {
@@ -636,7 +886,9 @@ export class CategoriesService {
   private async getDescendantIds(id: number): Promise<number[]> {
     const children = await this.categoriesRepository.find({
       where: { parent_id: id },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
     const childIds = children.map((c) => c.id);
 
@@ -644,7 +896,9 @@ export class CategoriesService {
 
     const grandchildren = await this.categoriesRepository.find({
       where: { parent_id: In(childIds) },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
     const grandChildIds = grandchildren.map((c) => c.id);
 
@@ -654,10 +908,63 @@ export class CategoriesService {
   async findOne(
     id: number,
     productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Category | ReturnType<typeof serializePublicCategory>> {
+    if (!isAdmin) {
+      const category = await this.categoriesRepository.findOne({
+        where: { id },
+        relations: {
+          children: {
+            children: true,
+          },
+        },
+      });
+
+      if (!category) {
+        throw new NotFoundException('Category not found');
+      }
+
+      return serializePublicCategory(category);
+    }
+
+    return this.findOneForAdmin(id, productFilter);
+  }
+
+  async findOneBySlug(
+    slug: string,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Category | ReturnType<typeof serializePublicCategory>> {
+    if (!isAdmin) {
+      const category = await this.categoriesRepository.findOne({
+        where: { slug },
+        relations: {
+          children: {
+            children: true,
+          },
+        },
+      });
+
+      if (!category) {
+        throw new NotFoundException(`Category with slug ${slug} not found`);
+      }
+
+      return serializePublicCategory(category);
+    }
+
+    return this.findOneBySlugForAdmin(slug, productFilter);
+  }
+
+  private async findOneForAdmin(
+    id: number,
+    productFilter?: FilterProductDto,
   ): Promise<Category> {
     const category = await this.categoriesRepository.findOne({
       where: { id },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true,
+      },
     });
 
     if (!category) {
@@ -667,7 +974,6 @@ export class CategoriesService {
     const descendantIds = await this.getDescendantIds(category.id);
     const category_ids = [category.id, ...descendantIds];
 
-    // Get products using ProductsService to ensure consistent format
     const productsResult = await this.productsService.findAll({
       ...productFilter,
       categoryId: undefined,
@@ -682,13 +988,16 @@ export class CategoriesService {
     return category;
   }
 
-  async findOneBySlug(
+  private async findOneBySlugForAdmin(
     slug: string,
     productFilter?: FilterProductDto,
   ): Promise<Category> {
     const category = await this.categoriesRepository.findOne({
       where: { slug },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true,
+      },
     });
 
     if (!category) {
@@ -698,7 +1007,6 @@ export class CategoriesService {
     const descendantIds = await this.getDescendantIds(category.id);
     const category_ids = [category.id, ...descendantIds];
 
-    // Get products using ProductsService to ensure consistent format
     const productsResult = await this.productsService.findAll({
       ...productFilter,
       categoryId: undefined,
@@ -717,7 +1025,7 @@ export class CategoriesService {
     id: number,
     updateCategoryDto: UpdateCategoryDto,
   ): Promise<Category> {
-    const category = await this.findOne(id);
+    const category = await this.findOneForAdmin(id);
     const oldImageUrl = category.image;
 
     const { product_changes, attribute_ids, specification_ids, ...updateData } =
@@ -787,8 +1095,9 @@ export class CategoriesService {
       }
     }
 
+    let changedProductIds: number[] = [];
     if (product_changes) {
-      await this.applyProductChangesToCategory(id, product_changes);
+      changedProductIds = await this.applyProductChangesToCategory(id, product_changes);
     }
 
     if (attribute_ids !== undefined) {
@@ -799,8 +1108,13 @@ export class CategoriesService {
       await this.syncSpecificationsToCategory(id, specification_ids);
     }
 
+    await this.productsService.syncProductsByCategoryToTypesense(id);
+    if (changedProductIds.length > 0) {
+      await this.productsService.syncProductsToTypesense(changedProductIds);
+    }
+
     // Re-fetch to get updated relations
-    return this.findOne(id);
+    return this.findOneForAdmin(id);
   }
 
   // ========== LIFECYCLE MANAGEMENT ==========
@@ -820,26 +1134,75 @@ export class CategoriesService {
     }
   }
 
+  private categoryChildrenCache:
+    | { loadedAt: number; childrenByParent: Map<number, number[]> }
+    | null = null;
+
+  private readonly categoryChildrenCacheTtlMs = 5 * 60 * 1000;
+
+  private async getCategoryChildrenByParent(): Promise<Map<number, number[]>> {
+    const now = Date.now();
+    if (
+      this.categoryChildrenCache &&
+      now - this.categoryChildrenCache.loadedAt < this.categoryChildrenCacheTtlMs
+    ) {
+      return this.categoryChildrenCache.childrenByParent;
+    }
+
+    const allCategories = await this.categoriesRepository.find({
+      select: { id: true, parent_id: true },
+    });
+
+    const childrenByParent = new Map<number, number[]>();
+    for (const category of allCategories) {
+      const parentId = category.parent_id ?? 0;
+      const siblings = childrenByParent.get(parentId) ?? [];
+      siblings.push(category.id);
+      childrenByParent.set(parentId, siblings);
+    }
+
+    this.categoryChildrenCache = { loadedAt: now, childrenByParent };
+    return childrenByParent;
+  }
+
   /**
    * Get all descendant category IDs (children, grandchildren, etc.)
    */
-  private async getAllDescendantIds(categoryId: number): Promise<number[]> {
-    const descendants: number[] = [];
+  async expandCategoryIdsWithDescendants(categoryIds: number[]): Promise<number[]> {
+    const normalizedIds = [
+      ...new Set(
+        categoryIds.filter(
+          (id) => Number.isInteger(id) && id > 0,
+        ),
+      ),
+    ];
 
-    const findDescendants = async (parent_id: number) => {
-      const children = await this.categoriesRepository.find({
-        where: { parent_id },
-        select: ['id'],
-      });
+    if (normalizedIds.length === 0) {
+      return [];
+    }
 
-      for (const child of children) {
-        descendants.push(child.id);
-        await findDescendants(child.id);
+    const childrenByParent = await this.getCategoryChildrenByParent();
+    const expanded = new Set<number>(normalizedIds);
+    const queue = [...normalizedIds];
+
+    while (queue.length > 0) {
+      const categoryId = queue.shift()!;
+      const children = childrenByParent.get(categoryId) ?? [];
+
+      for (const childId of children) {
+        if (!expanded.has(childId)) {
+          expanded.add(childId);
+          queue.push(childId);
+        }
       }
-    };
+    }
 
-    await findDescendants(categoryId);
-    return descendants;
+    return Array.from(expanded);
+  }
+
+  private async getAllDescendantIds(categoryId: number): Promise<number[]> {
+    const expanded = await this.expandCategoryIdsWithDescendants([categoryId]);
+    return expanded.filter((id) => id !== categoryId);
   }
 
   /**
@@ -852,7 +1215,7 @@ export class CategoriesService {
     archivedCategories: number;
     archivedProducts: number;
   }> {
-    const category = await this.findOne(id);
+    const category = await this.findOneForAdmin(id);
 
     if (category.status === CategoryStatus.ARCHIVED) {
       throw new BadRequestException('Category is already archived');
@@ -876,7 +1239,9 @@ export class CategoriesService {
     // Get all product IDs in these categories via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: In(allCategoryIds) },
-      select: ['product_id'],
+      select: {
+        product_id: true
+      },
     });
     const product_ids = [
       ...new Set(productCategories.map((pc) => pc.product_id)),
@@ -923,7 +1288,10 @@ export class CategoriesService {
   }> {
     const category = await this.categoriesRepository.findOne({
       where: { id },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true
+      },
     });
 
     if (!category) {
@@ -1075,7 +1443,9 @@ export class CategoriesService {
     // Get product IDs in this category via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: categoryId },
-      select: ['product_id'],
+      select: {
+        product_id: true
+      },
     });
     let product_ids = productCategories.map((pc) => pc.product_id);
 
@@ -1093,7 +1463,9 @@ export class CategoriesService {
     // Get archived products with their vendor info
     const products = await this.productsRepository.find({
       where: { id: In(product_ids), status: ProductStatus.ARCHIVED },
-      relations: ['vendor'],
+      relations: {
+        vendor: true
+      },
     });
 
     let restored = 0;
@@ -1132,7 +1504,9 @@ export class CategoriesService {
   }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: options.id },
-      relations: ['children'],
+      relations: {
+        children: true
+      },
     });
 
     if (!category) {
@@ -1325,15 +1699,19 @@ export class CategoriesService {
         // Get archived products in this category with media
         const archivedProductsRaw = await this.productsRepository.find({
           where: { category_id: cat.id, status: ProductStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'sku',
-            'archived_at',
-            'archived_by',
-          ],
-          relations: ['productMedia', 'productMedia.media'],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            sku: true,
+            archived_at: true,
+            archived_by: true
+          },
+          relations: {
+            productMedia: {
+              media: true
+            }
+          },
         });
 
         // Map products to include image from primary media or first media
@@ -1347,14 +1725,14 @@ export class CategoriesService {
         // Get archived subcategories
         const archivedSubcategories = await this.categoriesRepository.find({
           where: { parent_id: cat.id, status: CategoryStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'image',
-            'archived_at',
-            'archived_by',
-          ],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            image: true,
+            archived_at: true,
+            archived_by: true
+          },
         });
 
         return {
@@ -1389,7 +1767,9 @@ export class CategoriesService {
   ): Promise<{ message: string }> {
     const category = await this.categoriesRepository.findOne({
       where: { id, status: CategoryStatus.ARCHIVED },
-      relations: ['children'],
+      relations: {
+        children: true
+      },
     });
 
     if (!category) {
@@ -1597,7 +1977,9 @@ export class CategoriesService {
   ): Promise<{ category: Category; products: Product[] }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: categoryId },
-      relations: ['parent'],
+      relations: {
+        parent: true
+      },
     });
 
     if (!category) {
@@ -1607,13 +1989,15 @@ export class CategoriesService {
     // Get products via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: categoryId },
-      relations: [
-        'product',
-        'product.vendor',
-        'product.productMedia',
-        'product.productMedia.media',
-        'product.priceGroups',
-      ],
+      relations: {
+        product: {
+          vendor: true,
+
+          productMedia: {
+            media: true
+          }
+        }
+      },
     });
 
     const products = productCategories
@@ -1637,7 +2021,9 @@ export class CategoriesService {
   }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: categoryId },
-      relations: ['parent'],
+      relations: {
+        parent: true
+      },
     });
 
     if (!category) {
@@ -1647,13 +2033,15 @@ export class CategoriesService {
     // Get products via junction table
     const productCategories = await this.productCategoriesRepository.find({
       where: { category_id: categoryId },
-      relations: [
-        'product',
-        'product.vendor',
-        'product.productMedia',
-        'product.productMedia.media',
-        'product.priceGroups',
-      ],
+      relations: {
+        product: {
+          vendor: true,
+
+          productMedia: {
+            media: true
+          }
+        }
+      },
     });
 
     const products = productCategories
@@ -1710,7 +2098,9 @@ export class CategoriesService {
         // Count archived products in this subcategory
         const productCategories = await this.productCategoriesRepository.find({
           where: { category_id: subcat.id },
-          select: ['product_id'],
+          select: {
+            product_id: true
+          },
         });
         const product_ids = productCategories.map((pc) => pc.product_id);
 
@@ -1738,5 +2128,220 @@ export class CategoriesService {
       category,
       subcategories: subcategoriesWithCounts,
     };
+  }
+
+  async startCategoryTagsGeneration(dto: GenerateCategoryTagsDto) {
+    const jobId = this.createCategoryTagsJob();
+
+    this.runCategoryTagsGenerationJob(jobId, dto).catch((error: unknown) => {
+      const job = this.categoryTagsJobs.get(jobId);
+      if (!job) {
+        return;
+      }
+
+      job.status = 'failed';
+      job.finishedAt = new Date();
+      job.error = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Category tags job ${jobId} failed`, error as Error);
+    });
+
+    return {
+      job_id: jobId,
+      status: 'running',
+      started_at: new Date(),
+    };
+  }
+
+  getCategoryTagsGenerationJob(jobId: string) {
+    const job = this.categoryTagsJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException('Category tags job not found');
+    }
+
+    return {
+      job_id: jobId,
+      status: job.status,
+      started_at: job.startedAt,
+      finished_at: job.finishedAt ?? null,
+      progress: job.progress,
+      total: job.total,
+      current_category_id: job.current_category_id ?? null,
+      current_category_name_en: job.current_category_name_en ?? null,
+      result: job.result ?? null,
+      error: job.error ?? null,
+      duration_seconds: job.finishedAt
+        ? Math.round((job.finishedAt.getTime() - job.startedAt.getTime()) / 1000)
+        : Math.round((Date.now() - job.startedAt.getTime()) / 1000),
+    };
+  }
+
+  private async runCategoryTagsGenerationJob(
+    jobId: string,
+    dto: GenerateCategoryTagsDto,
+  ): Promise<void> {
+    const job = this.categoryTagsJobs.get(jobId);
+    if (!job) {
+      return;
+    }
+
+    const selectedCategoryIds = [
+      ...new Set(
+        (dto.category_ids ?? []).filter(
+          (categoryId) => Number.isInteger(categoryId) && categoryId > 0,
+        ),
+      ),
+    ];
+    const maxTagsPerCategory = dto.max_tags_per_category ?? 80;
+    const maxProductNamesPerCategory = dto.max_product_names_per_category ?? 120;
+
+    const activeCategories = await this.categoriesRepository.find({
+      where: { status: CategoryStatus.ACTIVE },
+      select: {
+        id: true,
+        parent_id: true,
+        name_en: true,
+        name_ar: true,
+      },
+    });
+
+    const categoryById = new Map(activeCategories.map((category) => [category.id, category]));
+    if (selectedCategoryIds.length > 0) {
+      const missing = selectedCategoryIds.filter((id) => !categoryById.has(id));
+      if (missing.length > 0) {
+        throw new NotFoundException(
+          `Selected categories not found or archived: ${missing.join(', ')}`,
+        );
+      }
+    }
+
+    const expandedIds =
+      selectedCategoryIds.length > 0
+        ? await this.expandCategoryIdsWithDescendants(selectedCategoryIds)
+        : activeCategories.map((category) => category.id);
+    const activeExpandedIds = new Set(
+      expandedIds.filter((categoryId) => categoryById.has(categoryId)),
+    );
+
+    const categoriesWithChildren = new Set(
+      activeCategories
+        .filter((category) => category.parent_id !== null)
+        .map((category) => category.parent_id as number),
+    );
+    const leafCategories = activeCategories.filter(
+      (category) =>
+        activeExpandedIds.has(category.id) && !categoriesWithChildren.has(category.id),
+    );
+
+    if (leafCategories.length === 0) {
+      throw new BadRequestException('No active leaf categories were found for this filter.');
+    }
+
+    const leafCategoryIds = leafCategories.map((category) => category.id);
+    const rawProducts = await this.productCategoriesRepository
+      .createQueryBuilder('productCategory')
+      .innerJoin(
+        Product,
+        'product',
+        'product.id = productCategory.product_id AND product.status = :productStatus',
+        { productStatus: ProductStatus.ACTIVE },
+      )
+      .select('productCategory.category_id', 'category_id')
+      .addSelect('product.name_en', 'name_en')
+      .addSelect('product.name_ar', 'name_ar')
+      .where('productCategory.category_id IN (:...categoryIds)', {
+        categoryIds: leafCategoryIds,
+      })
+      .getRawMany<{ category_id: number; name_en: string | null; name_ar: string | null }>();
+
+    const namesByCategoryId = new Map<number, { en: string[]; ar: string[] }>();
+    for (const row of rawProducts) {
+      const categoryId = Number(row.category_id);
+      const bucket = namesByCategoryId.get(categoryId) ?? { en: [], ar: [] };
+
+      if (row.name_en && bucket.en.length < maxProductNamesPerCategory) {
+        bucket.en.push(row.name_en);
+      }
+      if (row.name_ar && bucket.ar.length < maxProductNamesPerCategory) {
+        bucket.ar.push(row.name_ar);
+      }
+      namesByCategoryId.set(categoryId, bucket);
+    }
+
+    job.total = leafCategories.length;
+    const updated: Array<{ category_id: number; tags_en_count: number; tags_ar_count: number }> = [];
+    const failed: Array<{ category_id: number; error: string }> = [];
+
+    for (let index = 0; index < leafCategories.length; index++) {
+      const leafCategory = leafCategories[index];
+      job.current_category_id = leafCategory.id;
+      job.current_category_name_en = leafCategory.name_en;
+
+      const names = namesByCategoryId.get(leafCategory.id) ?? { en: [], ar: [] };
+      if (names.en.length === 0 && names.ar.length === 0) {
+        await this.categoriesRepository.update(leafCategory.id, {
+          tags_en: [],
+          tags_ar: [],
+        });
+        updated.push({ category_id: leafCategory.id, tags_en_count: 0, tags_ar_count: 0 });
+        job.progress = index + 1;
+        continue;
+      }
+
+      try {
+        const aiOutput = await this.generateCategoryTagsWithOpenAi({
+          categoryNameEn: leafCategory.name_en,
+          categoryNameAr: leafCategory.name_ar,
+          productNamesEn: names.en,
+          productNamesAr: names.ar,
+          model: dto.model,
+        });
+
+        const tagsEn = this.normalizeAndDedupeTags(
+          aiOutput.tags_en,
+          'en',
+          maxTagsPerCategory,
+        );
+        const tagsAr = this.normalizeAndDedupeTags(
+          aiOutput.tags_ar,
+          'ar',
+          maxTagsPerCategory,
+        );
+
+        await this.categoriesRepository.update(leafCategory.id, {
+          tags_en: tagsEn,
+          tags_ar: tagsAr,
+        });
+        updated.push({
+          category_id: leafCategory.id,
+          tags_en_count: tagsEn.length,
+          tags_ar_count: tagsAr.length,
+        });
+      } catch (error: unknown) {
+        failed.push({
+          category_id: leafCategory.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        job.progress = index + 1;
+      }
+    }
+
+    const refreshed = this.categoryTagsJobs.get(jobId);
+    if (!refreshed) {
+      return;
+    }
+
+    refreshed.status = failed.length > 0 ? 'failed' : 'done';
+    refreshed.finishedAt = new Date();
+    refreshed.result = {
+      processed_categories: leafCategories.length,
+      updated_categories: updated.length,
+      failed_categories: failed.length,
+      updated,
+      failed,
+    };
+    if (failed.length > 0) {
+      refreshed.error = `${failed.length} categories failed during generation.`;
+    }
   }
 }

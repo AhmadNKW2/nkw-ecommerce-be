@@ -4,23 +4,29 @@ import { OrdersService } from './orders.service';
 import { OrdersController } from './orders.controller';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
+import { OrderStatusHistory } from './entities/order-status-history.entity';
 import { Product } from '../products/entities/product.entity';
 import { CouponsModule } from '../coupons/coupons.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { ProductsModule } from '../products/products.module';
 import { CartModule } from '../cart/cart.module';
+import { SettingsModule } from '../settings/settings.module';
+import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Order,
       OrderItem,
+      OrderStatusHistory,
       Product,
     ]),
     CouponsModule,
     WalletModule,
     ProductsModule,
     CartModule,
+    SettingsModule,
+    AdminNotificationsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

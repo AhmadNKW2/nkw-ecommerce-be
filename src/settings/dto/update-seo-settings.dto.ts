@@ -1,4 +1,15 @@
-import { IsBoolean, IsOptional, IsString, MaxLength, IsUrl } from 'class-validator';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+  Matches,
+  MaxLength,
+  Min,
+} from 'class-validator';
+
+const HEX_COLOR_PATTERN = /^#([0-9A-Fa-f]{6})$/;
 
 export class UpdateSeoSettingsDto {
   @IsOptional()
@@ -10,6 +21,59 @@ export class UpdateSeoSettingsDto {
   @IsString()
   @MaxLength(120)
   site_name_ar?: string;
+
+  @IsOptional()
+  @IsUrl({ require_tld: false }, { message: 'site_logo must be a valid URL' })
+  @MaxLength(2048)
+  site_logo?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_primary must be a hex color' })
+  brand_primary?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_primary_2 must be a hex color' })
+  brand_primary_2?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_primary_3 must be a hex color' })
+  brand_primary_3?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_secondary must be a hex color' })
+  brand_secondary?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_success must be a hex color' })
+  brand_success?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_success_2 must be a hex color' })
+  brand_success_2?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_danger must be a hex color' })
+  brand_danger?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(7)
+  @Matches(HEX_COLOR_PATTERN, { message: 'brand_danger_2 must be a hex color' })
+  brand_danger_2?: string | null;
 
   @IsOptional()
   @IsString()
@@ -59,5 +123,21 @@ export class UpdateSeoSettingsDto {
   show_sale_pricing?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  free_delivery_enabled?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   free_delivery_amount?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  delivery_fee?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  low_stock_threshold?: number;
 }

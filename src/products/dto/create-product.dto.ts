@@ -48,7 +48,7 @@ class MediaInput {
  * Current payload model is flat:
  * - Pricing uses cost, price, and sale_price
  * - Dimensions use weight, length, width, and height
- * - Stock uses quantity, low_stock_threshold, and is_out_of_stock
+ * - Stock uses quantity and is_out_of_stock
  * - Media uses pre-uploaded media IDs
  * - Attributes and specifications accept selected IDs only
  */
@@ -101,6 +101,15 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   reference_link?: string;
+
+  @ApiPropertyOptional({
+    example: 'wireless-headphones-pro',
+    description: 'Optional slug from the source/reference product URL',
+  })
+  @IsString()
+  @MaxLength(300)
+  @IsOptional()
+  reference_slug?: string;
 
   @ApiProperty({ example: [5, 12], description: 'Array of category IDs this product belongs to' })
   @IsArray()
@@ -201,6 +210,24 @@ export class CreateProductDto {
   @IsOptional()
   original_vendor_sale_price?: number;
 
+  @ApiPropertyOptional({
+    example: 100,
+    description: 'Alias for original_vendor_price.',
+  })
+  @PreserveRawNumberInput()
+  @IsNumber()
+  @IsOptional()
+  original_price?: number;
+
+  @ApiPropertyOptional({
+    example: 89.9,
+    description: 'Alias for original_vendor_sale_price.',
+  })
+  @PreserveRawNumberInput()
+  @IsNumber()
+  @IsOptional()
+  original_sale_price?: number | null;
+
   // ============== Weight & Dimensions ==============
 
   @ApiPropertyOptional({ example: 1.5, description: 'Weight value using g or kg' })
@@ -240,12 +267,6 @@ export class CreateProductDto {
   @Min(0)
   @IsOptional()
   quantity?: number;
-
-  @ApiPropertyOptional({ example: 10, description: 'Threshold to trigger low stock warnings' })
-  @IsNumber()
-  @Min(0)
-  @IsOptional()
-  low_stock_threshold?: number;
 
   @ApiPropertyOptional({ example: false, description: 'Manual override to mark product as out of stock' })
   @IsBoolean()

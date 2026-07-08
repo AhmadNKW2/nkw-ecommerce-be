@@ -8,6 +8,10 @@ export class UpdateProductFieldTogglesDto {
 
   @IsOptional()
   @IsBoolean()
+  ratings_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   attributes_enabled?: boolean;
 
   @IsOptional()
@@ -17,6 +21,50 @@ export class UpdateProductFieldTogglesDto {
   @IsOptional()
   @IsBoolean()
   weight_and_dimensions_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  partners_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  cashback_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  banners_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  import_ai_products_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  linked_products_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  reference_links_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  product_status_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  pricing_view_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  easy_purchase_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  cart_sidebar_button_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  popup_enabled?: boolean;
 
   // Appearance-only toggles
   @IsOptional()

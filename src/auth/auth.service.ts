@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/entities/user.entity';
+import { resolveAdminAccess } from '../users/utils/admin-access.util';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -419,6 +420,7 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
+        adminAccess: resolveAdminAccess(user),
       },
     };
   }
@@ -449,6 +451,16 @@ export class AuthService {
       }
 
       if (storedToken.revoked) {
+        const revokedAtMs = storedToken.revokedAt?.getTime() ?? 0;
+        const revokedRecently =
+          revokedAtMs > 0 && Date.now() - revokedAtMs < 10_000;
+
+        // Benign client race: another tab/request already rotated this token.
+        // Re-use the replacement refresh token instead of logging the user out.
+        if (storedToken.replacedByToken && revokedRecently) {
+          return this.refreshTokens(storedToken.replacedByToken, metadata);
+        }
+
         // Token reuse detected - possible theft
         // Revoke all tokens for this user as security measure
         await this.revokeAllUserTokens(payload.sub, 'token_reuse_detected');
@@ -678,7 +690,9 @@ export class AuthService {
         token: resetPasswordDto.token,
         used: false,
       },
-      relations: ['user'],
+      relations: {
+        user: true
+      },
     });
 
     if (!resetToken) {

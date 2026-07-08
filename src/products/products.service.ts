@@ -4,7 +4,6 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, DataSource, EntityManager } from 'typeorm';
 import { Product, ProductStatus } from './entities/product.entity';
@@ -12,6 +11,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import {
   FilterProductDto,
+  FindAllProductsOptions,
   getCategoryIds,
   getOriginalVendorCategoryId,
   getSingleVendorId,
@@ -32,12 +32,15 @@ import { ProductSpecificationValue } from './entities/product-specification-valu
 import { AttributeValue } from '../attributes/entities/attribute-value.entity';
 import { SpecificationValue } from '../specifications/entities/specification-value.entity';
 import { CartItem } from '../cart/entities/cart-item.entity';
-import { IndexingService, IndexableProduct } from '../search/indexing.service';
-import { SynonymConceptService } from '../search/synonym-concept.service';
 import { TagsService } from '../search/tags.service';
 import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
 import { SettingsService } from '../settings/settings.service';
+import { TypesenseService } from '../typesense/typesense.service';
+import {
+  hasAdminAccess,
+  stripProductPricingFields,
+} from '../users/utils/admin-access.util';
 
 import { ProductSpecificationInputDto } from './dto/product-specification.dto';
 import { ProductAttributeInputDto } from './dto/product-attribute.dto';
@@ -49,6 +52,7 @@ import {
   hydrateProductMedia,
   hydrateProductsMedia,
 } from './utils/product-media.util';
+import { mapProductToTypesenseDoc } from '../typesense/mappers/product.mapper';
 
 import { Like, Not } from 'typeorm';
 
@@ -63,6 +67,14 @@ function getErrorMessage(error: unknown): string {
 type OriginalVendorCategoryReference = {
   id?: number;
   name?: string;
+};
+
+type ProductPricingComputationContext = {
+  vendor_id: number | null;
+  brand_id: number | null;
+  categoryIds: number[];
+  original_vendor_price: number | null;
+  original_vendor_sale_price: number | null;
 };
 
 @Injectable()
@@ -133,125 +145,6 @@ export class ProductsService {
     }));
   }
 
-  async findProductContent(filterDto: FilterProductDto, isAdmin = false) {
-    const { data, meta } = await this.findAll(filterDto, isAdmin);
-
-    return {
-      data: data.map((product) => ({
-        id: product.id,
-        name_en: product.name_en,
-        name_ar: product.name_ar,
-        long_description_en: product.long_description_en,
-        long_description_ar: product.long_description_ar,
-        images: (product.media ?? [])
-          .filter((item: { type?: string }) => item.type === MediaType.IMAGE)
-          .sort((left: any, right: any) => {
-            if (left.sort_order !== right.sort_order) {
-              return left.sort_order - right.sort_order;
-            }
-            if (left.is_primary) {
-              return -1;
-            }
-            if (right.is_primary) {
-              return 1;
-            }
-            return left.id - right.id;
-          })
-          .map((item: { url?: string | null }) => item.url)
-          .filter((url): url is string => Boolean(url)),
-      })),
-      meta,
-    };
-  }
-
-  // ─── In-memory background job tracker ─────────────────────────────────────
-  // Kept for the lifetime of the process (survives restarts via a fresh Map).
-  // Auto-cleaned after 24 h to avoid memory bloat.
-  private readonly jobs = new Map<
-    string,
-    {
-      type: 'reindex' | 'generate-concepts';
-      status: 'running' | 'done' | 'failed';
-      startedAt: Date;
-      finishedAt?: Date;
-      result?: Record<string, unknown>;
-      error?: string;
-    }
-  >();
-
-  private createJob(type: 'reindex' | 'generate-concepts'): string {
-    const id = `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    this.jobs.set(id, { type, status: 'running', startedAt: new Date() });
-    // Auto-evict after 24 h
-    setTimeout(() => this.jobs.delete(id), 24 * 60 * 60 * 1000).unref?.();
-    return id;
-  }
-
-  getJobStatus(jobId: string) {
-    const job = this.jobs.get(jobId);
-    if (!job) return null;
-    return {
-      job_id: jobId,
-      type: job.type,
-      status: job.status,
-      started_at: job.startedAt,
-      finished_at: job.finishedAt ?? null,
-      duration_seconds: job.finishedAt
-        ? Math.round(
-            (job.finishedAt.getTime() - job.startedAt.getTime()) / 1000,
-          )
-        : Math.round((Date.now() - job.startedAt.getTime()) / 1000),
-      result: job.result ?? null,
-      error: job.error ?? null,
-    };
-  }
-
-  /** Kick off reindexAll in background and return a job_id immediately. */
-  startReindexJob(opts: { dropFirst?: boolean } = {}): string {
-    const jobId = this.createJob('reindex');
-    this.reindexAll(opts)
-      .then((result) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'done';
-          job.finishedAt = new Date();
-          job.result = result as unknown as Record<string, unknown>;
-        }
-      })
-      .catch((err: Error) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'failed';
-          job.finishedAt = new Date();
-          job.error = err?.message ?? String(err);
-        }
-      });
-    return jobId;
-  }
-
-  /** Kick off generateAiConceptsForAll in background and return a job_id immediately. */
-  startGenerateConceptsJob(): string {
-    const jobId = this.createJob('generate-concepts');
-    this.generateAiConceptsForAll()
-      .then((result) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'done';
-          job.finishedAt = new Date();
-          job.result = result as unknown as Record<string, unknown>;
-        }
-      })
-      .catch((err: Error) => {
-        const job = this.jobs.get(jobId);
-        if (job) {
-          job.status = 'failed';
-          job.finishedAt = new Date();
-          job.error = err?.message ?? String(err);
-        }
-      });
-    return jobId;
-  }
-
   constructor(
     @InjectRepository(Product)
     private productsRepository: Repository<Product>,
@@ -270,11 +163,108 @@ export class ProductsService {
     @InjectRepository(CartItem)
     private cartItemsRepository: Repository<CartItem>,
     private dataSource: DataSource,
-    private readonly indexingService: IndexingService,
-    private readonly synonymConceptService: SynonymConceptService,
     private readonly tagsService: TagsService,
     private readonly settingsService: SettingsService,
+    private readonly typesenseService: TypesenseService,
   ) {}
+
+  private async syncProductToTypesense(productId: number): Promise<void> {
+    try {
+      const product = await this.productsRepository.findOne({
+        where: { id: productId },
+        relations: {
+          productCategories: {
+            category: true,
+          },
+          specifications: true,
+          brand: true,
+          category: true,
+        },
+      });
+
+      if (!product) {
+        await this.typesenseService.deleteProduct(String(productId));
+        return;
+      }
+
+      const attributeValues = await this.dataSource
+        .getRepository(ProductAttributeValue)
+        .find({
+          where: { product_id: productId },
+          select: { attribute_value_id: true },
+        });
+
+      await this.typesenseService.upsertProduct(
+        mapProductToTypesenseDoc(product, {
+          attributeValueIds: attributeValues.map(
+            (entry) => entry.attribute_value_id,
+          ),
+          specificationValueIds: (product.specifications ?? []).map(
+            (entry) => entry.specification_value_id,
+          ),
+        }),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Failed to sync product ${productId} to Typesense: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private async deleteProductFromTypesense(productId: number): Promise<void> {
+    try {
+      await this.typesenseService.deleteProduct(String(productId));
+    } catch (error) {
+      this.logger.warn(
+        `Failed to delete product ${productId} from Typesense: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  async syncProductsToTypesense(productIds: number[]): Promise<void> {
+    if (!this.typesenseService.isEnabled()) {
+      return;
+    }
+
+    const normalizedIds = [
+      ...new Set(
+        productIds.filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    ];
+    if (normalizedIds.length === 0) {
+      return;
+    }
+
+    const concurrency = 20;
+    for (let index = 0; index < normalizedIds.length; index += concurrency) {
+      const chunk = normalizedIds.slice(index, index + concurrency);
+      await Promise.all(chunk.map((id) => this.syncProductToTypesense(id)));
+    }
+  }
+
+  async syncProductsByBrandToTypesense(brandId: number): Promise<void> {
+    if (!this.typesenseService.isEnabled()) {
+      return;
+    }
+
+    const rows = await this.productsRepository.find({
+      where: { brand_id: brandId },
+      select: { id: true },
+    });
+    await this.syncProductsToTypesense(rows.map((row) => row.id));
+  }
+
+  async syncProductsByCategoryToTypesense(categoryId: number): Promise<void> {
+    if (!this.typesenseService.isEnabled()) {
+      return;
+    }
+
+    const rows = await this.productCategoriesRepository.find({
+      where: { category_id: categoryId },
+      select: { product_id: true },
+    });
+    await this.syncProductsToTypesense(rows.map((row) => row.product_id));
+  }
 
   private async shouldShowSalePricing(): Promise<boolean> {
     try {
@@ -285,10 +275,20 @@ export class ProductsService {
     }
   }
 
+  private async getLowStockThreshold(): Promise<number> {
+    try {
+      const settings = await this.settingsService.getSeoSettings();
+      return settings.low_stock_threshold ?? 10;
+    } catch {
+      return 10;
+    }
+  }
+
   private async stripDisabledProductFieldsFromDto<T extends {
     vendor_id?: unknown;
     attributes?: unknown;
     specifications?: unknown;
+    linked_product_ids?: unknown;
     weight?: unknown;
     weight_unit?: unknown;
     length?: unknown;
@@ -307,6 +307,9 @@ export class ProductsService {
       }
       if (toggles.specifications_enabled === false) {
         dto.specifications = undefined;
+      }
+      if (toggles.linked_products_enabled === false) {
+        dto.linked_product_ids = undefined;
       }
       if (toggles.weight_and_dimensions_enabled === false) {
         dto.weight = undefined;
@@ -486,6 +489,11 @@ export class ProductsService {
     return normalizedReferenceLink ? normalizedReferenceLink : null;
   }
 
+  private normalizeReferenceSlug(referenceSlug?: string | null): string | null {
+    const normalizedReferenceSlug = referenceSlug?.trim();
+    return normalizedReferenceSlug ? normalizedReferenceSlug : null;
+  }
+
   private async ensureReferenceLinkIsUnique(
     referenceLink?: string | null,
     excludeProductId?: number,
@@ -547,6 +555,84 @@ export class ProductsService {
     return fallbackState;
   }
 
+  private toOptionalFiniteNumber(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    const numericValue =
+      typeof value === 'number' ? value : Number(String(value).trim());
+
+    return Number.isFinite(numericValue) ? numericValue : null;
+  }
+
+  private resolveCategoryIdsForPricing(params: {
+    dtoCategoryIds?: number[];
+    existingCategoryId?: number | null;
+    existingProductCategories?: Array<{ category_id?: number | null }>;
+  }): number[] {
+    if (Array.isArray(params.dtoCategoryIds)) {
+      return [
+        ...new Set(
+          params.dtoCategoryIds.filter(
+            (categoryId): categoryId is number =>
+              Number.isInteger(categoryId) && categoryId > 0,
+          ),
+        ),
+      ];
+    }
+
+    const categoryIds = new Set<number>();
+    if (
+      typeof params.existingCategoryId === 'number' &&
+      params.existingCategoryId > 0
+    ) {
+      categoryIds.add(params.existingCategoryId);
+    }
+
+    for (const productCategory of params.existingProductCategories ?? []) {
+      if (
+        typeof productCategory?.category_id === 'number' &&
+        productCategory.category_id > 0
+      ) {
+        categoryIds.add(productCategory.category_id);
+      }
+    }
+
+    return Array.from(categoryIds);
+  }
+
+  private async computeManagedPricingFromOriginalInput(
+    context: ProductPricingComputationContext,
+  ): Promise<{ price: number; sale_price: number | null } | null> {
+    const originalVendorPrice = this.toOptionalFiniteNumber(
+      context.original_vendor_price,
+    );
+
+    if (originalVendorPrice === null || originalVendorPrice <= 0) {
+      return null;
+    }
+
+    const originalVendorSalePrice = this.toOptionalFiniteNumber(
+      context.original_vendor_sale_price,
+    );
+
+    const managedPricing = await this.settingsService.calculateManagedProductPrices(
+      {
+        originalVendorPrice,
+        originalVendorSalePrice,
+        vendorId: context.vendor_id ?? null,
+        brandId: context.brand_id ?? null,
+        categoryIds: context.categoryIds,
+      },
+    );
+
+    return {
+      price: managedPricing.price,
+      sale_price: managedPricing.salePrice,
+    };
+  }
+
   private async ensureProductsExist(
     productIds: number[],
     manager: EntityManager = this.dataSource.manager,
@@ -557,7 +643,9 @@ export class ProductsService {
 
     const existingProducts = await manager.find(Product, {
       where: { id: In(productIds) },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     const existingIds = new Set(existingProducts.map((product) => product.id));
@@ -595,7 +683,13 @@ export class ProductsService {
   }> {
     const membership = await this.groupProductsRepository.findOne({
       where: { product_id: productId },
-      relations: ['group', 'group.groupProducts', 'group.groupProducts.product'],
+      relations: {
+        group: {
+          groupProducts: {
+            product: true
+          }
+        }
+      },
     });
 
     if (!membership?.group) {
@@ -749,7 +843,13 @@ export class ProductsService {
       );
       const products = await this.productsRepository.find({
         where: { id: In(normalizedProductIds) },
-        select: ['id', 'name_en', 'name_ar', 'slug', 'sku'],
+        select: {
+          id: true,
+          name_en: true,
+          name_ar: true,
+          slug: true,
+          sku: true
+        },
       });
       const sortedProducts = products
         .sort((left, right) => left.id - right.id)
@@ -787,9 +887,16 @@ export class ProductsService {
     }>;
     message: string;
   }> {
+    const toggles = await this.settingsService.getProductFieldToggles();
+    if (toggles.linked_products_enabled === false) {
+      throw new BadRequestException('Linked products are disabled');
+    }
+
     const product = await this.productsRepository.findOne({
       where: { id: productId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!product) {
@@ -823,45 +930,26 @@ export class ProductsService {
     };
   }
 
-  /**
-   * Public proxy used by SearchProcessor to reindex a product from a BullMQ job.
-   */
-  async syncToIndexPublic(productId: number): Promise<void> {
-    return this.syncProductToIndex(productId, true);
-  }
-
-  // ─── Product tag management ────────────────────────────────────────────────
-
-  /**
-   * Get all tags attached to a product (with their linked concepts).
-   */
   async getProductTags(productId: number): Promise<Tag[]> {
     const product = await this.productsRepository.findOne({
       where: { id: productId },
-      relations: ['tags', 'tags.concepts'],
+      relations: {
+        tags: true
+      },
     } as any);
     if (!product) throw new NotFoundException('Product not found');
     return (product as any).tags ?? [];
   }
 
-  /**
-   * Replace the complete tag list for a product.
-   * Fires a Typesense reindex after the update.
-   */
   async syncProductTags(productId: number, tagNames: string[]): Promise<Tag[]> {
     const exists = await this.productsRepository.count({
       where: { id: productId },
     });
     if (!exists) throw new NotFoundException('Product not found');
     await this.applyTagsToProduct(productId, tagNames);
-    void this.syncProductToIndex(productId);
     return this.getProductTags(productId);
   }
 
-  /**
-   * Add a single tag by name to a product.
-   * Creates the tag (and a background AI concept) if it doesn't exist yet.
-   */
   async addProductTagByName(productId: number, tagName: string): Promise<Tag> {
     const exists = await this.productsRepository.count({
       where: { id: productId },
@@ -873,13 +961,9 @@ export class ProductsService {
       .relation(Product, 'tags')
       .of(productId)
       .add(tag.id);
-    void this.syncProductToIndex(productId);
     return tag;
   }
 
-  /**
-   * Remove a single tag (by its numeric ID) from a product.
-   */
   async removeProductTag(productId: number, tagId: number): Promise<void> {
     const exists = await this.productsRepository.count({
       where: { id: productId },
@@ -890,14 +974,8 @@ export class ProductsService {
       .relation(Product, 'tags')
       .of(productId)
       .remove(tagId);
-    void this.syncProductToIndex(productId);
   }
 
-  /**
-   * Replace the product's tag list with the provided tag names.
-   * Creates missing tags (and fires background AI concept generation).
-   * Uses addAndRemove to update the junction table atomically.
-   */
   private async applyTagsToProduct(
     productId: number,
     tagNames: string[],
@@ -916,7 +994,9 @@ export class ProductsService {
     // Load existing tags so we can compute what to remove
     const current = await this.productsRepository.findOne({
       where: { id: productId },
-      relations: ['tags'],
+      relations: {
+        tags: true
+      },
     } as any);
 
     const currentIds: number[] = ((current as any)?.tags ?? []).map(
@@ -931,433 +1011,6 @@ export class ProductsService {
       .addAndRemove(newIds, currentIds);
   }
 
-  // ─── Search indexing helpers ───────────────────────────────────────────────
-
-  /**
-   * Tokenize a string into lowercase words for tag generation.
-   * Splits on whitespace, hyphens, slashes, commas, and dots.
-   */
-  private tokenizeForTags(text?: string | null): string[] {
-    if (!text) return [];
-    return text
-      .toLowerCase()
-      .split(/[\s\-_/,\.\(\)\[\]]+/)
-      .map((w) => w.trim())
-      .filter((w) => w.length > 1);
-  }
-
-  /**
-   * Build a deduplicated tag array from all searchable signal fields.
-   * This is the key to making synonyms work: the synonym "mobile" → "smartphone"
-   * only fires if "smartphone" actually appears somewhere in the document.
-   * By adding the category name as a tag, the product becomes findable via synonyms
-   * even if the product name itself doesn't contain those words.
-   */
-  private buildSearchTags(
-    nameEn: string,
-    nameAr: string,
-    categoryNames: string[],
-    brandEn?: string,
-    brandAr?: string,
-  ): string[] {
-    const parts: string[] = [
-      ...this.tokenizeForTags(nameEn),
-      ...this.tokenizeForTags(nameAr),
-      ...(brandEn ? this.tokenizeForTags(brandEn) : []),
-      ...(brandAr ? this.tokenizeForTags(brandAr) : []),
-      ...categoryNames.flatMap((n) => this.tokenizeForTags(n)),
-    ];
-    return [...new Set(parts)];
-  }
-
-  /**
-   * Load all data needed for Typesense and upsert the document.
-   * Fire-and-forget safe — errors are logged but never bubble up to the caller.
-   */
-  private async syncProductToIndex(
-    productId: number,
-    throwOnError = false,
-    generateAiConcepts = false,
-  ): Promise<void> {
-    try {
-      const showSalePricing = await this.shouldShowSalePricing();
-      const [
-        product,
-        productCategories,
-        productMediaRows,
-        productWithTags,
-      ] = await Promise.all([
-        this.productsRepository.findOne({
-          where: { id: productId },
-          relations: ['brand', 'category', 'vendor'],
-        }),
-        this.productCategoriesRepository.find({
-          where: { product_id: productId },
-          relations: ['category'],
-        }),
-        this.dataSource.getRepository(ProductMedia).find({
-          where: { product_id: productId },
-          relations: ['media'],
-          order: { is_primary: 'DESC', sort_order: 'ASC', media_id: 'ASC' },
-        }),
-        this.productsRepository.findOne({
-          where: { id: productId },
-          relations: ['tags', 'tags.concepts'],
-        } as any),
-      ]);
-
-      if (!product) return;
-
-      // ── Tags: collect all search terms from APPROVED concepts ─────────────
-      const tagIds: number[] = ((productWithTags as any)?.tags ?? []).map(
-        (t: any) => t.id,
-      );
-      const searchTags = await this.tagsService.getSearchTermsForTags(tagIds);
-
-      // ── Pricing: direct from product ────────────────────────────────────
-      const storefrontPricing = this.resolveStorefrontPricing(
-        product,
-        showSalePricing,
-      );
-      const effectivePrice = storefrontPricing.effectivePrice;
-
-      // ── Stock ────────────────────────────────────────────────────────────
-      const totalStock = product.quantity ?? 0;
-      const inStock = !product.is_out_of_stock;
-
-      // ── Media ────────────────────────────────────────────────────────────
-      const images = productMediaRows
-        .map((productMedia) => productMedia.media?.url)
-        .filter((url): url is string => Boolean(url));
-
-      // ── Category resolution ───────────────────────────────────────────────
-      const allCategories = productCategories
-        .map((pc) => pc.category)
-        .filter(Boolean);
-
-      if (allCategories.length === 0 && (product as any).category) {
-        allCategories.push((product as any).category);
-      }
-
-      const primaryCategory: Category | null =
-        allCategories[0] ?? (product as any).category ?? null;
-      const subCategory = allCategories.find((c) => c.level > 0) ?? null;
-
-      const categoryIds = [
-        ...new Set([
-          ...(product.category_id ? [product.category_id] : []),
-          ...allCategories.map((c) => c.id),
-        ]),
-      ];
-
-      const categoryNamesEn = [
-        ...new Set(allCategories.map((c) => c.name_en).filter(Boolean)),
-      ];
-      const categoryNamesAr = [
-        ...new Set(allCategories.map((c) => c.name_ar).filter(Boolean)),
-      ];
-
-      // ── Brand data ────────────────────────────────────────────────────────
-      const brand = (product as any).brand as {
-        id?: number;
-        name_en: string;
-        name_ar?: string;
-      } | null;
-
-      // ── Vendor data ───────────────────────────────────────────────────────
-      const vendor = (product as any).vendor as {
-        name_en?: string;
-        name_ar?: string;
-      } | null;
-
-      // ── Attribute pairs — no longer variant-based ───────────────────────
-      const attrPairs: string[] | undefined = undefined;
-
-      // ── Descriptions ─────────────────────────────────────────────────────
-      const descriptionEn =
-        [product.short_description_en, product.long_description_en]
-          .filter(Boolean)
-          .join(' ')
-          .trim() || undefined;
-
-      const descriptionAr =
-        [product.short_description_ar, product.long_description_ar]
-          .filter(Boolean)
-          .join(' ')
-          .trim() || undefined;
-
-      // ── Tags ─────────────────────────────────────────────────────────────
-      // searchTags contains: tag names + all terms from APPROVED concepts.
-      // Fall back to the legacy tokenized approach if no tags are assigned yet.
-      const categoryNamesForTags = allCategories.flatMap((c) =>
-        [c.name_en, c.name_ar].filter(Boolean),
-      );
-      const legacyTags = this.buildSearchTags(
-        product.name_en,
-        product.name_ar,
-        categoryNamesForTags,
-        brand?.name_en,
-        brand?.name_ar,
-      );
-      const tags = searchTags.length > 0 ? searchTags : legacyTags;
-
-      const isAvailable = isStorefrontAvailableProduct(product);
-
-      const doc: IndexableProduct = {
-        // ── Identity ────────────────────────────────────────────────────
-        id: String(product.id),
-        slug: product.slug ?? undefined,
-        sku: product.sku ?? undefined,
-
-        // ── Search text ─────────────────────────────────────────────────
-        name_en: product.name_en,
-        name_ar: product.name_ar,
-        description_en: descriptionEn,
-        description_ar: descriptionAr,
-
-        // ── Relational labels ────────────────────────────────────────────
-        brand: brand?.name_en ?? 'Unknown',
-        category: primaryCategory?.name_en ?? 'Uncategorized',
-        subcategory: subCategory?.name_en ?? undefined,
-        category_names_en: categoryNamesEn.length ? categoryNamesEn : undefined,
-        category_names_ar: categoryNamesAr.length ? categoryNamesAr : undefined,
-        tags: tags.length ? tags : undefined,
-
-        // ── Relational IDs (facets) ──────────────────────────────────────
-        brand_id: brand?.id ?? product.brand_id ?? undefined,
-        vendor_id: product.vendor_id ?? undefined,
-        seller_id: product.vendor_id ? String(product.vendor_id) : undefined,
-        category_ids: categoryIds.length ? categoryIds : undefined,
-
-        // ── Pricing ─────────────────────────────────────────────────────
-        price: storefrontPricing.price,
-        sale_price:
-          storefrontPricing.salePrice != null
-            ? storefrontPricing.salePrice
-            : undefined,
-        price_min: effectivePrice,
-        price_max: effectivePrice,
-
-        // ── Availability ─────────────────────────────────────────────────
-        stock_quantity: totalStock,
-        in_stock: inStock,
-        is_available: isAvailable,
-
-        // ── Attributes ──────────────────────────────────────────────────
-        attr_pairs: attrPairs,
-
-        // ── Rating ──────────────────────────────────────────────────────
-        rating: Number(product.average_rating) || 0,
-        rating_count: product.total_ratings ?? 0,
-
-        // ── Media ────────────────────────────────────────────────────────
-        images: images.length ? images : undefined,
-
-        // ── Sort signals ─────────────────────────────────────────────────
-        created_at: product.created_at
-          ? Math.floor(new Date(product.created_at).getTime() / 1000)
-          : Math.floor(Date.now() / 1000),
-        popularity_score: this.indexingService.calculatePopularityScore(
-          0,
-          Number(product.average_rating) || 0,
-          product.total_ratings ?? 0,
-          product.created_at ?? new Date(),
-        ),
-        sales_count: undefined,
-      };
-
-      await this.indexingService.upsertProduct(doc);
-
-      // ── Fire-and-forget: generate AI synonym concepts (new products only) ──
-      if (generateAiConcepts)
-        void this.synonymConceptService.generateAndSaveConceptsForProduct({
-          name_en: product.name_en,
-          name_ar: product.name_ar,
-          category_names_en: categoryNamesEn,
-          category_names_ar: categoryNamesAr,
-          brand_en: brand?.name_en,
-          brand_ar: brand?.name_ar,
-          vendor_en: vendor?.name_en,
-          vendor_ar: vendor?.name_ar,
-          short_description_en: product.short_description_en ?? undefined,
-          short_description_ar: product.short_description_ar ?? undefined,
-          long_description_en: product.long_description_en ?? undefined,
-          long_description_ar: product.long_description_ar ?? undefined,
-        });
-    } catch (err) {
-      this.logger.warn(
-        `Failed to sync product ${productId} to search index: ${getErrorMessage(err)}`,
-      );
-      if (throwOnError) throw err;
-    }
-  }
-
-  /**
-   * Public: reindex a single product by ID.
-   * Useful for debugging via the admin reindex endpoint.
-   */
-  async reindexOne(
-    productId: number,
-  ): Promise<{ success: boolean; message: string }> {
-    try {
-      await this.syncProductToIndex(productId, true);
-      return { success: true, message: `Product ${productId} reindexed` };
-    } catch (err: any) {
-      return { success: false, message: err?.message ?? 'Unknown error' };
-    }
-  }
-
-  /**
-   * Run AI concept generation for ALL active + visible products.
-   * Processes in small sequential batches to respect AI rate limits.
-   * Already-existing concept_keys are skipped (safe to run multiple times).
-   */
-  async generateAiConceptsForAll(): Promise<{
-    processed: number;
-    failed: number;
-    errors: string[];
-  }> {
-    const products = await this.productsRepository.find({
-      relations: ['brand', 'category', 'vendor'],
-    });
-
-    this.logger.log(
-      `Generating AI concepts for ${products.length} products (all statuses)…`,
-    );
-
-    let processed = 0;
-    const errors: string[] = [];
-    const BATCH = 5; // small batches to avoid AI rate limits
-    const DELAY_MS = 1000;
-
-    for (let i = 0; i < products.length; i += BATCH) {
-      const batch = products.slice(i, i + BATCH);
-
-      for (const product of batch) {
-        try {
-          const productCategories = await this.productCategoriesRepository.find(
-            {
-              where: { product_id: product.id },
-              relations: ['category'],
-            },
-          );
-
-          const allCategories = productCategories
-            .map((pc) => pc.category)
-            .filter(Boolean);
-
-          if (allCategories.length === 0 && (product as any).category) {
-            allCategories.push((product as any).category);
-          }
-
-          const categoryNamesEn = [
-            ...new Set(allCategories.map((c) => c.name_en).filter(Boolean)),
-          ];
-          const categoryNamesAr = [
-            ...new Set(allCategories.map((c) => c.name_ar).filter(Boolean)),
-          ];
-
-          const brand = (product as any).brand as {
-            name_en: string;
-            name_ar?: string;
-          } | null;
-
-          const vendorData = (product as any).vendor as {
-            name_en?: string;
-            name_ar?: string;
-          } | null;
-
-          await this.synonymConceptService.generateAndSaveConceptsForProduct({
-            name_en: product.name_en,
-            name_ar: product.name_ar,
-            category_names_en: categoryNamesEn,
-            category_names_ar: categoryNamesAr,
-            brand_en: brand?.name_en,
-            brand_ar: brand?.name_ar,
-            vendor_en: vendorData?.name_en,
-            vendor_ar: vendorData?.name_ar,
-            short_description_en: product.short_description_en ?? undefined,
-            short_description_ar: product.short_description_ar ?? undefined,
-            long_description_en: product.long_description_en ?? undefined,
-            long_description_ar: product.long_description_ar ?? undefined,
-          });
-
-          processed++;
-        } catch (err: any) {
-          errors.push(`Product ${product.id}: ${err?.message ?? String(err)}`);
-        }
-      }
-
-      // Delay between batches to respect AI rate limits
-      if (i + BATCH < products.length) {
-        await new Promise((r) => setTimeout(r, DELAY_MS));
-      }
-    }
-
-    this.logger.log(
-      `✅ AI concept generation done — ${processed}/${products.length} processed, ${errors.length} failed`,
-    );
-
-    return { processed, failed: errors.length, errors: errors.slice(0, 20) };
-  }
-
-  /**
-   * Bulk re-index all ACTIVE + visible products.
-   * Called by the admin reindex endpoint.
-   * Pass { dropFirst: true } to drop+recreate the Typesense collection first.
-   */
-  async reindexAll(
-    opts: { dropFirst?: boolean } = {},
-  ): Promise<{ indexed: number; failed: number; errors: string[] }> {
-    if (opts.dropFirst) {
-      await this.indexingService.dropAndRecreateCollection();
-    }
-
-    const products = await this.productsRepository.find({
-      relations: ['brand', 'category'],
-    });
-
-    const ids = products.map((p) => p.id);
-    this.logger.log(`Reindexing ${ids.length} products (all statuses)…`);
-
-    let indexed = 0;
-    const errors: string[] = [];
-
-    // Process concurrently in small batches to avoid DB overload
-    const BATCH = 10;
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const results = await Promise.allSettled(
-        ids.slice(i, i + BATCH).map((id) => this.syncProductToIndex(id, true)),
-      );
-      for (const r of results) {
-        if (r.status === 'fulfilled') {
-          indexed++;
-        } else {
-          errors.push(r.reason?.message ?? String(r.reason));
-        }
-      }
-    }
-
-    this.logger.log(
-      `✅ Reindex complete — ${indexed}/${ids.length} products indexed, ${errors.length} failed`,
-    );
-    if (errors.length) {
-      this.logger.warn(`Reindex errors: ${errors.slice(0, 5).join(' | ')}`);
-    }
-    return { indexed, failed: errors.length, errors: errors.slice(0, 10) };
-  }
-
-  /** Runs every night at 03:00 to heal any drift between PostgreSQL and Typesense. */
-  @Cron(CronExpression.EVERY_DAY_AT_3AM)
-  async scheduledReindex(): Promise<void> {
-    this.logger.log('Scheduled nightly reindex started…');
-    const { indexed, failed } = await this.reindexAll();
-    this.logger.log(
-      `Scheduled nightly reindex done — ${indexed} synced, ${failed} failed`,
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
 
   private slugify(text: string): string {
     return text
@@ -1381,7 +1034,10 @@ export class ProductsService {
 
     // Find all slugs that start with the baseSlug
     const existingProducts = await this.productsRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -1473,7 +1129,9 @@ export class ProductsService {
       .getRepository(AttributeValue)
       .find({
         where: { id: In(requestedValueIds) },
-        relations: ['attribute'],
+        relations: {
+          attribute: true
+        },
       });
 
     if (attributeValues.length !== requestedValueIds.length) {
@@ -1540,7 +1198,9 @@ export class ProductsService {
       .getRepository(SpecificationValue)
       .find({
         where: { id: In(requestedValueIds) },
-        relations: ['specification'],
+        relations: {
+          specification: true
+        },
       });
 
     if (specificationValues.length !== requestedValueIds.length) {
@@ -1740,8 +1400,11 @@ export class ProductsService {
     );
   }
 
-  async create(dto: CreateProductDto, userId?: number): Promise<any> {
+  async create(dto: CreateProductDto, userId?: number, user?: { role: string; adminAccess?: unknown }): Promise<any> {
     try {
+      if (user && !hasAdminAccess(user as any, 'product_pricing')) {
+        dto = stripProductPricingFields(dto);
+      }
       // Validate categories exist and are active
       if (dto.category_ids && dto.category_ids.length > 0) {
         const categories = await this.categoriesRepository.find({
@@ -1792,6 +1455,25 @@ export class ProductsService {
       const normalizedReferenceLink = await this.ensureReferenceLinkIsUnique(
         dto.reference_link,
       );
+      const lowStockThreshold = await this.getLowStockThreshold();
+      const originalVendorPriceForRule =
+        dto.original_vendor_price ??
+        dto.original_price ??
+        dto.price ??
+        null;
+      const originalVendorSalePriceForRule =
+        dto.original_vendor_sale_price ??
+        dto.original_sale_price ??
+        dto.sale_price ??
+        null;
+      const managedPricingFromRule =
+        await this.computeManagedPricingFromOriginalInput({
+          vendor_id: dto.vendor_id ?? null,
+          brand_id: dto.brand_id ?? null,
+          categoryIds: dto.category_ids ?? [],
+          original_vendor_price: originalVendorPriceForRule,
+          original_vendor_sale_price: originalVendorSalePriceForRule,
+        });
 
       // 1. Create basic product (primary category is first in the list)
       const product = this.productsRepository.create({
@@ -1805,6 +1487,7 @@ export class ProductsService {
         long_description_en: dto.long_description_en,
         long_description_ar: dto.long_description_ar,
         reference_link: normalizedReferenceLink,
+        reference_slug: this.normalizeReferenceSlug(dto.reference_slug),
         category_id: dto.category_ids?.[0],
         vendor_id: dto.vendor_id,
         original_vendor_categories: originalVendorCategories,
@@ -1817,17 +1500,24 @@ export class ProductsService {
         visible: dto.visible ?? true,
         created_by: userId ?? null,
         cost: dto.cost ?? 0,
-        price: dto.price ?? 0,
-        sale_price: dto.sale_price ?? null,
-        original_vendor_price: dto.original_vendor_price ?? dto.price ?? null,
+        price: managedPricingFromRule?.price ?? dto.price ?? 0,
+        sale_price: managedPricingFromRule?.sale_price ?? dto.sale_price ?? null,
+        original_vendor_price:
+          dto.original_vendor_price ??
+          dto.original_price ??
+          dto.price ??
+          null,
         original_vendor_sale_price:
-          dto.original_vendor_sale_price ?? dto.sale_price ?? null,
+          dto.original_vendor_sale_price ??
+          dto.original_sale_price ??
+          dto.sale_price ??
+          null,
         weight: dto.weight ?? null,
         length: dto.length ?? null,
         width: dto.width ?? null,
         height: dto.height ?? null,
         quantity: initialQuantity,
-        low_stock_threshold: dto.low_stock_threshold ?? 10,
+        low_stock_threshold: lowStockThreshold,
         is_out_of_stock: initialIsOutOfStock,
         meta_title_en: dto.meta_title_en ?? null,
         meta_title_ar: dto.meta_title_ar ?? null,
@@ -1879,12 +1569,9 @@ export class ProductsService {
         await this.syncLinkedProducts(savedProduct.id, dto.linked_product_ids);
       }
 
-      // Return the complete product
-      const result = await this.findOne(savedProduct.id);
-
-      // Sync to Typesense (fire-and-forget — never blocks the response)
-      // Pass generateAiConcepts=true so AI runs only on the first index (creation).
-      void this.syncProductToIndex(savedProduct.id, false, true);
+      // Return the complete product (admin context — include out-of-stock rows)
+      const result = await this.findOne(savedProduct.id, true);
+      await this.syncProductToTypesense(savedProduct.id);
 
       return {
         product: result,
@@ -1904,7 +1591,7 @@ export class ProductsService {
     }
   }
 
-  async findAll(filterDto: FilterProductDto, isAdmin = false) {
+  async findAll(filterDto: FindAllProductsOptions, isAdmin = false) {
     const {
       page = 1,
       limit = 10,
@@ -1996,10 +1683,10 @@ export class ProductsService {
       baseQuery.andWhere('product.id IN (:...filterIds)', { filterIds });
     }
 
-    // Filter by visible
-    if (visible !== undefined) {
-      baseQuery.andWhere('product.visible = :visible', { visible });
-    }
+    // Filter by visible (default to visible-only; an explicit query param overrides this)
+    baseQuery.andWhere('product.visible = :visible', {
+      visible: visible !== undefined ? visible : true,
+    });
 
     // Filter by single category (backward compat or "none")
     if (categoryId) {
@@ -2229,7 +1916,9 @@ export class ProductsService {
     }
 
     // Count (fast because there are no row-exploding joins)
-    const total = await baseQuery.getCount();
+    const total = filterDto.skipCount
+      ? (filterDto.knownTotal ?? 0)
+      : await baseQuery.getCount();
 
     // Fetch page IDs (fast)
     const pageQuery = baseQuery.clone().select('product.id', 'id');
@@ -2241,6 +1930,8 @@ export class ProductsService {
         'effective_price',
       );
       pageQuery.orderBy('effective_price', sortOrder);
+    } else if (filterDto.randomBrowse) {
+      pageQuery.orderBy('RANDOM()');
     } else {
       pageQuery.orderBy(`product.${sortBy}`, sortOrder);
     }
@@ -2253,6 +1944,18 @@ export class ProductsService {
     const ids = idRows
       .map((r) => Number(r.id))
       .filter((id) => !Number.isNaN(id));
+
+    if (filterDto.idsOnly) {
+      return {
+        data: ids.map((id) => ({ id })),
+        meta: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      };
+    }
 
     if (ids.length === 0) {
       return {
@@ -2267,6 +1970,19 @@ export class ProductsService {
     }
 
     // Load full relations only for products in this page
+    const randomBrowse = Boolean(filterDto.randomBrowse);
+    const productQuery = this.productsRepository
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.category', 'category')
+      .leftJoinAndSelect('product.brand', 'brand')
+      .leftJoinAndSelect('product.vendor', 'vendor')
+      .leftJoinAndSelect('product.createdByUser', 'createdByUser')
+      .where('product.id IN (:...ids)', { ids });
+
+    if (!randomBrowse) {
+      productQuery.orderBy(`product.${sortBy}`, sortOrder);
+    }
+
     const [
       data,
       productCategories,
@@ -2275,41 +1991,48 @@ export class ProductsService {
       attributeValues,
       specifications,
     ] = await Promise.all([
-      this.productsRepository
-        .createQueryBuilder('product')
-        .leftJoinAndSelect('product.category', 'category')
-        .leftJoinAndSelect('product.brand', 'brand')
-        .leftJoinAndSelect('product.vendor', 'vendor')
-        .leftJoinAndSelect('product.createdByUser', 'createdByUser')
-        .where('product.id IN (:...ids)', { ids })
-        .orderBy(`product.${sortBy}`, sortOrder)
-        .getMany(),
+      productQuery.getMany(),
       this.productCategoriesRepository.find({
         where: { product_id: In(ids) },
-        relations: ['category'],
+        relations: {
+          category: true
+        },
       }),
       this.dataSource.getRepository(ProductMedia).find({
         where: { product_id: In(ids) },
-        relations: ['media'],
+        relations: {
+          media: true
+        },
       }),
       this.dataSource.getRepository(ProductAttribute).find({
         where: { product_id: In(ids) },
-        relations: ['attribute'],
+        relations: {
+          attribute: true
+        },
       }),
       this.dataSource.getRepository(ProductAttributeValue).find({
         where: { product_id: In(ids) },
-        relations: ['attribute_value', 'attribute_value.attribute'],
+        relations: {
+          attribute_value: {
+            attribute: true
+          }
+        },
       }),
       this.dataSource.getRepository(ProductSpecificationValue).find({
         where: { product_id: In(ids) },
-        relations: [
-          'specification_value',
-          'specification_value.specification',
-          'specification_value.parent_value',
-          'specification_value.parent_value.specification',
-          'specification_value.parent_value.parent_value',
-          'specification_value.parent_value.parent_value.specification',
-        ],
+        relations: {
+          specification_value: {
+            specification: true,
+
+            parent_value: {
+              specification: true,
+
+              parent_value: {
+                specification: true
+              }
+            }
+          }
+        },
       }),
     ]);
 
@@ -2334,9 +2057,20 @@ export class ProductsService {
 
     // Transform each product using the detailed view structure
     const showSalePricing = isAdmin ? true : await this.shouldShowSalePricing();
-    const transformedData = data.map((product) =>
+    let transformedData = data.map((product) =>
       this.transformProductDetail(product, isAdmin, showSalePricing),
     );
+
+    if (randomBrowse) {
+      const byId = new Map(
+        transformedData.map((product) => [Number(product.id), product]),
+      );
+      transformedData = ids
+        .map((id) => byId.get(id))
+        .filter((product): product is NonNullable<typeof product> =>
+          Boolean(product),
+        );
+    }
 
     return {
       data: transformedData,
@@ -2347,6 +2081,50 @@ export class ProductsService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async findPrimaryImageUrlsByProductIds(
+    productIds: number[],
+  ): Promise<Map<number, string>> {
+    if (productIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.dataSource
+      .getRepository(ProductMedia)
+      .createQueryBuilder('product_media')
+      .innerJoin('product_media.media', 'media')
+      .select([
+        'product_media.product_id AS product_id',
+        'media.url AS url',
+        'product_media.is_primary AS is_primary',
+        'product_media.sort_order AS sort_order',
+      ])
+      .where('product_media.product_id IN (:...productIds)', { productIds })
+      .orderBy('product_media.is_primary', 'DESC')
+      .addOrderBy('product_media.sort_order', 'ASC')
+      .addOrderBy('media.id', 'ASC')
+      .getRawMany<{
+        product_id: number | string;
+        url: string;
+        is_primary: boolean | string | number;
+        sort_order: number | string;
+      }>();
+
+    const imageUrlsByProductId = new Map<number, string>();
+    for (const row of rows) {
+      const productId = Number(row.product_id);
+      const imageUrl = typeof row.url === 'string' ? row.url.trim() : '';
+      if (!Number.isInteger(productId) || productId <= 0 || !imageUrl) {
+        continue;
+      }
+
+      if (!imageUrlsByProductId.has(productId)) {
+        imageUrlsByProductId.set(productId, imageUrl);
+      }
+    }
+
+    return imageUrlsByProductId;
   }
 
   /**
@@ -2618,34 +2396,54 @@ export class ProductsService {
     ] = await Promise.all([
       this.productsRepository.findOne({
         where: { id },
-        relations: ['category', 'vendor', 'brand', 'createdByUser'],
+        relations: {
+          category: true,
+          vendor: true,
+          brand: true,
+          createdByUser: true
+        },
       }),
       this.dataSource.getRepository(ProductCategory).find({
         where: { product_id: id },
-        relations: ['category'],
+        relations: {
+          category: true
+        },
       }),
       this.dataSource.getRepository(ProductMedia).find({
         where: { product_id: id },
-        relations: ['media'],
+        relations: {
+          media: true
+        },
       }),
       this.dataSource.getRepository(ProductAttribute).find({
         where: { product_id: id },
-        relations: ['attribute'],
+        relations: {
+          attribute: true
+        },
       }),
       this.dataSource.getRepository(ProductAttributeValue).find({
         where: { product_id: id },
-        relations: ['attribute_value', 'attribute_value.attribute'],
+        relations: {
+          attribute_value: {
+            attribute: true
+          }
+        },
       }),
       this.dataSource.getRepository(ProductSpecificationValue).find({
         where: { product_id: id },
-        relations: [
-          'specification_value',
-          'specification_value.specification',
-          'specification_value.parent_value',
-          'specification_value.parent_value.specification',
-          'specification_value.parent_value.parent_value',
-          'specification_value.parent_value.parent_value.specification',
-        ],
+        relations: {
+          specification_value: {
+            specification: true,
+
+            parent_value: {
+              specification: true,
+
+              parent_value: {
+                specification: true
+              }
+            }
+          }
+        },
       }),
       this.getLinkedProductsState(id),
     ]);
@@ -2675,7 +2473,9 @@ export class ProductsService {
   async findOneBySlug(slug: string, isAdmin = false): Promise<any> {
     const product = await this.productsRepository.findOne({
       where: { slug },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!product) {
@@ -2697,7 +2497,9 @@ export class ProductsService {
 
     const product = await this.productsRepository.findOne({
       where: { reference_link: normalizedReferenceLink },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!product) {
@@ -2799,11 +2601,35 @@ export class ProductsService {
    * The payload represents the COMPLETE state of the product.
    * Anything not in the payload will be deleted.
    */
-  async update(id: number, dto: UpdateProductDto): Promise<any> {
+  async update(
+    id: number,
+    dto: UpdateProductDto,
+    user?: { role: string; adminAccess?: unknown },
+  ): Promise<any> {
+    if (user && !hasAdminAccess(user as any, 'product_pricing')) {
+      dto = stripProductPricingFields(dto);
+    }
+
     // Lightweight check for existence
     const existingProduct = await this.productsRepository.findOne({
       where: { id },
-      select: ['id', 'slug', 'quantity', 'is_out_of_stock'],
+      relations: {
+        productCategories: true,
+      },
+      select: {
+        id: true,
+        slug: true,
+        quantity: true,
+        is_out_of_stock: true,
+        vendor_id: true,
+        brand_id: true,
+        category_id: true,
+        original_vendor_price: true,
+        original_vendor_sale_price: true,
+        productCategories: {
+          category_id: true,
+        },
+      },
     });
     if (!existingProduct) {
       throw new NotFoundException('Product not found');
@@ -2813,6 +2639,17 @@ export class ProductsService {
     // Setting a field to undefined makes the per-field guards below skip it, so existing
     // rows keep their data; only the incoming change is dropped.
     dto = await this.stripDisabledProductFieldsFromDto(dto);
+
+    if (dto.original_price !== undefined && dto.original_vendor_price === undefined) {
+      dto.original_vendor_price = dto.original_price as any;
+    }
+
+    if (
+      dto.original_sale_price !== undefined &&
+      dto.original_vendor_sale_price === undefined
+    ) {
+      dto.original_vendor_sale_price = dto.original_sale_price as any;
+    }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2904,7 +2741,6 @@ export class ProductsService {
         'height',
         'dimension_unit',
         'quantity',
-        'low_stock_threshold',
         'meta_title_en',
         'meta_title_ar',
         'meta_description_en',
@@ -2944,6 +2780,12 @@ export class ProductsService {
         );
       }
 
+      if (dto.reference_slug !== undefined) {
+        basicInfoChanges.reference_slug = this.normalizeReferenceSlug(
+          dto.reference_slug,
+        );
+      }
+
       if (
         dto.quantity !== undefined ||
         dto.is_out_of_stock !== undefined
@@ -2976,6 +2818,48 @@ export class ProductsService {
           primaryOriginalVendorCategory?.id ?? null;
         basicInfoChanges.original_vendor_category_name =
           primaryOriginalVendorCategory?.name ?? null;
+      }
+
+      const shouldRecomputeManagedPricing =
+        dto.original_vendor_price !== undefined ||
+        dto.original_vendor_sale_price !== undefined ||
+        dto.original_price !== undefined ||
+        dto.original_sale_price !== undefined ||
+        dto.vendor_id !== undefined ||
+        dto.brand_id !== undefined ||
+        dto.category_ids !== undefined;
+
+      if (shouldRecomputeManagedPricing) {
+        const categoryIdsForPricing = this.resolveCategoryIdsForPricing({
+          dtoCategoryIds: dto.category_ids,
+          existingCategoryId: existingProduct.category_id ?? null,
+          existingProductCategories: existingProduct.productCategories,
+        });
+        const managedPricingFromRule =
+          await this.computeManagedPricingFromOriginalInput({
+            vendor_id:
+              (basicInfoChanges.vendor_id ??
+                existingProduct.vendor_id ??
+                null) as number | null,
+            brand_id:
+              (basicInfoChanges.brand_id ??
+                existingProduct.brand_id ??
+                null) as number | null,
+            categoryIds: categoryIdsForPricing,
+            original_vendor_price:
+              basicInfoChanges.original_vendor_price ??
+              existingProduct.original_vendor_price ??
+              null,
+            original_vendor_sale_price:
+              basicInfoChanges.original_vendor_sale_price ??
+              existingProduct.original_vendor_sale_price ??
+              null,
+          });
+
+        if (managedPricingFromRule) {
+          basicInfoChanges.price = managedPricingFromRule.price;
+          basicInfoChanges.sale_price = managedPricingFromRule.sale_price;
+        }
       }
 
       if (Object.keys(basicInfoChanges).length > 0) {
@@ -3036,11 +2920,9 @@ export class ProductsService {
         await this.syncLinkedProducts(id, dto.linked_product_ids);
       }
 
-      // Return updated product
-      const updatedProduct = await this.findOne(id);
-
-      // Sync to Typesense (fire-and-forget)
-      void this.syncProductToIndex(id);
+      // Return updated product (admin context — out-of-stock products are hidden from public findOne)
+      const updatedProduct = await this.findOne(id, true);
+      await this.syncProductToTypesense(id);
 
       return {
         product: updatedProduct,
@@ -3104,15 +2986,6 @@ export class ProductsService {
       archived_by: userId,
     });
 
-    // Remove from search index (fire-and-forget)
-    void this.indexingService
-      .deleteProduct(String(id))
-      .catch((err) =>
-        this.logger.warn(
-          `Failed to remove product ${id} from index: ${err?.message}`,
-        ),
-      );
-
     return { message: `Product "${product.name_en}" archived successfully` };
   }
 
@@ -3127,7 +3000,10 @@ export class ProductsService {
   ): Promise<{ message: string }> {
     const product = await this.productsRepository.findOne({
       where: { id, status: ProductStatus.ARCHIVED },
-      relations: ['category', 'vendor'],
+      relations: {
+        category: true,
+        vendor: true
+      },
     });
 
     if (!product) {
@@ -3181,13 +3057,6 @@ export class ProductsService {
     await this.productsRepository.query(
       'UPDATE products SET archived_at = NULL, archived_by = NULL WHERE id = $1',
       [id],
-    );
-
-    // Re-add to search index (fire-and-forget)
-    void this.syncProductToIndex(id).catch((err) =>
-      this.logger.warn(
-        `Failed to re-index restored product ${id}: ${err?.message}`,
-      ),
     );
 
     return { message: `Product "${product.name_en}" restored successfully` };
@@ -3315,6 +3184,7 @@ export class ProductsService {
     await this.cartItemsRepository.delete({ product_id: id });
 
     await this.productsRepository.remove(product);
+    await this.deleteProductFromTypesense(id);
 
     return { message: `Product "${product.name_en}" permanently deleted` };
   }
@@ -3370,6 +3240,12 @@ export class ProductsService {
       }
 
       await queryRunner.commitTransaction();
+
+      if (productIds.length > 0) {
+        await Promise.all(
+          productIds.map((productId) => this.deleteProductFromTypesense(productId)),
+        );
+      }
 
       return {
         message:
@@ -3534,6 +3410,111 @@ export class ProductsService {
     return {
       message: `${result.affected} products removed from vendor "${vendorExists.name_en}"`,
       updated: result.affected || 0,
+    };
+  }
+
+  async bulkUpdateProductStatus(dto: {
+    from_status: ProductStatus;
+    to_status: ProductStatus;
+    vendor_id?: number;
+    category_id?: number;
+  }): Promise<{
+    message: string;
+    updated: number;
+    filters: {
+      from_status: ProductStatus;
+      to_status: ProductStatus;
+      vendor_id?: number;
+      category_id?: number;
+    };
+  }> {
+    if (dto.from_status === dto.to_status) {
+      throw new BadRequestException('from_status and to_status must be different');
+    }
+
+    const allowedStatuses = [
+      ProductStatus.ACTIVE,
+      ProductStatus.REVIEW,
+      ProductStatus.UPDATED,
+    ];
+
+    if (
+      !allowedStatuses.includes(dto.from_status) ||
+      !allowedStatuses.includes(dto.to_status)
+    ) {
+      throw new BadRequestException(
+        'Bulk status changes only support active, review, and updated statuses',
+      );
+    }
+
+    if (dto.vendor_id) {
+      const vendor = await this.dataSource
+        .getRepository(Vendor)
+        .findOne({ where: { id: dto.vendor_id } });
+
+      if (!vendor) {
+        throw new NotFoundException('Vendor not found');
+      }
+    }
+
+    if (dto.category_id) {
+      const category = await this.categoriesRepository.findOne({
+        where: { id: dto.category_id },
+      });
+
+      if (!category) {
+        throw new NotFoundException('Category not found');
+      }
+    }
+
+    const matchingProductsQuery = this.productsRepository
+      .createQueryBuilder('product')
+      .select('product.id', 'id')
+      .where('product.status = :fromStatus', { fromStatus: dto.from_status });
+
+    if (dto.vendor_id) {
+      matchingProductsQuery.andWhere('product.vendor_id = :vendorId', {
+        vendorId: dto.vendor_id,
+      });
+    }
+
+    if (dto.category_id) {
+      matchingProductsQuery.andWhere(
+        '(product.category_id = :categoryId OR EXISTS (SELECT 1 FROM product_categories pc WHERE pc.product_id = product.id AND pc.category_id = :categoryId))',
+        { categoryId: dto.category_id },
+      );
+    }
+
+    const matchingProducts = await matchingProductsQuery.getRawMany<{ id: number }>();
+    const productIds = matchingProducts.map((row) => Number(row.id));
+
+    if (productIds.length === 0) {
+      return {
+        message: 'No products matched the selected filters',
+        updated: 0,
+        filters: {
+          from_status: dto.from_status,
+          to_status: dto.to_status,
+          vendor_id: dto.vendor_id,
+          category_id: dto.category_id,
+        },
+      };
+    }
+
+    const result = await this.productsRepository.update(
+      { id: In(productIds), status: dto.from_status },
+      { status: dto.to_status },
+    );
+
+    return {
+      message: `Updated ${result.affected ?? 0} products from ${dto.from_status} to ${dto.to_status}`,
+      updated: result.affected ?? 0,
+      filters: {
+        from_status: dto.from_status,
+        to_status: dto.to_status,
+        vendor_id: dto.vendor_id,
+        category_id: dto.category_id,
+      },
     };
   }
 }

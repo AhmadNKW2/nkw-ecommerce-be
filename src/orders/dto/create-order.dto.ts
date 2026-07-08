@@ -30,7 +30,7 @@ class OrderItemDto {
   cost?: number;
 }
 
-class AddressDto {
+export class AddressDto {
   @IsString()
   @IsNotEmpty()
   fullName: string;

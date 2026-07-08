@@ -1,0 +1,56 @@
+export const ADMIN_ACCESS_KEYS = [
+  'products',
+  'product_pricing',
+  'categories',
+  'vendors',
+  'brands',
+  'attributes',
+  'specifications',
+  'orders',
+  'customers',
+  'partners',
+  'banners',
+  'cashback_rules',
+  'notes',
+  'settings',
+  'admins',
+] as const;
+
+export type AdminAccessKey = (typeof ADMIN_ACCESS_KEYS)[number];
+export type AdminAccess = Record<AdminAccessKey, boolean>;
+
+export const DEFAULT_ADMIN_ACCESS: AdminAccess = {
+  products: true,
+  product_pricing: true,
+  categories: true,
+  vendors: true,
+  brands: true,
+  attributes: true,
+  specifications: true,
+  orders: true,
+  customers: true,
+  partners: true,
+  banners: true,
+  cashback_rules: true,
+  notes: true,
+  settings: true,
+  admins: true,
+};
+
+export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
+  products: true,
+  product_pricing: false,
+  categories: true,
+  vendors: true,
+  brands: true,
+  attributes: true,
+  specifications: true,
+  orders: false,
+  customers: false,
+  partners: false,
+  banners: false,
+  cashback_rules: false,
+  notes: false,
+  settings: false,
+  admins: false,
+};

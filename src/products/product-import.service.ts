@@ -13,6 +13,9 @@ import { AttributesService } from '../attributes/attributes.service';
 import { Attribute } from '../attributes/entities/attribute.entity';
 import { BrandsService } from '../brands/brands.service';
 import { Category } from '../categories/entities/category.entity';
+import {
+  applyBatteryChargerCategorySplit,
+} from '../categories/battery-charger-category.util';
 import { MediaService } from '../media/media.service';
 import { Brand, BrandStatus } from '../brands/entities/brand.entity';
 import { Specification } from '../specifications/entities/specification.entity';
@@ -579,6 +582,8 @@ export class ProductImportService {
           originalVendorPrice: expectedOriginalPricing.originalVendorPrice,
           originalVendorSalePrice:
             expectedOriginalPricing.originalVendorSalePrice,
+          vendorId: request.vendorId,
+          categoryIds: request.categoryIds,
         });
 
       const expected: ImportedPricingSnapshot = {
@@ -978,7 +983,20 @@ export class ProductImportService {
     const payloadCandidate = this.getObject(body.payload);
     const rawPayload = payloadCandidate ?? body;
     const payload = this.normalizePayload(rawPayload);
-    const categoryIds = this.resolveCategoryIds(body, rawPayload);
+    payload.original_vendor_categories = this.mergeOriginalVendorCategories(
+      this.extractOriginalVendorCategories(body),
+      payload.original_vendor_categories,
+    );
+    payload.original_vendor_category_id =
+      payload.original_vendor_categories[0]?.id ?? null;
+    payload.original_vendor_category_name =
+      payload.original_vendor_categories[0]?.name ?? null;
+    const categoryIds = this.applyImportCategoryRules(
+      this.resolveCategoryIds(body, rawPayload),
+      body,
+      rawPayload,
+      payload,
+    );
     const categoryId = categoryIds[0] ?? null;
     const vendorId =
       this.extractPositiveInteger(body.vendor_id) ??
@@ -993,14 +1011,6 @@ export class ProductImportService {
       this.requireOptionalString(body.source_file) ??
       this.requireOptionalString(rawPayload.source_file) ??
       null;
-    payload.original_vendor_categories = this.mergeOriginalVendorCategories(
-      this.extractOriginalVendorCategories(body),
-      payload.original_vendor_categories,
-    );
-    payload.original_vendor_category_id =
-      payload.original_vendor_categories[0]?.id ?? null;
-    payload.original_vendor_category_name =
-      payload.original_vendor_categories[0]?.name ?? null;
 
     if (!categoryId) {
       throw new BadRequestException(
@@ -1324,6 +1334,9 @@ export class ProductImportService {
     const pricing = await this.settingsService.calculateManagedProductPrices({
       originalVendorPrice: vendorOriginalPricing.originalVendorPrice,
       originalVendorSalePrice: vendorOriginalPricing.originalVendorSalePrice,
+      vendorId: request.vendorId,
+      brandId: brandId ?? null,
+      categoryIds: request.categoryIds,
     });
     const isOutOfStock = this.resolveOutOfStock(request.payload);
     const quantity = this.resolveQuantity(request.payload, isOutOfStock);
@@ -3574,6 +3587,37 @@ export class ProductImportService {
     }
 
     return [];
+  }
+
+  private applyImportCategoryRules(
+    categoryIds: number[],
+    body: Record<string, unknown>,
+    rawPayload: Record<string, unknown>,
+    payload: NormalizedImportPayload,
+  ): number[] {
+    const vendorCategoryId =
+      payload.original_vendor_category_id ??
+      this.extractPositiveInteger(body.original_vendor_category_id) ??
+      this.extractPositiveInteger(body.vendor_category_id) ??
+      this.extractPositiveInteger(rawPayload.original_vendor_category_id) ??
+      this.extractPositiveInteger(rawPayload.vendor_category_id);
+
+    const searchableText = [
+      payload.title,
+      payload.description,
+      this.requireOptionalString(rawPayload.title),
+      this.requireOptionalString(rawPayload.name),
+      this.requireOptionalString(rawPayload.name_en),
+      payload.original_vendor_category_name,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(' ');
+
+    return applyBatteryChargerCategorySplit(
+      categoryIds,
+      vendorCategoryId,
+      searchableText,
+    );
   }
 
   private extractFirstPositiveInteger(value: unknown): number | null {

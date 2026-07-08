@@ -2,9 +2,10 @@ import {
   Injectable,
   ConflictException,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { DataSource, In, Repository, TableColumn } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User, UserRole } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -12,15 +13,26 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { FilterUserDto } from './dto/filter-user.dto';
 import { Wishlist } from '../wishlist/entities/wishlist.entity';
 import { Product, ProductStatus } from '../products/entities/product.entity';
+import { Address } from '../addresses/entities/address.entity';
+import { Order } from '../orders/entities/order.entity';
+import { CartService } from '../cart/cart.service';
+import { WalletService } from '../wallet/wallet.service';
 import {
   getPrimaryMediaUrl,
   hydrateProductMedia,
 } from '../products/utils/product-media.util';
+import {
+  normalizeAdminAccess,
+  resolveAdminAccess,
+} from './utils/admin-access.util';
+import type { AdminAccess } from './admin-access.constants';
 
-type SanitizedUser = Omit<User, 'password'>;
+type SanitizedUser = Omit<User, 'password'> & {
+  adminAccess: AdminAccess;
+};
 
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
@@ -28,15 +40,74 @@ export class UsersService {
     private wishlistRepository: Repository<Wishlist>,
     @InjectRepository(Product)
     private productRepository: Repository<Product>,
+    @InjectRepository(Address)
+    private addressRepository: Repository<Address>,
+    @InjectRepository(Order)
+    private ordersRepository: Repository<Order>,
+    private cartService: CartService,
+    private walletService: WalletService,
+    private dataSource: DataSource,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureAdminAccessColumn();
+  }
+
+  private async ensureAdminAccessColumn(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasColumn('users', 'admin_access'))) {
+        await queryRunner.addColumn(
+          'users',
+          new TableColumn({
+            name: 'admin_access',
+            type: 'jsonb',
+            isNullable: true,
+          }),
+        );
+      }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private buildStoredAdminAccess(
+    role: UserRole,
+    adminAccess?: Partial<AdminAccess> | null,
+  ): AdminAccess | null {
+    if (
+      role !== UserRole.ADMIN &&
+      role !== UserRole.CATALOG_MANAGER &&
+      role !== UserRole.CONSTANT_TOKEN_ADMIN
+    ) {
+      return null;
+    }
+
+    if (!adminAccess) {
+      return null;
+    }
+
+    const normalized = normalizeAdminAccess(adminAccess);
+    if (!normalized) {
+      return null;
+    }
+
+    return normalized;
+  }
 
   sanitizeUser(user: User): SanitizedUser {
     const { password, ...userWithoutPassword } = user;
-    return userWithoutPassword;
+    return {
+      ...userWithoutPassword,
+      adminAccess: resolveAdminAccess(user),
+    };
   }
 
   async create(createUserDto: CreateUserDto): Promise<User> {
-    const { product_ids, ...userData } = createUserDto;
+    const { product_ids, adminAccess, ...userData } = createUserDto;
     userData.email = userData.email.toLowerCase().trim();
 
     const existingUser = await this.usersRepository.findOne({
@@ -47,14 +118,14 @@ export class UsersService {
       throw new ConflictException('Email already exists');
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(userData.password, 10);
+    const role = userData.role || UserRole.USER;
 
-    // Create user with specified role or default to USER
     const user = this.usersRepository.create({
       ...userData,
       password: hashedPassword,
-      role: userData.role || UserRole.USER, // Default to USER if not specified
+      role,
+      adminAccess: this.buildStoredAdminAccess(role, adminAccess),
     });
 
     const savedUser = await this.usersRepository.save(user);
@@ -138,17 +209,24 @@ export class UsersService {
     // Get user's wishlist with full product details
     const wishlistItems = await this.wishlistRepository.find({
       where: { user_id: id },
-      relations: [
-        'product',
-        'product.productMedia',
-        'product.productMedia.media',
-        'product.vendor',
-        'product.category',
-        'product.productCategories',
-        'product.productCategories.category',
-        'product.attributes',
-        'product.attributes.attribute',
-      ],
+      relations: {
+        product: {
+          productMedia: {
+            media: true
+          },
+
+          vendor: true,
+          category: true,
+
+          productCategories: {
+            category: true
+          },
+
+          attributes: {
+            attribute: true
+          }
+        }
+      },
       order: { created_at: 'DESC' },
     });
 
@@ -230,9 +308,45 @@ export class UsersService {
     // Exclude password from response
     const userWithoutPassword = this.sanitizeUser(user);
 
+    const [addresses, cart, walletResponse, transactionsResponse, orders] =
+      await Promise.all([
+        this.addressRepository.find({
+          where: { userId: id },
+          order: { isDefault: 'DESC', createdAt: 'DESC' },
+        }),
+        this.cartService.getCart(id).catch(() => ({
+          id: null,
+          user_id: id,
+          items: [],
+          total_amount: 0,
+        })),
+        this.walletService.getWallet(id),
+        this.walletService.getTransactions(id, { page: 1, limit: 20 }),
+        this.ordersRepository.find({
+          where: { userId: id },
+          relations: {
+            items: {
+              product: true
+            }
+          },
+          order: { createdAt: 'DESC' },
+          take: 20,
+        }),
+      ]);
+
+    const wallet = walletResponse.data;
+
     return {
       ...userWithoutPassword,
       wishlist,
+      addresses,
+      cart,
+      wallet: {
+        balance: Number(wallet.balance),
+        totalCashback: Number(wallet.totalCashback),
+      },
+      transactions: transactionsResponse.data,
+      orders,
     };
   }
 
@@ -274,11 +388,14 @@ export class UsersService {
 
   // Update user (including role)
   async update(id: number, updateUserDto: UpdateUserDto): Promise<User> {
-    const { product_ids, ...updateData } = updateUserDto;
+    const { product_ids, adminAccess, ...updateData } = updateUserDto;
     const user = await this.findOneById(id);
 
-    // Update fields
     Object.assign(user, updateData);
+
+    if (adminAccess !== undefined) {
+      user.adminAccess = this.buildStoredAdminAccess(user.role, adminAccess);
+    }
 
     const savedUser = await this.usersRepository.save(user);
 
@@ -305,7 +422,9 @@ export class UsersService {
     // Validate products exist and are active
     const validProducts = await this.productRepository.find({
       where: { id: In(product_ids), status: ProductStatus.ACTIVE },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     const validProductIds = validProducts.map((p) => p.id);

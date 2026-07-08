@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -15,10 +15,37 @@ import { TokenCleanupService } from './services/token-cleanup.service';
 import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { TokenBlacklist } from './entities/token-blacklist.entity';
+import { OAuthProviderEnabledGuard } from './guards/oauth-provider-enabled.guard';
+import {
+  getAllOAuthProviderStatuses,
+  shouldRegisterOAuthStrategy,
+} from './oauth-providers.config';
+
+const logger = new Logger('AuthModule');
+
+const oauthStrategyProviders = [
+  shouldRegisterOAuthStrategy('google') ? GoogleStrategy : null,
+  shouldRegisterOAuthStrategy('facebook') ? FacebookStrategy : null,
+  shouldRegisterOAuthStrategy('apple') ? AppleStrategy : null,
+].filter((provider): provider is typeof GoogleStrategy => provider !== null);
+
+const oauthStatuses = getAllOAuthProviderStatuses();
+for (const [provider, status] of Object.entries(oauthStatuses)) {
+  if (!status.enabled) {
+    logger.log(`${provider} login is disabled by environment flag`);
+    continue;
+  }
+
+  if (!status.configured) {
+    logger.warn(
+      `${provider} login is enabled but missing required OAuth credentials`,
+    );
+  }
+}
 
 @Module({
   imports: [
-    UsersModule, // Import to use UsersService
+    UsersModule,
     PassportModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([
@@ -40,9 +67,8 @@ import { TokenBlacklist } from './entities/token-blacklist.entity';
   providers: [
     AuthService,
     JwtStrategy,
-    GoogleStrategy,
-    FacebookStrategy,
-    AppleStrategy,
+    OAuthProviderEnabledGuard,
+    ...oauthStrategyProviders,
     TokenCleanupService,
   ],
   exports: [AuthService],

@@ -38,7 +38,10 @@ export class HomeService {
         visible: true,
       },
       order: { sortOrder: 'ASC' },
-      relations: ['parent', 'children'],
+      relations: {
+        parent: true,
+        children: true
+      },
     });
 
     // Get active vendors ordered by sort_order
@@ -56,7 +59,13 @@ export class HomeService {
         visible: true,
       },
       order: { sort_order: 'ASC' },
-      select: ['id', 'image', 'language', 'link', 'sort_order'],
+      select: {
+        id: true,
+        image: true,
+        language: true,
+        link: true,
+        sort_order: true
+      },
     });
 
     // Get active brands ordered by sort_order

@@ -31,6 +31,21 @@ describe('SettingsService', () => {
     createQueryBuilder: jest.Mock;
     update: jest.Mock;
   };
+  let productFieldTogglesRepository: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+  };
+  let sitePopupSettingsRepository: {
+    findOne: jest.Mock;
+    create: jest.Mock;
+    save: jest.Mock;
+  };
+  let cacheManager: {
+    get: jest.Mock;
+    set: jest.Mock;
+    del: jest.Mock;
+  };
   let dataSource: {
     createQueryRunner: jest.Mock;
     transaction: jest.Mock;
@@ -65,6 +80,24 @@ describe('SettingsService', () => {
       createQueryBuilder: jest.fn(),
     };
 
+    productFieldTogglesRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn(),
+      save: jest.fn(),
+    };
+
+    sitePopupSettingsRepository = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn(),
+      save: jest.fn(),
+    };
+
+    cacheManager = {
+      get: jest.fn().mockResolvedValue(undefined),
+      set: jest.fn().mockResolvedValue(undefined),
+      del: jest.fn().mockResolvedValue(undefined),
+    };
+
     transactionProductRepository = {
       createQueryBuilder: jest.fn(),
       update: jest.fn().mockResolvedValue(undefined),
@@ -83,7 +116,10 @@ describe('SettingsService', () => {
       seoSettingsRepository as never,
       productPriceRuleRepository as never,
       productsRepository as never,
+      productFieldTogglesRepository as never,
+      sitePopupSettingsRepository as never,
       dataSource as unknown as DataSource,
+      cacheManager as never,
     );
   });
 

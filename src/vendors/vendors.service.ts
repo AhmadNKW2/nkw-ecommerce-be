@@ -17,6 +17,7 @@ import {
 import { ReorderVendorsDto } from './dto/reorder-vendors.dto';
 import { Product, ProductStatus } from '../products/entities/product.entity';
 import { FilterProductDto } from '../products/dto/filter-product.dto';
+import { serializePublicVendor } from '../common/serializers/public-entity.serializer';
 import { ProductsService } from '../products/products.service';
 import { R2StorageService } from '../common/services/r2-storage.service';
 import {
@@ -161,7 +162,9 @@ export class VendorsService {
 
     const categories = await this.categoriesRepository.find({
       where: { id: In(categoryIds) },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (categories.length !== categoryIds.length) {
@@ -186,7 +189,9 @@ export class VendorsService {
 
     const parent = await this.vendorCategoryRepository.findOne({
       where: { id: parentId, vendor_id: vendorId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!parent) {
@@ -201,7 +206,10 @@ export class VendorsService {
 
     const nodes = await this.vendorCategoryRepository.find({
       where: { vendor_id: vendorId },
-      select: ['id', 'parent_id'],
+      select: {
+        id: true,
+        parent_id: true
+      },
     });
     const parentById = new Map(
       nodes.map((node) => [node.id, node.parent_id ?? null]),
@@ -298,7 +306,9 @@ export class VendorsService {
   ): Promise<VendorCategory> {
     const vendorCategory = await this.vendorCategoryRepository.findOne({
       where: { id: vendorCategoryId, vendor_id: vendorId },
-      relations: ['categories'],
+      relations: {
+        categories: true
+      },
     });
 
     if (!vendorCategory) {
@@ -317,7 +327,9 @@ export class VendorsService {
 
     return this.vendorCategoryRepository.find({
       where: { vendor_id: In(vendorIds) },
-      relations: ['categories'],
+      relations: {
+        categories: true
+      },
       order: { sort_order: 'ASC', id: 'ASC' },
     });
   }
@@ -493,7 +505,10 @@ export class VendorsService {
     let counter = 1;
 
     const existing = await this.vendorRepository.find({
-      select: ['slug', 'id'],
+      select: {
+        slug: true,
+        id: true
+      },
       where: {
         slug: Like(`${baseSlug}%`),
       },
@@ -584,16 +599,50 @@ export class VendorsService {
   }
 
   async findAll(): Promise<Vendor[]> {
-    const vendors = await this.vendorRepository.find({
+    return this.vendorRepository.find({
       where: { status: VendorStatus.ACTIVE },
-      relations: ['products'],
       order: { sort_order: 'ASC', created_at: 'DESC' },
     });
-
-    return this.attachVendorCategoryTrees(vendors);
   }
 
-  async findOne(id: number, productFilter?: FilterProductDto): Promise<Vendor> {
+  async findOne(
+    id: number,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Vendor | ReturnType<typeof serializePublicVendor>> {
+    const vendor = await this.ensureVendorExists(id);
+
+    if (!isAdmin) {
+      return serializePublicVendor(vendor);
+    }
+
+    return this.findOneForAdmin(id, productFilter);
+  }
+
+  async findOneBySlug(
+    slug: string,
+    productFilter?: FilterProductDto,
+    isAdmin = false,
+  ): Promise<Vendor | ReturnType<typeof serializePublicVendor>> {
+    const vendor = await this.vendorRepository.findOne({
+      where: { slug },
+    });
+
+    if (!vendor) {
+      throw new NotFoundException(`Vendor with slug ${slug} not found`);
+    }
+
+    if (!isAdmin) {
+      return serializePublicVendor(vendor);
+    }
+
+    return this.findOneBySlugForAdmin(slug, productFilter);
+  }
+
+  private async findOneForAdmin(
+    id: number,
+    productFilter?: FilterProductDto,
+  ): Promise<Vendor> {
     const vendor = await this.ensureVendorExists(id);
 
     const productsResult = await this.productsService.findAll({
@@ -610,7 +659,10 @@ export class VendorsService {
     return vendor;
   }
 
-  async findOneBySlug(slug: string, productFilter?: FilterProductDto): Promise<Vendor> {
+  private async findOneBySlugForAdmin(
+    slug: string,
+    productFilter?: FilterProductDto,
+  ): Promise<Vendor> {
     const vendor = await this.vendorRepository.findOne({
       where: { slug },
     });
@@ -792,7 +844,7 @@ export class VendorsService {
     updateVendorDto: UpdateVendorDto,
     logoUrl?: string,
   ): Promise<Vendor> {
-    const vendor = await this.findOne(id);
+    const vendor = await this.findOneForAdmin(id);
     const oldLogoUrl = vendor.logo;
 
     if (updateVendorDto.name_en && updateVendorDto.name_en !== vendor.name_en) {
@@ -972,15 +1024,19 @@ export class VendorsService {
       vendors.map(async (vendor) => {
         const archivedProductsRaw = await this.productsRepository.find({
           where: { vendor_id: vendor.id, status: ProductStatus.ARCHIVED },
-          select: [
-            'id',
-            'name_en',
-            'name_ar',
-            'sku',
-            'archived_at',
-            'archived_by',
-          ],
-          relations: ['productMedia', 'productMedia.media'],
+          select: {
+            id: true,
+            name_en: true,
+            name_ar: true,
+            sku: true,
+            archived_at: true,
+            archived_by: true
+          },
+          relations: {
+            productMedia: {
+              media: true
+            }
+          },
         });
 
         // Map products to include image from primary media or first media
@@ -1183,12 +1239,15 @@ export class VendorsService {
 
     const products = await this.productsRepository.find({
       where: { vendor_id: vendorId, status: ProductStatus.ACTIVE },
-      relations: [
-        'media',
-        'priceGroups',
-        'productCategories',
-        'productCategories.category',
-      ],
+      relations: {
+        productMedia: {
+          media: true
+        },
+
+        productCategories: {
+          category: true
+        }
+      },
       order: { created_at: 'DESC' },
     });
 
@@ -1215,12 +1274,15 @@ export class VendorsService {
 
     const products = await this.productsRepository.find({
       where: { vendor_id: vendorId, status: ProductStatus.ARCHIVED },
-      relations: [
-        'media',
-        'priceGroups',
-        'productCategories',
-        'productCategories.category',
-      ],
+      relations: {
+        productMedia: {
+          media: true
+        },
+
+        productCategories: {
+          category: true
+        }
+      },
       order: { archived_at: 'DESC' },
     });
 

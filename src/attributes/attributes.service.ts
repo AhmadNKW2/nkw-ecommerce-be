@@ -127,7 +127,9 @@ export class AttributesService {
   ): Promise<void> {
     const parentValue = await this.attributeValueRepository.findOne({
       where: { id: valueId, attribute_id: attributeId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!parentValue) {
@@ -154,7 +156,9 @@ export class AttributesService {
 
     const parentAttribute = await this.attributeRepository.findOne({
       where: { id: parentAttributeId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!parentAttribute) {
@@ -211,7 +215,10 @@ export class AttributesService {
 
     const values = await this.attributeValueRepository.find({
       where: { attribute_id: attributeId },
-      select: ['id', 'parent_value_id'],
+      select: {
+        id: true,
+        parent_value_id: true
+      },
     });
 
     for (const value of values) {
@@ -269,7 +276,10 @@ export class AttributesService {
   ): Promise<void> {
     const attribute = await this.attributeRepository.findOne({
       where: { id: attributeId },
-      select: ['id', 'parent_id'],
+      select: {
+        id: true,
+        parent_id: true
+      },
     });
 
     if (!attribute) {
@@ -292,7 +302,9 @@ export class AttributesService {
     if (normalizedCategoryIds.length > 0) {
       const categories = await this.categoryRepository.find({
         where: { id: In(normalizedCategoryIds) },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       if (categories.length !== normalizedCategoryIds.length) {
@@ -321,7 +333,9 @@ export class AttributesService {
 
     const categoryRelations = await this.attributeRepository.find({
       where: { id: In(attributes.map((attribute) => attribute.id)) },
-      relations: ['categories'],
+      relations: {
+        categories: true
+      },
     });
 
     const categoriesByAttributeId = new Map(
@@ -468,7 +482,10 @@ export class AttributesService {
       // Lightweight fetch to check parent
       const parent = await this.attributeRepository.findOne({
         where: { id: currentId },
-        select: ['id', 'parent_id'],
+        select: {
+          id: true,
+          parent_id: true
+        },
       });
       currentId = parent ? parent.parent_id : null;
       depth++;
@@ -631,7 +648,10 @@ export class AttributesService {
 
     const attribute = await this.attributeRepository.findOne({
       where: { id: value.attribute_id },
-      select: ['id', 'parent_id'],
+      select: {
+        id: true,
+        parent_id: true
+      },
     });
 
     if (!attribute) {

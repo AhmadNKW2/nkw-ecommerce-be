@@ -44,6 +44,68 @@ $ pnpm run start:dev
 $ pnpm run start:prod
 ```
 
+## Typesense search (opt-in)
+
+This backend supports two search providers:
+
+- `SEARCH_PROVIDER=db` (default): existing DB-backed search
+- `SEARCH_PROVIDER=typesense`: Typesense-backed search with automatic fallback to DB if Typesense fails
+
+### Local Typesense with Docker
+
+```bash
+docker run -d --name typesense \
+  -p 8108:8108 \
+  -v %cd%/typesense-data:/data \
+  typesense/typesense:30.2 \
+  --data-dir /data --api-key=LOCAL_DEV_KEY --enable-cors
+```
+
+Set env values:
+
+```env
+SEARCH_PROVIDER=typesense
+TYPESENSE_ENABLED=true
+TYPESENSE_HOST=localhost
+TYPESENSE_PORT=8108
+TYPESENSE_PROTOCOL=http
+TYPESENSE_API_KEY=LOCAL_DEV_KEY
+TYPESENSE_COLLECTION_PRODUCTS=products
+TYPESENSE_TIMEOUT_SECONDS=5
+```
+
+### Backfill existing products
+
+After enabling Typesense, run:
+
+```bash
+pnpm run typesense:backfill
+```
+
+Recommended rollout:
+
+1. Deploy with `SEARCH_PROVIDER=db` and `TYPESENSE_ENABLED=false`
+2. Deploy Typesense and configure env vars
+3. Run `pnpm run typesense:backfill`
+4. Switch `SEARCH_PROVIDER=typesense` and monitor logs
+
+### Pre-enable validation checklist
+
+Before setting `SEARCH_PROVIDER=typesense` in production:
+
+1. Backfill into an empty collection and verify document count.
+2. Compare DB vs Typesense for:
+   - exact name query
+   - partial name query
+   - typo query
+   - Arabic query
+3. Verify edge cases on both providers:
+   - zero results
+   - single result
+   - broad query (one-letter/very common term)
+4. Confirm fallback logging appears with `[typesense-fallback]` when Typesense is unavailable.
+5. Confirm `GET /api/health/typesense` returns healthy status before the flag flip.
+
 ## Run tests
 
 ```bash

@@ -12,10 +12,12 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { BulkUpdateProductPricingDto } from './dto/bulk-update-product-pricing.dto';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
 import { UpdateSeoSettingsDto } from './dto/update-seo-settings.dto';
+import { UpdateSitePopupSettingsDto } from './dto/update-site-popup-settings.dto';
 import { SettingsService } from './settings.service';
 
 @Controller('settings')
@@ -34,6 +36,22 @@ export class SettingsController {
     return this.settingsService.updateSeoSettings(updateSeoSettingsDto);
   }
 
+  @Get('features')
+  getFeatureToggles() {
+    return this.settingsService.getProductFieldToggles();
+  }
+
+  @Patch('features')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateFeatureToggles(
+    @Body() updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
+  ) {
+    return this.settingsService.updateProductFieldToggles(
+      updateProductFieldTogglesDto,
+    );
+  }
+
   @Get('product-fields')
   getProductFieldToggles() {
     return this.settingsService.getProductFieldToggles();
@@ -48,6 +66,18 @@ export class SettingsController {
     return this.settingsService.updateProductFieldToggles(
       updateProductFieldTogglesDto,
     );
+  }
+
+  @Get('popup')
+  getSitePopupSettings() {
+    return this.settingsService.getSitePopupSettings();
+  }
+
+  @Patch('popup')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  updateSitePopupSettings(@Body() updateSitePopupSettingsDto: UpdateSitePopupSettingsDto) {
+    return this.settingsService.updateSitePopupSettings(updateSitePopupSettingsDto);
   }
 
   @Get('pricing-rules')
@@ -86,5 +116,12 @@ export class SettingsController {
   @Roles(UserRole.ADMIN)
   repriceExistingProducts() {
     return this.settingsService.repriceExistingProductsByFixedPercentage();
+  }
+
+  @Post('pricing-rules/bulk-update')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  bulkUpdateProductPricing(@Body() dto: BulkUpdateProductPricingDto) {
+    return this.settingsService.bulkUpdateProductPricing(dto);
   }
 }

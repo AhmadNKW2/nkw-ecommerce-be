@@ -1,0 +1,65 @@
+[
+  {
+    "name_en": "Docking Stations & USB Hubs",
+    "name_ar": "محطات الإرساء وموزعات USB",
+    "type": "sub_category",
+    "recommended_parent": "Computer Accessories",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Keyboard & Mouse Combos",
+    "name_ar": "مجموعات لوحة المفاتيح والفأرة",
+    "type": "sub_category",
+    "recommended_parent": "Computer Accessories",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Graphics & Drawing Tablets",
+    "name_ar": "أجهزة الرسم والألواح الرسومية",
+    "type": "sub_category",
+    "recommended_parent": "Computer Accessories",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Optical Drives",
+    "name_ar": "مشغلات الأقراص الضوئية",
+    "type": "sub_category",
+    "recommended_parent": "Components",
+    "sub_categories": []
+  },
+  {
+    "name_en": "PCIe Expansion Cards",
+    "name_ar": "بطاقات التوسعة PCIe",
+    "type": "sub_category",
+    "recommended_parent": "Components",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Smartwatches & Wearables",
+    "name_ar": "الساعات الذكية والأجهزة القابلة للارتداء",
+    "type": "sub_category",
+    "recommended_parent": "Mobile & Smartphones",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Printer Paper & Media",
+    "name_ar": "ورق الطابعات ووسائط الطباعة",
+    "type": "sub_category",
+    "recommended_parent": "Printers and Scanners",
+    "sub_categories": []
+  },
+  {
+    "name_en": "UPS Replacement Batteries",
+    "name_ar": "بطاريات استبدال UPS",
+    "type": "sub_category",
+    "recommended_parent": "Power Protection & UPS",
+    "sub_categories": []
+  },
+  {
+    "name_en": "Streaming & Content Creation",
+    "name_ar": "البث وصناعة المحتوى",
+    "type": "sub_category",
+    "recommended_parent": "Cameras",
+    "sub_categories": []
+  }
+]

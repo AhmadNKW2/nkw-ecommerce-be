@@ -17,6 +17,33 @@ export class SeoSettings {
   @Column({ type: 'varchar', length: 120, default: 'المتجر الإلكتروني' })
   site_name_ar: string;
 
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  site_logo: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_primary: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_primary_2: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_primary_3: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_secondary: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_success: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_success_2: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_danger: string | null;
+
+  @Column({ type: 'varchar', length: 7, nullable: true })
+  brand_danger_2: string | null;
+
   @Column({ type: 'varchar', length: 70, default: 'Storefront' })
   default_meta_title_en: string;
 
@@ -57,6 +84,9 @@ export class SeoSettings {
   @Column({ type: 'boolean', default: true })
   show_sale_pricing: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  free_delivery_enabled: boolean;
+
   @Column({
     type: 'decimal',
     precision: 10,
@@ -68,6 +98,21 @@ export class SeoSettings {
     },
   })
   free_delivery_amount: number;
+
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 2.0,
+    transformer: {
+      to: (value: number) => value,
+      from: (value: string) => parseFloat(value) || 0,
+    },
+  })
+  delivery_fee: number;
+
+  @Column({ type: 'int', default: 10 })
+  low_stock_threshold: number;
 
   @CreateDateColumn()
   created_at: Date;

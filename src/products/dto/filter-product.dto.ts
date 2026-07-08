@@ -10,6 +10,7 @@ import {
   IsString,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
+import { parseQueryBoolean } from '../../common/utils/query-boolean.util';
 import { ProductStatus } from '../entities/product.entity';
 
 function parseNumericArray(value: unknown): number[] | undefined {
@@ -106,6 +107,16 @@ export class FilterProductDto {
   @IsOptional()
   @IsEnum(SortOrder)
   sortOrder?: SortOrder = SortOrder.DESC;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  randomBrowse?: boolean;
+
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  is_admin?: boolean;
 
   // ─── ID filter ───────────────────────────────────────
   @IsOptional()
@@ -376,3 +387,10 @@ export class FilterProductDto {
   @IsString()
   sku?: string;
 }
+
+/** Internal-only flags for service-layer product queries (not accepted from HTTP). */
+export type FindAllProductsOptions = FilterProductDto & {
+  skipCount?: boolean;
+  knownTotal?: number;
+  idsOnly?: boolean;
+};

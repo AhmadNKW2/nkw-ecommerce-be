@@ -134,9 +134,8 @@ describe('ProductsService detail attributes', () => {
       {} as never,
       dataSource as unknown as DataSource,
       {} as never,
-      {} as never,
-      {} as never,
       settingsService as never,
+      {} as never,
     );
   });
 

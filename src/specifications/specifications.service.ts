@@ -127,7 +127,9 @@ export class SpecificationsService {
   ): Promise<void> {
     const parentValue = await this.specificationValueRepository.findOne({
       where: { id: valueId, specification_id: specificationId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!parentValue) {
@@ -157,7 +159,9 @@ export class SpecificationsService {
 
     const parentSpecification = await this.specificationRepository.findOne({
       where: { id: parentSpecificationId },
-      select: ['id'],
+      select: {
+        id: true
+      },
     });
 
     if (!parentSpecification) {
@@ -217,7 +221,10 @@ export class SpecificationsService {
 
     const values = await this.specificationValueRepository.find({
       where: { specification_id: specificationId },
-      select: ['id', 'parent_value_id'],
+      select: {
+        id: true,
+        parent_value_id: true
+      },
     });
 
     for (const value of values) {
@@ -278,7 +285,10 @@ export class SpecificationsService {
   ): Promise<void> {
     const specification = await this.specificationRepository.findOne({
       where: { id: specificationId },
-      select: ['id', 'parent_id'],
+      select: {
+        id: true,
+        parent_id: true
+      },
     });
 
     if (!specification) {
@@ -303,7 +313,9 @@ export class SpecificationsService {
     if (normalizedCategoryIds.length > 0) {
       const categories = await this.categoryRepository.find({
         where: { id: In(normalizedCategoryIds) },
-        select: ['id'],
+        select: {
+          id: true
+        },
       });
 
       if (categories.length !== normalizedCategoryIds.length) {
@@ -332,7 +344,9 @@ export class SpecificationsService {
 
     const categoryRelations = await this.specificationRepository.find({
       where: { id: In(specifications.map((specification) => specification.id)) },
-      relations: ['categories'],
+      relations: {
+        categories: true
+      },
     });
 
     const categoriesBySpecificationId = new Map(
@@ -469,7 +483,10 @@ export class SpecificationsService {
       level++;
       const parent = await this.specificationRepository.findOne({
         where: { id: currentId },
-        select: ['id', 'parent_id'],
+        select: {
+          id: true,
+          parent_id: true
+        },
       });
       currentId = parent ? parent.parent_id : null;
       depth++;
@@ -628,7 +645,10 @@ export class SpecificationsService {
 
     const specification = await this.specificationRepository.findOne({
       where: { id: value.specification_id },
-      select: ['id', 'parent_id'],
+      select: {
+        id: true,
+        parent_id: true
+      },
     });
 
     if (!specification) {
