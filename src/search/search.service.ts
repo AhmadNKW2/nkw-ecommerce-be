@@ -69,10 +69,10 @@ export class SearchService {
   ]);
   private readonly expansionTierOrder: ExpansionTierKey[] = [
     'primary',
-    'strong_partial',
     'cross_brand_spec',
-    'category_brand',
+    'strong_partial',
     'category',
+    'category_brand',
     'brand',
     'specification',
     'keyword',
@@ -246,8 +246,10 @@ export class SearchService {
     sortOrder: SortOrder;
   } {
     switch (sortBy) {
+      case 'price:asc':
       case 'price_min:asc':
         return { sortBy: ProductSortBy.PRICE, sortOrder: SortOrder.ASC };
+      case 'price:desc':
       case 'price_min:desc':
         return { sortBy: ProductSortBy.PRICE, sortOrder: SortOrder.DESC };
       case 'rating:desc':
@@ -1098,22 +1100,21 @@ export class SearchService {
     const hasTextQuery =
       normalizedQuery.length > 0 && normalizedQuery !== '*';
 
-    if (
-      hasTextQuery &&
-      (!sortBy || sortBy === 'created_at:desc')
-    ) {
+    if (hasTextQuery && !sortBy) {
       return '_text_match:desc,created_at_ts:desc';
     }
 
     switch (sortBy) {
+      case 'price:asc':
       case 'price_min:asc':
         return 'effective_price:asc';
+      case 'price:desc':
       case 'price_min:desc':
         return 'effective_price:desc';
       case 'rating:desc':
         return 'average_rating:desc';
       case 'created_at:desc':
-        return isAdmin ? 'created_at_ts:desc' : '_text_match:desc,created_at_ts:desc';
+        return 'created_at_ts:desc';
       default:
         return isAdmin ? 'created_at_ts:desc' : '_text_match:desc,created_at_ts:desc';
     }
@@ -1690,24 +1691,6 @@ export class SearchService {
       });
     };
 
-    if (
-      tokens.length > 1 &&
-      enabledLevels.has('strong_partial') &&
-      uniqueIds.size < params.requestedLimit
-    ) {
-      for (let size = tokens.length - 1; size >= minStrongTokens; size -= 1) {
-        if (uniqueIds.size >= params.requestedLimit) break;
-        const phraseQuery = tokens.slice(0, size).join(' ');
-        const ids = await this.searchTypesenseIds({
-          q: phraseQuery,
-          filterBy: params.baseFilterBy,
-          sortBy: '_text_match:desc,created_at_ts:desc',
-          limit: Math.min(40, maxCandidates - uniqueIds.size),
-        });
-        addIds('strong_partial', ids);
-      }
-    }
-
     const detected = await this.detectEntityIdsFromTokens(tokens, normalizedQ);
     const categoryIdsFromFilters = this.extractCategoryIds(params.dto);
     const brandIdsFromFilters =
@@ -1728,16 +1711,39 @@ export class SearchService {
       (token) => !brandTokensFromQuery.has(token),
     );
     const specTokens = this.getSpecTokensFromQuery(tokens);
+    const nonSpecIntentTokens = intentTokensWithoutBrand.filter(
+      (token) => !specTokens.includes(token),
+    );
+    const categoryIntentQuery = nonSpecIntentTokens.join(' ').trim();
 
     if (
       enabledLevels.has('cross_brand_spec') &&
       hasBrandInQuery &&
       uniqueIds.size < params.requestedLimit &&
-      (specTokens.length > 0 || intentTokensWithoutBrand.length > 0)
+      (specTokens.length > 0 || nonSpecIntentTokens.length > 0)
     ) {
-      const crossBrandQuery = Array.from(
-        new Set([...specTokens, ...intentTokensWithoutBrand]),
-      ).join(' ');
+      const crossBrandQueries: string[] = [];
+      const seenCrossBrandQueries = new Set<string>();
+      const pushCrossBrandQuery = (value: string) => {
+        const normalized = value.trim();
+        if (!normalized || seenCrossBrandQueries.has(normalized)) {
+          return;
+        }
+        seenCrossBrandQueries.add(normalized);
+        crossBrandQueries.push(normalized);
+      };
+
+      // Exact requested sequence for brand queries:
+      // 1) other-brand: laptop + all specs     (e.g. laptop 5060 i7)
+      // 2) other-brand: laptop + first spec    (e.g. laptop 5060)
+      // 3) other-brand: laptop + second spec   (e.g. laptop i7)
+      const baseIntentQuery = nonSpecIntentTokens.join(' ').trim();
+      const orderedUniqueSpecTokens = Array.from(new Set(specTokens));
+      pushCrossBrandQuery([baseIntentQuery, ...orderedUniqueSpecTokens].join(' '));
+      orderedUniqueSpecTokens.forEach((specToken) => {
+        pushCrossBrandQuery([baseIntentQuery, specToken].join(' '));
+      });
+
       const crossBrandFilters = [params.baseFilterBy];
       if (effectiveCategoryIds.length > 0) {
         crossBrandFilters.push(
@@ -1748,14 +1754,35 @@ export class SearchService {
         `brand_id:!=[${brandIdsFromQueryOnly.join(',')}]`,
       );
 
-      const ids = await this.searchTypesenseIds({
-        q: crossBrandQuery,
-        filterBy: this.mergeFilterByClauses(...crossBrandFilters),
-        sortBy: '_text_match:desc,created_at_ts:desc',
-        limit: Math.min(60, maxCandidates - uniqueIds.size),
-      });
-      addIds('cross_brand_spec', ids);
+      for (const crossBrandQuery of crossBrandQueries) {
+        if (uniqueIds.size >= params.requestedLimit) break;
+        const ids = await this.searchTypesenseIds({
+          q: crossBrandQuery,
+          filterBy: this.mergeFilterByClauses(...crossBrandFilters),
+          sortBy: '_text_match:desc,created_at_ts:desc',
+          limit: Math.min(40, maxCandidates - uniqueIds.size),
+        });
+        addIds('cross_brand_spec', ids);
+      }
       tierNotes.cross_brand_spec = 'same specs/category, other brands';
+    }
+
+    if (
+      tokens.length > 1 &&
+      enabledLevels.has('strong_partial') &&
+      uniqueIds.size < params.requestedLimit
+    ) {
+      for (let size = tokens.length - 1; size >= minStrongTokens; size -= 1) {
+        if (uniqueIds.size >= params.requestedLimit) break;
+        const phraseQuery = tokens.slice(0, size).join(' ');
+        const ids = await this.searchTypesenseIds({
+          q: phraseQuery,
+          filterBy: params.baseFilterBy,
+          sortBy: '_text_match:desc,created_at_ts:desc',
+          limit: Math.min(40, maxCandidates - uniqueIds.size),
+        });
+        addIds('strong_partial', ids);
+      }
     }
 
     if (
@@ -1783,11 +1810,10 @@ export class SearchService {
     if (
       enabledLevels.has('category') &&
       uniqueIds.size < params.requestedLimit &&
-      effectiveCategoryIds.length > 0 &&
-      !hasBrandInQuery
+      effectiveCategoryIds.length > 0
     ) {
       const ids = await this.searchTypesenseIds({
-        q: '*',
+        q: categoryIntentQuery || '*',
         filterBy: this.mergeFilterByClauses(
           params.baseFilterBy,
           `category_ids:=[${effectiveCategoryIds.join(',')}]`,
@@ -1796,8 +1822,6 @@ export class SearchService {
         limit: Math.min(50, maxCandidates - uniqueIds.size),
       });
       addIds('category', ids);
-    } else if (hasBrandInQuery) {
-      tierNotes.category = 'skipped when brand is in query';
     }
 
     if (
@@ -1823,18 +1847,46 @@ export class SearchService {
     if (
       enabledLevels.has('specification') &&
       uniqueIds.size < params.requestedLimit &&
-      specTokens.length > 0 &&
-      !hasBrandInQuery
+      specTokens.length > 0
     ) {
-      const ids = await this.searchTypesenseIds({
-        q: specTokens.join(' '),
-        filterBy: params.baseFilterBy,
-        sortBy: '_text_match:desc,created_at_ts:desc',
-        limit: Math.min(60, maxCandidates - uniqueIds.size),
-      });
-      addIds('specification', ids);
-    } else if (hasBrandInQuery && specTokens.length > 0) {
-      tierNotes.specification = 'handled by cross_brand_spec';
+      if (hasBrandInQuery) {
+        tierNotes.specification = 'handled by cross_brand_spec sequence';
+      } else {
+      const seenSpecQueries = new Set<string>();
+      const specQueries: string[] = [];
+
+      // Keep spec fallback progressive:
+      // 1) category/spec intent with all specs together
+      // 2) category/spec intent with each individual spec token
+      const combinedSpecQuery = [categoryIntentQuery, ...specTokens].join(' ').trim();
+      if (combinedSpecQuery) {
+        specQueries.push(combinedSpecQuery);
+        seenSpecQueries.add(combinedSpecQuery);
+      }
+
+      for (const specToken of specTokens) {
+        const perSpecQuery = [categoryIntentQuery, specToken].join(' ').trim();
+        if (perSpecQuery && !seenSpecQueries.has(perSpecQuery)) {
+          specQueries.push(perSpecQuery);
+          seenSpecQueries.add(perSpecQuery);
+        }
+      }
+
+      for (const specQuery of specQueries) {
+        if (uniqueIds.size >= params.requestedLimit) break;
+        const ids = await this.searchTypesenseIds({
+          q: specQuery,
+          filterBy: params.baseFilterBy,
+          sortBy: '_text_match:desc,created_at_ts:desc',
+          limit: Math.min(40, maxCandidates - uniqueIds.size),
+        });
+        addIds('specification', ids);
+      }
+
+      if (hasBrandInQuery && idsByTier.specification.length > 0) {
+        tierNotes.specification = 'progressive laptop+spec fallback';
+      }
+      }
     }
 
     if (

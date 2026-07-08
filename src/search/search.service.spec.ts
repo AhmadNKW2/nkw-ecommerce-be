@@ -141,8 +141,8 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
 
   it('lets an explicit price sort override relevance entirely', async () => {
     const { service, typesenseSearch } = makeService();
-    const dtoAsc: SearchQueryDto = { q: 'tablet', sort_by: 'price_min:asc' } as SearchQueryDto;
-    const dtoDesc: SearchQueryDto = { q: 'tablet', sort_by: 'price_min:desc' } as SearchQueryDto;
+    const dtoAsc: SearchQueryDto = { q: 'tablet', sort_by: 'price:asc' } as SearchQueryDto;
+    const dtoDesc: SearchQueryDto = { q: 'tablet', sort_by: 'price:desc' } as SearchQueryDto;
 
     await service.search(dtoAsc, false, false);
     await service.search(dtoDesc, false, false);
@@ -387,7 +387,7 @@ describe('SearchService — core intent category boost', () => {
   it('does not apply category boost when an explicit price sort is requested', async () => {
     const { service, typesenseSearch } = makeService(undefined, boostCategories);
     await service.search(
-      { q: 'CPU', sort_by: 'price_min:asc' } as SearchQueryDto,
+      { q: 'CPU', sort_by: 'price:asc' } as SearchQueryDto,
       false,
       false,
     );

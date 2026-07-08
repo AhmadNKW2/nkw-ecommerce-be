@@ -69,6 +69,14 @@ type OriginalVendorCategoryReference = {
   name?: string;
 };
 
+type ProductPricingComputationContext = {
+  vendor_id: number | null;
+  brand_id: number | null;
+  categoryIds: number[];
+  original_vendor_price: number | null;
+  original_vendor_sale_price: number | null;
+};
+
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
@@ -545,6 +553,84 @@ export class ProductsService {
     }
 
     return fallbackState;
+  }
+
+  private toOptionalFiniteNumber(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    const numericValue =
+      typeof value === 'number' ? value : Number(String(value).trim());
+
+    return Number.isFinite(numericValue) ? numericValue : null;
+  }
+
+  private resolveCategoryIdsForPricing(params: {
+    dtoCategoryIds?: number[];
+    existingCategoryId?: number | null;
+    existingProductCategories?: Array<{ category_id?: number | null }>;
+  }): number[] {
+    if (Array.isArray(params.dtoCategoryIds)) {
+      return [
+        ...new Set(
+          params.dtoCategoryIds.filter(
+            (categoryId): categoryId is number =>
+              Number.isInteger(categoryId) && categoryId > 0,
+          ),
+        ),
+      ];
+    }
+
+    const categoryIds = new Set<number>();
+    if (
+      typeof params.existingCategoryId === 'number' &&
+      params.existingCategoryId > 0
+    ) {
+      categoryIds.add(params.existingCategoryId);
+    }
+
+    for (const productCategory of params.existingProductCategories ?? []) {
+      if (
+        typeof productCategory?.category_id === 'number' &&
+        productCategory.category_id > 0
+      ) {
+        categoryIds.add(productCategory.category_id);
+      }
+    }
+
+    return Array.from(categoryIds);
+  }
+
+  private async computeManagedPricingFromOriginalInput(
+    context: ProductPricingComputationContext,
+  ): Promise<{ price: number; sale_price: number | null } | null> {
+    const originalVendorPrice = this.toOptionalFiniteNumber(
+      context.original_vendor_price,
+    );
+
+    if (originalVendorPrice === null || originalVendorPrice <= 0) {
+      return null;
+    }
+
+    const originalVendorSalePrice = this.toOptionalFiniteNumber(
+      context.original_vendor_sale_price,
+    );
+
+    const managedPricing = await this.settingsService.calculateManagedProductPrices(
+      {
+        originalVendorPrice,
+        originalVendorSalePrice,
+        vendorId: context.vendor_id ?? null,
+        brandId: context.brand_id ?? null,
+        categoryIds: context.categoryIds,
+      },
+    );
+
+    return {
+      price: managedPricing.price,
+      sale_price: managedPricing.salePrice,
+    };
   }
 
   private async ensureProductsExist(
@@ -1370,6 +1456,24 @@ export class ProductsService {
         dto.reference_link,
       );
       const lowStockThreshold = await this.getLowStockThreshold();
+      const originalVendorPriceForRule =
+        dto.original_vendor_price ??
+        dto.original_price ??
+        dto.price ??
+        null;
+      const originalVendorSalePriceForRule =
+        dto.original_vendor_sale_price ??
+        dto.original_sale_price ??
+        dto.sale_price ??
+        null;
+      const managedPricingFromRule =
+        await this.computeManagedPricingFromOriginalInput({
+          vendor_id: dto.vendor_id ?? null,
+          brand_id: dto.brand_id ?? null,
+          categoryIds: dto.category_ids ?? [],
+          original_vendor_price: originalVendorPriceForRule,
+          original_vendor_sale_price: originalVendorSalePriceForRule,
+        });
 
       // 1. Create basic product (primary category is first in the list)
       const product = this.productsRepository.create({
@@ -1396,11 +1500,18 @@ export class ProductsService {
         visible: dto.visible ?? true,
         created_by: userId ?? null,
         cost: dto.cost ?? 0,
-        price: dto.price ?? 0,
-        sale_price: dto.sale_price ?? null,
-        original_vendor_price: dto.original_vendor_price ?? dto.price ?? null,
+        price: managedPricingFromRule?.price ?? dto.price ?? 0,
+        sale_price: managedPricingFromRule?.sale_price ?? dto.sale_price ?? null,
+        original_vendor_price:
+          dto.original_vendor_price ??
+          dto.original_price ??
+          dto.price ??
+          null,
         original_vendor_sale_price:
-          dto.original_vendor_sale_price ?? dto.sale_price ?? null,
+          dto.original_vendor_sale_price ??
+          dto.original_sale_price ??
+          dto.sale_price ??
+          null,
         weight: dto.weight ?? null,
         length: dto.length ?? null,
         width: dto.width ?? null,
@@ -2502,11 +2613,22 @@ export class ProductsService {
     // Lightweight check for existence
     const existingProduct = await this.productsRepository.findOne({
       where: { id },
+      relations: {
+        productCategories: true,
+      },
       select: {
         id: true,
         slug: true,
         quantity: true,
-        is_out_of_stock: true
+        is_out_of_stock: true,
+        vendor_id: true,
+        brand_id: true,
+        category_id: true,
+        original_vendor_price: true,
+        original_vendor_sale_price: true,
+        productCategories: {
+          category_id: true,
+        },
       },
     });
     if (!existingProduct) {
@@ -2517,6 +2639,17 @@ export class ProductsService {
     // Setting a field to undefined makes the per-field guards below skip it, so existing
     // rows keep their data; only the incoming change is dropped.
     dto = await this.stripDisabledProductFieldsFromDto(dto);
+
+    if (dto.original_price !== undefined && dto.original_vendor_price === undefined) {
+      dto.original_vendor_price = dto.original_price as any;
+    }
+
+    if (
+      dto.original_sale_price !== undefined &&
+      dto.original_vendor_sale_price === undefined
+    ) {
+      dto.original_vendor_sale_price = dto.original_sale_price as any;
+    }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2685,6 +2818,48 @@ export class ProductsService {
           primaryOriginalVendorCategory?.id ?? null;
         basicInfoChanges.original_vendor_category_name =
           primaryOriginalVendorCategory?.name ?? null;
+      }
+
+      const shouldRecomputeManagedPricing =
+        dto.original_vendor_price !== undefined ||
+        dto.original_vendor_sale_price !== undefined ||
+        dto.original_price !== undefined ||
+        dto.original_sale_price !== undefined ||
+        dto.vendor_id !== undefined ||
+        dto.brand_id !== undefined ||
+        dto.category_ids !== undefined;
+
+      if (shouldRecomputeManagedPricing) {
+        const categoryIdsForPricing = this.resolveCategoryIdsForPricing({
+          dtoCategoryIds: dto.category_ids,
+          existingCategoryId: existingProduct.category_id ?? null,
+          existingProductCategories: existingProduct.productCategories,
+        });
+        const managedPricingFromRule =
+          await this.computeManagedPricingFromOriginalInput({
+            vendor_id:
+              (basicInfoChanges.vendor_id ??
+                existingProduct.vendor_id ??
+                null) as number | null,
+            brand_id:
+              (basicInfoChanges.brand_id ??
+                existingProduct.brand_id ??
+                null) as number | null,
+            categoryIds: categoryIdsForPricing,
+            original_vendor_price:
+              basicInfoChanges.original_vendor_price ??
+              existingProduct.original_vendor_price ??
+              null,
+            original_vendor_sale_price:
+              basicInfoChanges.original_vendor_sale_price ??
+              existingProduct.original_vendor_sale_price ??
+              null,
+          });
+
+        if (managedPricingFromRule) {
+          basicInfoChanges.price = managedPricingFromRule.price;
+          basicInfoChanges.sale_price = managedPricingFromRule.sale_price;
+        }
       }
 
       if (Object.keys(basicInfoChanges).length > 0) {

@@ -13,6 +13,12 @@ type ExistingPriceFilters = {
 const ARABIC_INDIC_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const NUMBER_PATTERN = '([\\d٠-٩][\\d٠-٩.,\\s]*)';
 const OPTIONAL_CURRENCY = '(?:\\s*(?:ريال|ر\\.س|sar|usd|دولار))?';
+const ARABIC_TO_WORD = '(?:الى|[إأآا]لى)';
+const ARABIC_RANGE_CONNECTOR = `(?:${ARABIC_TO_WORD}|و|وال|حتى|لحد|لغاية|ل)`;
+const ARABIC_BETWEEN_PREFIX = '(?:بين|ما\\s+بين)';
+const ARABIC_LESS_THAN_WORD = '(?:[اأإآ]قل\\s+من)';
+const ARABIC_MORE_THAN_WORD = '(?:[اأإآ]كثر\\s+من)';
+const ARABIC_HIGHER_THAN_WORD = '(?:[اأإآ]على\\s+من)';
 
 function normalizeDigits(value: string): string {
   return value
@@ -55,11 +61,15 @@ function applyBetween(
       'giu',
     ),
     new RegExp(
-      `(?:^|\\s)من\\s+${NUMBER_PATTERN}\\s+(?:الى|إلى|و)\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      `(?:^|\\s)from\\s+${NUMBER_PATTERN}\\s+(?:to|till|until)\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
       'giu',
     ),
     new RegExp(
-      `(?:^|\\s)بين\\s+${NUMBER_PATTERN}\\s+(?:و|وال|الى|إلى)\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      `(?:^|\\s)من\\s+${NUMBER_PATTERN}\\s+${ARABIC_RANGE_CONNECTOR}\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      'giu',
+    ),
+    new RegExp(
+      `(?:^|\\s)${ARABIC_BETWEEN_PREFIX}\\s+${NUMBER_PATTERN}\\s+${ARABIC_RANGE_CONNECTOR}\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
       'giu',
     ),
   ];
@@ -104,7 +114,7 @@ function collectSingleConstraints(
     ),
     new RegExp(`<\\s*${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`, 'giu'),
     new RegExp(
-      `(?:^|\\s)أقل\\s+من\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      `(?:^|\\s)${ARABIC_LESS_THAN_WORD}\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
       'giu',
     ),
     new RegExp(
@@ -112,7 +122,11 @@ function collectSingleConstraints(
       'giu',
     ),
     new RegExp(
-      `(?:^|\\s)أرخص\\s+من\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      `(?:^|\\s)(?:حد\\s+[اأإآ]قص[ىي]|بحد\\s+[اأإآ]قص[ىي]|لحد|maximum|max)\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      'giu',
+    ),
+    new RegExp(
+      `(?:^|\\s)[اأإآ]رخص\\s+من\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
       'giu',
     ),
   ];
@@ -124,7 +138,7 @@ function collectSingleConstraints(
     ),
     new RegExp(`>\\s*${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`, 'giu'),
     new RegExp(
-      `(?:^|\\s)أكثر\\s+من\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      `(?:^|\\s)${ARABIC_MORE_THAN_WORD}\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
       'giu',
     ),
     new RegExp(
@@ -132,7 +146,15 @@ function collectSingleConstraints(
       'giu',
     ),
     new RegExp(
-      `(?:^|\\s)أعلى\\s+من\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      `(?:^|\\s)(?:at\\s+least|minimum|min)\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      'giu',
+    ),
+    new RegExp(
+      `(?:^|\\s)(?:على\\s+ال[اأإآ]قل|بحد\\s+[اأإآ]دنى|[اأإآ]دنى\\s+من|ابتدا[ء]?\\s+من|ابتداء\\s+من|ابتداءً\\s+من)\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
+      'giu',
+    ),
+    new RegExp(
+      `(?:^|\\s)${ARABIC_HIGHER_THAN_WORD}\\s+${NUMBER_PATTERN}${OPTIONAL_CURRENCY}(?=\\s|$)`,
       'giu',
     ),
   ];

@@ -221,6 +221,8 @@ export class SearchQueryDto {
   @IsString()
   @IsIn([
     'popularity_score:desc',
+    'price:asc',
+    'price:desc',
     'price_min:asc',
     'price_min:desc',
     'rating:desc',

@@ -41,6 +41,62 @@ describe('parsePriceFromQuery', () => {
     expect(result.maxPrice).toBe(5000);
   });
 
+  it('parses Arabic less-than variants with extra spaces', () => {
+    const result = parsePriceFromQuery('لابتوب  اقل  من   3000');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.maxPrice).toBe(3000);
+    expect(result.minPrice).toBeUndefined();
+  });
+
+  it('parses Arabic more-than variants with extra spaces', () => {
+    const result = parsePriceFromQuery('لابتوب  اكثر  من   2000');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.minPrice).toBe(2000);
+    expect(result.maxPrice).toBeUndefined();
+  });
+
+  it('parses Arabic between variants with extra spaces', () => {
+    const result = parsePriceFromQuery('لابتوب بين  1000   الى   3000');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.minPrice).toBe(1000);
+    expect(result.maxPrice).toBe(3000);
+  });
+
+  it('parses colloquial Arabic range phrase', () => {
+    const result = parsePriceFromQuery('لابتوب ما بين  1500  و  2500');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.minPrice).toBe(1500);
+    expect(result.maxPrice).toBe(2500);
+  });
+
+  it('parses Arabic range without "ما"', () => {
+    const result = parsePriceFromQuery('لابتوب بين 1500 لحد 2500');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.minPrice).toBe(1500);
+    expect(result.maxPrice).toBe(2500);
+  });
+
+  it('parses English from-to range phrase', () => {
+    const result = parsePriceFromQuery('laptop from 1000 to 2000');
+    expect(result.cleanedQuery).toBe('laptop');
+    expect(result.minPrice).toBe(1000);
+    expect(result.maxPrice).toBe(2000);
+  });
+
+  it('parses Arabic upper-bound phrases', () => {
+    const result = parsePriceFromQuery('لابتوب حد اقصى 3000');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.maxPrice).toBe(3000);
+    expect(result.minPrice).toBeUndefined();
+  });
+
+  it('parses Arabic lower-bound phrases', () => {
+    const result = parsePriceFromQuery('لابتوب على الأقل 2000');
+    expect(result.cleanedQuery).toBe('لابتوب');
+    expect(result.minPrice).toBe(2000);
+    expect(result.maxPrice).toBeUndefined();
+  });
+
   it('does not override existing URL price filters', () => {
     const result = parsePriceFromQuery('لابتوب أقل من 3000', {
       minPrice: 100,
