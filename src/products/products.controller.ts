@@ -477,6 +477,22 @@ export class ProductsController {
     return this.productsService.findProductNames(queryDto, isAdmin);
   }
 
+  @Get('content')
+  @UseGuards(OptionalJwtAuthGuard)
+  @ApiOperation({
+    summary:
+      'Get products with id, names, long descriptions, and image URLs only',
+  })
+  findProductContent(@Query() filterDto: FilterProductDto, @Req() req: any) {
+    const isAdmin =
+      req.user?.role === UserRole.ADMIN ||
+      req.user?.role === UserRole.CATALOG_MANAGER ||
+      req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
+      req.user?.role === 'products_api';
+
+    return this.productsService.findProductContent(filterDto, isAdmin);
+  }
+
   @Get()
   @UseGuards(OptionalJwtAuthGuard)
   @ApiQuery({

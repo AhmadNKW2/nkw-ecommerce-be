@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { MediaType } from '../media/entities/media.entity';
 import { DataSource } from 'typeorm';
 import { ProductsService } from './products.service';
 import { ProductStatus } from './entities/product.entity';
@@ -374,5 +374,74 @@ describe('ProductsService detail attributes', () => {
     await expect(service.findOne(productBase.id, false)).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('returns only content fields and image urls from findProductContent', async () => {
+    jest.spyOn(service, 'findAll').mockResolvedValue({
+      data: [
+        {
+          id: 1,
+          name_en: 'Monitor',
+          name_ar: 'شاشة',
+          long_description_en: 'Long EN',
+          long_description_ar: 'Long AR',
+          price: 100,
+          sku: 'MON-1',
+          media: [
+            {
+              id: 10,
+              url: 'https://cdn.example.com/video.mp4',
+              type: MediaType.VIDEO,
+              is_primary: true,
+              sort_order: 0,
+            },
+            {
+              id: 11,
+              url: 'https://cdn.example.com/secondary.jpg',
+              type: MediaType.IMAGE,
+              is_primary: false,
+              sort_order: 1,
+            },
+            {
+              id: 12,
+              url: 'https://cdn.example.com/primary.jpg',
+              type: MediaType.IMAGE,
+              is_primary: true,
+              sort_order: 0,
+            },
+          ],
+        },
+      ],
+      meta: {
+        total: 1,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+      },
+    });
+
+    const result = await service.findProductContent({}, true);
+
+    expect(result).toEqual({
+      data: [
+        {
+          id: 1,
+          name_en: 'Monitor',
+          name_ar: 'شاشة',
+          long_description_en: 'Long EN',
+          long_description_ar: 'Long AR',
+          images: [
+            'https://cdn.example.com/primary.jpg',
+            'https://cdn.example.com/secondary.jpg',
+          ],
+        },
+      ],
+      meta: {
+        total: 1,
+        page: 1,
+        limit: 10,
+        totalPages: 1,
+      },
+    });
   });
 });

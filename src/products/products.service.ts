@@ -24,7 +24,7 @@ import {
 import { ProductCategory } from './entities/product-category.entity';
 import { Vendor, VendorStatus } from '../vendors/entities/vendor.entity';
 import { Brand, BrandStatus } from '../brands/entities/brand.entity';
-import { Media } from '../media/entities/media.entity';
+import { Media, MediaType } from '../media/entities/media.entity';
 import { ProductAttribute } from './entities/product-attribute.entity';
 import { ProductAttributeValue } from './entities/product-attribute-value.entity';
 import { ProductMedia } from './entities/product-media.entity';
@@ -131,6 +131,37 @@ export class ProductsService {
       name_en: product.name_en,
       name_ar: product.name_ar,
     }));
+  }
+
+  async findProductContent(filterDto: FilterProductDto, isAdmin = false) {
+    const { data, meta } = await this.findAll(filterDto, isAdmin);
+
+    return {
+      data: data.map((product) => ({
+        id: product.id,
+        name_en: product.name_en,
+        name_ar: product.name_ar,
+        long_description_en: product.long_description_en,
+        long_description_ar: product.long_description_ar,
+        images: (product.media ?? [])
+          .filter((item: { type?: string }) => item.type === MediaType.IMAGE)
+          .sort((left: any, right: any) => {
+            if (left.sort_order !== right.sort_order) {
+              return left.sort_order - right.sort_order;
+            }
+            if (left.is_primary) {
+              return -1;
+            }
+            if (right.is_primary) {
+              return 1;
+            }
+            return left.id - right.id;
+          })
+          .map((item: { url?: string | null }) => item.url)
+          .filter((url): url is string => Boolean(url)),
+      })),
+      meta,
+    };
   }
 
   // ─── In-memory background job tracker ─────────────────────────────────────
