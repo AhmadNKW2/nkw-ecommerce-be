@@ -2191,8 +2191,6 @@ export class CategoriesService {
         ),
       ),
     ];
-    const maxTagsPerCategory = dto.max_tags_per_category ?? 80;
-    const maxProductNamesPerCategory = dto.max_product_names_per_category ?? 120;
 
     const activeCategories = await this.categoriesRepository.find({
       where: { status: CategoryStatus.ACTIVE },
@@ -2237,7 +2235,16 @@ export class CategoriesService {
     }
 
     const leafCategoryIds = leafCategories.map((category) => category.id);
-    const rawProducts = await this.productCategoriesRepository
+    const directCategoryProducts = await this.productsRepository
+      .createQueryBuilder('product')
+      .select('product.category_id', 'category_id')
+      .addSelect('product.name_en', 'name_en')
+      .addSelect('product.name_ar', 'name_ar')
+      .where('product.status = :productStatus', { productStatus: ProductStatus.ACTIVE })
+      .andWhere('product.category_id IN (:...categoryIds)', { categoryIds: leafCategoryIds })
+      .getRawMany<{ category_id: number; name_en: string | null; name_ar: string | null }>();
+
+    const junctionCategoryProducts = await this.productCategoriesRepository
       .createQueryBuilder('productCategory')
       .innerJoin(
         Product,
@@ -2253,15 +2260,17 @@ export class CategoriesService {
       })
       .getRawMany<{ category_id: number; name_en: string | null; name_ar: string | null }>();
 
+    const rawProducts = [...directCategoryProducts, ...junctionCategoryProducts];
+
     const namesByCategoryId = new Map<number, { en: string[]; ar: string[] }>();
     for (const row of rawProducts) {
       const categoryId = Number(row.category_id);
       const bucket = namesByCategoryId.get(categoryId) ?? { en: [], ar: [] };
 
-      if (row.name_en && bucket.en.length < maxProductNamesPerCategory) {
+      if (row.name_en) {
         bucket.en.push(row.name_en);
       }
-      if (row.name_ar && bucket.ar.length < maxProductNamesPerCategory) {
+      if (row.name_ar) {
         bucket.ar.push(row.name_ar);
       }
       namesByCategoryId.set(categoryId, bucket);
@@ -2299,12 +2308,12 @@ export class CategoriesService {
         const tagsEn = this.normalizeAndDedupeTags(
           aiOutput.tags_en,
           'en',
-          maxTagsPerCategory,
+          Number.MAX_SAFE_INTEGER,
         );
         const tagsAr = this.normalizeAndDedupeTags(
           aiOutput.tags_ar,
           'ar',
-          maxTagsPerCategory,
+          Number.MAX_SAFE_INTEGER,
         );
 
         await this.categoriesRepository.update(leafCategory.id, {

@@ -5,7 +5,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  Max,
   Min,
 } from 'class-validator';
 
@@ -17,20 +16,6 @@ export class GenerateCategoryTagsDto {
   @IsInt({ each: true })
   @Min(1, { each: true })
   category_ids?: number[];
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(300)
-  max_tags_per_category?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(300)
-  max_product_names_per_category?: number;
 
   @IsOptional()
   @IsString()
