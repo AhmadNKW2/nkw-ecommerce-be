@@ -2240,7 +2240,13 @@ export class CategoriesService {
       .select('product.category_id', 'category_id')
       .addSelect('product.name_en', 'name_en')
       .addSelect('product.name_ar', 'name_ar')
-      .where('product.status = :productStatus', { productStatus: ProductStatus.ACTIVE })
+      .where('product.status IN (:...allowedStatuses)', {
+        allowedStatuses: [
+          ProductStatus.ACTIVE,
+          ProductStatus.UPDATED,
+          ProductStatus.REVIEW,
+        ],
+      })
       .andWhere('product.category_id IN (:...categoryIds)', { categoryIds: leafCategoryIds })
       .getRawMany<{ category_id: number; name_en: string | null; name_ar: string | null }>();
 
@@ -2249,8 +2255,14 @@ export class CategoriesService {
       .innerJoin(
         Product,
         'product',
-        'product.id = productCategory.product_id AND product.status = :productStatus',
-        { productStatus: ProductStatus.ACTIVE },
+        'product.id = productCategory.product_id AND product.status IN (:...allowedStatuses)',
+        {
+          allowedStatuses: [
+            ProductStatus.ACTIVE,
+            ProductStatus.UPDATED,
+            ProductStatus.REVIEW,
+          ],
+        },
       )
       .select('productCategory.category_id', 'category_id')
       .addSelect('product.name_en', 'name_en')
