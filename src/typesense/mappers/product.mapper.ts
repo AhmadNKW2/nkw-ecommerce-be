@@ -1,5 +1,9 @@
 import { Product } from '../../products/entities/product.entity';
-import { stripHtml, normalizeArabic } from '../utils/text-normalize';
+import {
+  arabicDisplayValue,
+  arabicSearchValue,
+  stripHtml,
+} from '../utils/text-normalize';
 
 type TypesenseProductDocument = Record<
   string,
@@ -26,6 +30,28 @@ function normalizePositiveIntegers(values?: number[]): number[] {
       values.filter((value) => Number.isInteger(value) && value > 0),
     ),
   ];
+}
+
+function mapArabicTextPair(raw: string | null | undefined): {
+  display: string;
+  search: string;
+} {
+  const display = arabicDisplayValue(raw);
+  return {
+    display,
+    search: arabicSearchValue(display),
+  };
+}
+
+function mapArabicHtmlPair(html: string | null | undefined): {
+  display: string;
+  search: string;
+} {
+  const display = stripHtml(html);
+  return {
+    display,
+    search: arabicSearchValue(display),
+  };
 }
 
 export function mapProductToTypesenseDoc(
@@ -63,46 +89,62 @@ export function mapProductToTypesenseDoc(
       : toNumber(product.sale_price, 0);
   const effectivePrice =
     salePrice !== null && salePrice > 0 && salePrice < price ? salePrice : price;
+
   const categoryNamesEn = new Set<string>();
   const categoryNamesAr = new Set<string>();
+  const categoryNamesArNorm = new Set<string>();
+
   if (Array.isArray(product.productCategories)) {
     for (const productCategory of product.productCategories) {
       const nameEn = productCategory?.category?.name_en?.trim();
       const nameAr = productCategory?.category?.name_ar?.trim();
       if (nameEn) categoryNamesEn.add(nameEn);
-      if (nameAr) categoryNamesAr.add(normalizeArabic(nameAr));
+      if (nameAr) {
+        categoryNamesAr.add(nameAr);
+        categoryNamesArNorm.add(arabicSearchValue(nameAr));
+      }
     }
   }
+
   if (product.category?.name_en?.trim()) {
     categoryNamesEn.add(product.category.name_en.trim());
   }
+
   if (product.category?.name_ar?.trim()) {
-    categoryNamesAr.add(normalizeArabic(product.category.name_ar.trim()));
+    const nameAr = product.category.name_ar.trim();
+    categoryNamesAr.add(nameAr);
+    categoryNamesArNorm.add(arabicSearchValue(nameAr));
   }
 
-  const shortDescriptionAr = stripHtml(product.short_description_ar);
-  const longDescriptionAr = stripHtml(product.long_description_ar);
-  const brandNameAr = product.brand?.name_ar?.trim() ?? '';
+  const nameAr = mapArabicTextPair(product.name_ar);
+  const shortDescriptionAr = mapArabicHtmlPair(product.short_description_ar);
+  const longDescriptionAr = mapArabicHtmlPair(product.long_description_ar);
+  const brandNameAr = mapArabicTextPair(product.brand?.name_ar);
 
   return {
     id: String(product.id),
     name_en: product.name_en ?? '',
-    name_ar: normalizeArabic(product.name_ar ?? ''),
+    name_ar: nameAr.display,
+    name_ar_norm: nameAr.search,
     short_description_en: stripHtml(product.short_description_en),
-    short_description_ar: normalizeArabic(shortDescriptionAr),
+    short_description_ar: shortDescriptionAr.display,
+    short_description_ar_norm: shortDescriptionAr.search,
     long_description_en: stripHtml(product.long_description_en),
-    long_description_ar: normalizeArabic(longDescriptionAr),
+    long_description_ar: longDescriptionAr.display,
+    long_description_ar_norm: longDescriptionAr.search,
     sku: product.sku ?? '',
     slug: product.slug ?? '',
     status: product.status ?? '',
     visible: Boolean(product.visible),
     brand_id: product.brand_id ?? null,
     brand_name_en: product.brand?.name_en?.trim() ?? '',
-    brand_name_ar: normalizeArabic(brandNameAr),
+    brand_name_ar: brandNameAr.display,
+    brand_name_ar_norm: brandNameAr.search,
     vendor_id: product.vendor_id ?? null,
     category_ids: Array.from(categoryIds),
     category_names_en: Array.from(categoryNamesEn),
     category_names_ar: Array.from(categoryNamesAr),
+    category_names_ar_norm: Array.from(categoryNamesArNorm),
     attributes_values_ids: attributeValueIds,
     specifications_values_ids: specificationValueIds,
     is_out_of_stock: Boolean(product.is_out_of_stock),

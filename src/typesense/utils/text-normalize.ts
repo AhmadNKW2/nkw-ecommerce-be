@@ -12,6 +12,16 @@ export function normalizeSearchQuery(input: string | null | undefined): string {
   return normalizeArabic(input.trim().replace(/\s+/g, ' '));
 }
 
+/** Original Arabic text for Typesense display fields (name_ar, …). */
+export function arabicDisplayValue(text: string | null | undefined): string {
+  return (text ?? '').trim();
+}
+
+/** Normalized Arabic for Typesense search fields (*_norm). */
+export function arabicSearchValue(text: string | null | undefined): string {
+  return normalizeArabic(arabicDisplayValue(text));
+}
+
 // Minimum total word length (including the leading "ال" itself) required
 // before we strip the definite article. This avoids mangling short words like
 // "العاب" (5 chars) while still stripping "ال" from "الجهاز" (6 chars).

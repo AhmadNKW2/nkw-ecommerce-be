@@ -151,20 +151,8 @@ export class TypesenseService implements OnModuleInit {
       const existingFieldNames = new Set(
         (collection.fields ?? []).map((field: { name: string }) => field.name),
       );
-      const autoMigrateFieldNames = new Set([
-        'attributes_values_ids',
-        'specifications_values_ids',
-        'short_description_ar',
-        'long_description_ar',
-        'brand_name_en',
-        'brand_name_ar',
-        'category_names_en',
-        'category_names_ar',
-      ]);
       const fieldsToEnsure = productSchema.fields.filter(
-        (field) =>
-          autoMigrateFieldNames.has(field.name) &&
-          !existingFieldNames.has(field.name),
+        (field) => field.name !== 'id' && !existingFieldNames.has(field.name),
       );
 
       if (fieldsToEnsure.length === 0) {
