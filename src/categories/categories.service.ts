@@ -47,11 +47,12 @@ export class CategoriesService {
   private readonly categoryTagsJobs = new Map<
     string,
     {
-      status: 'running' | 'done' | 'failed';
+      status: 'running' | 'done' | 'failed' | 'cancelled';
       startedAt: Date;
       finishedAt?: Date;
       progress: number;
       total: number;
+      cancellationRequested?: boolean;
       current_category_id?: number;
       current_category_name_en?: string;
       result?: Record<string, unknown>;
@@ -83,6 +84,7 @@ export class CategoriesService {
       startedAt: new Date(),
       progress: 0,
       total: 0,
+      cancellationRequested: false,
     });
     setTimeout(() => this.categoryTagsJobs.delete(jobId), 24 * 60 * 60 * 1000).unref?.();
     return jobId;
@@ -2175,6 +2177,28 @@ export class CategoriesService {
     };
   }
 
+  cancelCategoryTagsGenerationJob(jobId: string) {
+    const job = this.categoryTagsJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException('Category tags job not found');
+    }
+
+    if (job.status !== 'running') {
+      return {
+        job_id: jobId,
+        status: job.status,
+        message: 'Job is not running.',
+      };
+    }
+
+    job.cancellationRequested = true;
+    return {
+      job_id: jobId,
+      status: 'running',
+      message: 'Cancellation requested.',
+    };
+  }
+
   private async runCategoryTagsGenerationJob(
     jobId: string,
     dto: GenerateCategoryTagsDto,
@@ -2293,6 +2317,10 @@ export class CategoriesService {
     const failed: Array<{ category_id: number; error: string }> = [];
 
     for (let index = 0; index < leafCategories.length; index++) {
+      if (job.cancellationRequested) {
+        break;
+      }
+
       const leafCategory = leafCategories[index];
       job.current_category_id = leafCategory.id;
       job.current_category_name_en = leafCategory.name_en;
@@ -2352,16 +2380,19 @@ export class CategoriesService {
       return;
     }
 
-    refreshed.status = failed.length > 0 ? 'failed' : 'done';
+    const wasCancelled = refreshed.cancellationRequested === true;
+    refreshed.status = wasCancelled ? 'cancelled' : failed.length > 0 ? 'failed' : 'done';
     refreshed.finishedAt = new Date();
     refreshed.result = {
-      processed_categories: leafCategories.length,
+      processed_categories: refreshed.progress,
       updated_categories: updated.length,
       failed_categories: failed.length,
       updated,
       failed,
     };
-    if (failed.length > 0) {
+    if (wasCancelled) {
+      refreshed.error = 'Cancelled by user.';
+    } else if (failed.length > 0) {
       refreshed.error = `${failed.length} categories failed during generation.`;
     }
   }

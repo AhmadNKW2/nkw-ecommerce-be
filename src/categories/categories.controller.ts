@@ -395,4 +395,11 @@ export class CategoriesController {
   getGenerateTagsJobStatus(@Param('jobId') jobId: string) {
     return this.categoriesService.getCategoryTagsGenerationJob(jobId);
   }
+
+  @Post('tags/jobs/:jobId/cancel')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  cancelGenerateTagsJob(@Param('jobId') jobId: string) {
+    return this.categoriesService.cancelCategoryTagsGenerationJob(jobId);
+  }
 }
