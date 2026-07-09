@@ -107,14 +107,15 @@ export class CategoriesService {
     }
 
     const lower = normalized.toLowerCase();
-    const hasModelPattern = /\b[a-z]*\d+[a-z0-9-]*\b/i.test(normalized);
     const containsBlockedWords =
       lower.includes('model') ||
       lower.includes('brand') ||
       normalized.includes('موديل') ||
       normalized.includes('ماركة');
 
-    return hasModelPattern || containsBlockedWords;
+    // Do not reject tags just because they include digits (e.g. "m.2", "2.5 inch").
+    // We only block explicit brand/model markers here.
+    return containsBlockedWords;
   }
 
   private normalizeAndDedupeTags(
