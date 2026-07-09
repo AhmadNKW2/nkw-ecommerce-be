@@ -145,6 +145,39 @@ export class ProductsService {
     }));
   }
 
+  async findProductContent(filterDto: FilterProductDto, isAdmin = false) {
+    const result = await this.findAll(filterDto, isAdmin);
+
+    return {
+      data: (result.data ?? []).map((product) => ({
+        id: product.id,
+        name_en: product.name_en,
+        name_ar: product.name_ar,
+        long_description_en: product.long_description_en,
+        long_description_ar: product.long_description_ar,
+        images: this.getProductImageUrls(product.media),
+      })),
+      meta: result.meta,
+    };
+  }
+
+  private getProductImageUrls(
+    media: Array<Media & { is_primary?: boolean; sort_order?: number }> = [],
+  ): string[] {
+    const imageMedia = media
+      .filter((item) => item?.type === MediaType.IMAGE && typeof item.url === 'string')
+      .sort((left, right) => {
+        const primaryDelta = Number(Boolean(right?.is_primary)) - Number(Boolean(left?.is_primary));
+        if (primaryDelta !== 0) {
+          return primaryDelta;
+        }
+
+        return (left?.sort_order ?? 0) - (right?.sort_order ?? 0);
+      });
+
+    return imageMedia.map((item) => item.url);
+  }
+
   constructor(
     @InjectRepository(Product)
     private productsRepository: Repository<Product>,

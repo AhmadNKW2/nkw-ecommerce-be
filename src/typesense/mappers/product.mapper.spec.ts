@@ -38,16 +38,10 @@ describe('mapProductToTypesenseDoc', () => {
     expect(doc.long_description_ar).not.toContain('<');
   });
 
-  it('keeps original Arabic values for display fields', () => {
+  it('indexes Arabic fields using search normalization only', () => {
     const doc = mapProductToTypesenseDoc(makeProduct());
-    expect(doc.name_ar).toBe('أحمد الجهاز');
-    expect(doc.short_description_ar).toBe('جهاز لوحي مُمتاز');
-  });
-
-  it('stores normalized Arabic values in dedicated *_norm fields for matching', () => {
-    const doc = mapProductToTypesenseDoc(makeProduct());
-    expect(doc.name_ar_norm).toBe('احمد الجهاز');
-    expect(doc.short_description_ar_norm).toBe('جهاز لوحي ممتاز');
+    expect(doc.name_ar).toBe('احمد جهاز');
+    expect(doc.short_description_ar).toBe('جهاز لوحي ممتاز');
   });
 
   it('still populates the pre-existing fields unchanged (no regression)', () => {
@@ -67,8 +61,6 @@ describe('mapProductToTypesenseDoc', () => {
       makeProduct({ short_description_ar: undefined as any, long_description_ar: undefined as any }),
     );
     expect(doc.short_description_ar).toBe('');
-    expect(doc.short_description_ar_norm).toBe('');
     expect(doc.long_description_ar).toBe('');
-    expect(doc.long_description_ar_norm).toBe('');
   });
 });

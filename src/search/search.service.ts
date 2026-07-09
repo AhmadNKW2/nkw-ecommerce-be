@@ -33,22 +33,17 @@ const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
 // Field priority for relevance ranking: name (title) highest, short
 // description second, long description lowest of the text fields. Order and
 // weights must stay in sync with PRODUCT_QUERY_BY below.
-// Query both display Arabic fields and *_norm fields during index migration:
-// legacy docs may only have searchable Arabic on name_ar, while new docs use
-// *_norm for matching and keep originals in name_ar for responses.
-// name_en, name_ar, name_ar_norm, brand_name_en, brand_name_ar,
-// brand_name_ar_norm, category_names_en, category_names_ar,
-// category_names_ar_norm, short_description_en, short_description_ar,
-// short_description_ar_norm, long_description_en, long_description_ar,
-// long_description_ar_norm, sku, slug
+// name_en, name_ar, brand_name_en, brand_name_ar, category_names_en,
+// category_names_ar, short_description_en, short_description_ar,
+// long_description_en, long_description_ar, sku, slug
 const PRODUCT_QUERY_BY =
-  'name_en,name_ar,name_ar_norm,brand_name_en,brand_name_ar,brand_name_ar_norm,category_names_en,category_names_ar,category_names_ar_norm,short_description_en,short_description_ar,short_description_ar_norm,long_description_en,long_description_ar,long_description_ar_norm,sku,slug';
-const PRODUCT_QUERY_BY_WEIGHTS = '5,3,5,4,2,4,3,2,3,3,2,3,1,1,1,4,2';
+  'name_en,name_ar,brand_name_en,brand_name_ar,category_names_en,category_names_ar,short_description_en,short_description_ar,long_description_en,long_description_ar,sku,slug';
+const PRODUCT_QUERY_BY_WEIGHTS = '5,5,4,4,3,3,3,3,1,1,4,2';
 const AUTOCOMPLETE_QUERY_BY =
-  'name_en,name_ar,name_ar_norm,brand_name_en,brand_name_ar,brand_name_ar_norm,category_names_en,category_names_ar,category_names_ar_norm,sku,slug';
-const AUTOCOMPLETE_QUERY_BY_WEIGHTS = '5,3,5,4,2,4,3,2,3,4,2';
-const PRODUCT_CARD_QUERY_BY = 'name_en,name_ar,name_ar_norm,sku,slug';
-const PRODUCT_ID_LOOKUP_QUERY_BY = 'name_en,name_ar,name_ar_norm,slug';
+  'name_en,name_ar,brand_name_en,brand_name_ar,category_names_en,category_names_ar,sku,slug';
+const AUTOCOMPLETE_QUERY_BY_WEIGHTS = '5,5,4,4,3,3,4,2';
+const PRODUCT_CARD_QUERY_BY = 'name_en,name_ar,sku,slug';
+const PRODUCT_ID_LOOKUP_QUERY_BY = 'name_en,name_ar,slug';
 const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 
 type ExpansionTierKey =
@@ -1481,47 +1476,14 @@ export class SearchService {
   private async buildSearchCardsFromTypesenseIds(
     productIds: number[],
     isAdmin: boolean,
+    dto?: SearchQueryDto,
   ): Promise<any[]> {
-    if (productIds.length === 0) {
-      return [];
-    }
-
-    const filterBy = `id:=[${productIds.join(',')}]${
-      isAdmin ? '' : ' && is_out_of_stock:=false'
-    }`;
-
-    const [result, imageUrlsByProductId] = await Promise.all([
-      this.typesenseService.search({
-        q: '*',
-        query_by: PRODUCT_CARD_QUERY_BY,
-        filter_by: filterBy,
-        per_page: productIds.length,
-        page: 1,
-      }),
-      this.productsService.findPrimaryImageUrlsByProductIds(productIds),
-    ]);
-
-    const hits = Array.isArray(result.hits) ? result.hits : [];
-    const cardsById = new Map<string, any>();
-
-    hits.forEach((hit: any) => {
-      const productId = Number(hit?.document?.id);
-      if (!Number.isInteger(productId) || productId <= 0 || !hit?.document) {
-        return;
-      }
-
-      cardsById.set(
-        String(productId),
-        this.mapTypesenseDocumentToSearchCard(
-          hit.document,
-          imageUrlsByProductId.get(productId),
-        ),
-      );
-    });
-
-    return productIds
-      .map((id) => cardsById.get(String(id)))
-      .filter((card): card is NonNullable<typeof card> => Boolean(card));
+    return this.buildSearchResultsFromProductIds(
+      productIds,
+      isAdmin,
+      false,
+      dto,
+    );
   }
 
   private async searchWithTypesenseRandomBrowse(
@@ -2053,35 +2015,14 @@ export class SearchService {
         true,
       );
     } else {
-      const imageUrlsByProductId =
-        await this.productsService.findPrimaryImageUrlsByProductIds(pageProductIds);
-      const hitsById = new Map<number, any>();
-      hits.forEach((hit: any) => {
-        const id = Number(hit?.document?.id);
-        if (Number.isInteger(id) && id > 0) {
-          hitsById.set(id, hit);
-        }
-      });
-      const mappedFromHits = pageProductIds
-        .map((hit: any) => {
-          const sourceHit = typeof hit === 'number' ? hitsById.get(hit) : hit;
-          const productId = Number(sourceHit?.document?.id ?? hit);
-          if (!Number.isInteger(productId) || productId <= 0 || !sourceHit?.document) {
-            return undefined;
-          }
-
-          return this.mapTypesenseDocumentToSearchCard(
-            sourceHit.document,
-            imageUrlsByProductId.get(productId),
-          );
-        })
-        .filter((product): product is Record<string, any> => Boolean(product));
-      const missingIds = pageProductIds.filter((id) => !hitsById.has(Number(id)));
-      const missingCards =
-        shouldExpand && missingIds.length > 0
-          ? await this.buildSearchCardsFromTypesenseIds(missingIds, isAdmin)
-          : [];
-      products = [...mappedFromHits, ...missingCards];
+      products = pageProductIds.length
+        ? await this.buildSearchResultsFromProductIds(
+            pageProductIds,
+            isAdmin,
+            false,
+            dto,
+          )
+        : [];
     }
 
     let facetCountsSource = result.facet_counts;
@@ -2216,34 +2157,21 @@ export class SearchService {
     const productIds = hits
       .map((hit: any) => Number(hit?.document?.id))
       .filter((id) => Number.isInteger(id) && id > 0);
-    const imageUrlsByProductId =
-      await this.productsService.findPrimaryImageUrlsByProductIds(productIds);
+    const cards = await this.buildSearchResultsFromProductIds(
+      productIds,
+      isAdmin,
+      false,
+    );
 
     return {
-      suggestions: hits
-        .map((hit: any) => {
-          const productId = Number(hit?.document?.id);
-          if (!Number.isInteger(productId) || productId <= 0 || !hit?.document) {
-            return null;
-          }
-
-          const card = this.mapTypesenseDocumentToSearchCard(
-            hit.document,
-            imageUrlsByProductId.get(productId),
-          );
-
-          return {
-            id: String(card.id),
-            slug: card.slug,
-            name_en: card.name_en,
-            name_ar: card.name_ar,
-            image: card.images?.[0],
-            price_min: card.sale_price ?? card.price,
-          };
-        })
-        .filter((suggestion): suggestion is NonNullable<typeof suggestion> =>
-          Boolean(suggestion),
-        ),
+      suggestions: cards.map((card) => ({
+        id: String(card.id),
+        slug: card.slug,
+        name_en: card.name_en,
+        name_ar: card.name_ar,
+        image: card.images?.[0],
+        price_min: card.sale_price ?? card.price,
+      })),
     };
   }
 

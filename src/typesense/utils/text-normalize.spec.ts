@@ -18,10 +18,20 @@ describe('text-normalize', () => {
   });
 
   describe('normalizeArabic', () => {
-    it('normalizes alef variants to bare alef', () => {
-      expect(normalizeArabic('أحمد')).toBe(normalizeArabic('احمد'));
-      expect(normalizeArabic('إحمد')).toBe(normalizeArabic('احمد'));
-      expect(normalizeArabic('آحمد')).toBe(normalizeArabic('احمد'));
+    it('normalizes ta marbuta and ha as equivalent', () => {
+      expect(normalizeArabic('مدرسة')).toBe('مدرسه');
+      expect(normalizeArabic('مدرسه')).toBe('مدرسه');
+      expect(normalizeArabic('مدرسة')).toBe(normalizeArabic('مدرسه'));
+      expect(normalizeArabic('فاطمة')).toBe(normalizeArabic('فاطمه'));
+      expect(normalizeArabic('جودة')).toBe(normalizeArabic('جوده'));
+    });
+
+    it('normalizes all alef variants to bare alef', () => {
+      expect(normalizeArabic('أحمد')).toBe('احمد');
+      expect(normalizeArabic('إحمد')).toBe('احمد');
+      expect(normalizeArabic('آحمد')).toBe('احمد');
+      expect(normalizeArabic('ٱحمد')).toBe('احمد');
+      expect(normalizeArabic('احمد')).toBe('احمد');
     });
 
     it('normalizes alef maksura to ya', () => {
@@ -44,24 +54,33 @@ describe('text-normalize', () => {
       expect(normalizeArabic('احمد')).toBe(normalizeArabic('أحمد'));
     });
 
-    it('keeps the leading definite article to preserve original words', () => {
-      expect(normalizeArabic('المعالج')).toBe('المعالج');
+    it('strips the leading definite article so معالج = المعالج (QA table case)', () => {
+      expect(normalizeArabic('المعالج')).toBe(normalizeArabic('معالج'));
+      expect(normalizeArabic('المعالج')).toBe('معالج');
     });
 
-    it('keeps the definite article in multi-word phrases', () => {
-      // Ta-marbuta normalization (ة -> ه) still applies to both words.
-      expect(normalizeArabic('اللغة العربية')).toBe('اللغه العربيه');
+    it('matches queries without the definite article to indexed titles', () => {
+      expect(normalizeArabic('الجهاز الخارق')).toBe('جهاز خارق');
+      expect(normalizeArabic('جهاز خارق')).toBe('جهاز خارق');
+    });
+
+    it('strips the definite article per word in a multi-word phrase', () => {
+      expect(normalizeArabic('اللغة العربية')).toBe('اللغه عربيه');
     });
 
     it('does not strip short words that merely start with the same two letters as the article', () => {
-      // "الله" (Allah) must not become "له" — stripping would change the word's meaning.
       expect(normalizeArabic('الله')).toBe('الله');
+      expect(normalizeArabic('العاب')).toBe('العاب');
+      expect(normalizeArabic('ألعاب')).toBe('العاب');
     });
 
     it('does not strip "ال" when it is not at the very start of the word', () => {
-      // "بالون" (balloon) contains "ال" starting at the second letter, not
-      // as a word-initial definite article — must be left untouched.
       expect(normalizeArabic('بالون')).toBe('بالون');
+    });
+
+    it('treats hamza variants as equivalent for search', () => {
+      expect(normalizeArabic('مؤتمر')).toBe(normalizeArabic('مءتمر'));
+      expect(normalizeArabic('مؤتمر')).toBe('موتمر');
     });
 
     it('returns empty string for null/undefined', () => {
