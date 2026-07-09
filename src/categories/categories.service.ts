@@ -216,6 +216,7 @@ export class CategoriesService {
               include: [
                 'Category and product-title based search phrases',
                 'Common intent variations people type in search',
+                'For Arabic tags, include colloquial Levant wording used in Jordan and Syria (عامية بلاد الشام: الأردن وسوريا)',
               ],
               exclude: [
                 'Brand names',
