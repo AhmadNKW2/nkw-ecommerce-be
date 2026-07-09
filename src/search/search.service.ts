@@ -33,12 +33,22 @@ const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
 // Field priority for relevance ranking: name (title) highest, short
 // description second, long description lowest of the text fields. Order and
 // weights must stay in sync with PRODUCT_QUERY_BY below.
-// name_en, name_ar_norm, brand_name_en, brand_name_ar_norm, category_names_en,
-// category_names_ar_norm, short_description_en, short_description_ar_norm,
-// long_description_en, long_description_ar_norm, sku, slug
+// Query both display Arabic fields and *_norm fields during index migration:
+// legacy docs may only have searchable Arabic on name_ar, while new docs use
+// *_norm for matching and keep originals in name_ar for responses.
+// name_en, name_ar, name_ar_norm, brand_name_en, brand_name_ar,
+// brand_name_ar_norm, category_names_en, category_names_ar,
+// category_names_ar_norm, short_description_en, short_description_ar,
+// short_description_ar_norm, long_description_en, long_description_ar,
+// long_description_ar_norm, sku, slug
 const PRODUCT_QUERY_BY =
-  'name_en,name_ar_norm,brand_name_en,brand_name_ar_norm,category_names_en,category_names_ar_norm,short_description_en,short_description_ar_norm,long_description_en,long_description_ar_norm,sku,slug';
-const PRODUCT_QUERY_BY_WEIGHTS = '5,5,4,4,3,3,3,3,1,1,4,2';
+  'name_en,name_ar,name_ar_norm,brand_name_en,brand_name_ar,brand_name_ar_norm,category_names_en,category_names_ar,category_names_ar_norm,short_description_en,short_description_ar,short_description_ar_norm,long_description_en,long_description_ar,long_description_ar_norm,sku,slug';
+const PRODUCT_QUERY_BY_WEIGHTS = '5,3,5,4,2,4,3,2,3,3,2,3,1,1,1,4,2';
+const AUTOCOMPLETE_QUERY_BY =
+  'name_en,name_ar,name_ar_norm,brand_name_en,brand_name_ar,brand_name_ar_norm,category_names_en,category_names_ar,category_names_ar_norm,sku,slug';
+const AUTOCOMPLETE_QUERY_BY_WEIGHTS = '5,3,5,4,2,4,3,2,3,4,2';
+const PRODUCT_CARD_QUERY_BY = 'name_en,name_ar,name_ar_norm,sku,slug';
+const PRODUCT_ID_LOOKUP_QUERY_BY = 'name_en,name_ar,name_ar_norm,slug';
 const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 
 type ExpansionTierKey =
@@ -317,7 +327,7 @@ export class SearchService {
       const batchSize = Math.min(this.typesenseIdPageSize, remaining);
       const result = await this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar_norm,slug',
+        query_by: PRODUCT_ID_LOOKUP_QUERY_BY,
         filter_by: filterBy,
         page,
         per_page: batchSize,
@@ -1483,7 +1493,7 @@ export class SearchService {
     const [result, imageUrlsByProductId] = await Promise.all([
       this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar_norm,sku,slug',
+        query_by: PRODUCT_CARD_QUERY_BY,
         filter_by: filterBy,
         per_page: productIds.length,
         page: 1,
@@ -2078,7 +2088,7 @@ export class SearchService {
     if (shouldExpand && orderedProductIds.length > 0) {
       const facetsFromExpandedPool = await this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar_norm,sku,slug',
+        query_by: PRODUCT_CARD_QUERY_BY,
         filter_by: `id:=[${orderedProductIds.join(',')}]`,
         facet_by: this.getTypesenseFacetFields(),
         max_facet_values: 100,
@@ -2188,9 +2198,8 @@ export class SearchService {
 
     const result = await this.typesenseService.search({
       q: normalizeSearchQuery(dto.q),
-      query_by:
-        'name_en,name_ar_norm,brand_name_en,brand_name_ar_norm,category_names_en,category_names_ar_norm,sku,slug',
-      query_by_weights: '5,5,4,4,3,3,4,2',
+      query_by: AUTOCOMPLETE_QUERY_BY,
+      query_by_weights: AUTOCOMPLETE_QUERY_BY_WEIGHTS,
       text_match_type: 'max_weight',
       prioritize_token_position: true,
       ...(filterBy ? { filter_by: filterBy } : {}),
