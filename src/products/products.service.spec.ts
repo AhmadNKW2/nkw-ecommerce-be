@@ -136,6 +136,9 @@ describe('ProductsService detail attributes', () => {
       {} as never,
       settingsService as never,
       {} as never,
+      {
+        invalidateSearchCache: jest.fn().mockResolvedValue(2),
+      } as never,
     );
   });
 

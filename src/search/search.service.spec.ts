@@ -19,6 +19,13 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
   const configService = {
     get: jest.fn().mockReturnValue('typesense'),
   };
+  const searchCacheService = {
+    getGeneration: jest.fn().mockResolvedValue(1),
+    invalidateSearchCache: jest.fn().mockResolvedValue(2),
+    buildCacheKey: jest.fn((prefix: string, payload: string) =>
+      Promise.resolve(`${prefix}:${payload}`),
+    ),
+  };
   const emptyRepo = { find: jest.fn().mockResolvedValue([]) };
   const categoriesRepository = {
     find: jest.fn().mockResolvedValue(categoryRows),
@@ -28,6 +35,7 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
     cacheManager as any,
     productsService as any,
     typesenseService as any,
+    searchCacheService as any,
     configService as any,
     categoriesRepository as any,
     emptyRepo as any,

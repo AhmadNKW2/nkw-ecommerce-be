@@ -1,6 +1,8 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { SearchService } from './search.service';
+import { SearchCacheService } from './search-cache.service';
+import { AdminSearchController } from './admin-search.controller';
 import { TagsService } from './tags.service';
 import { SearchController } from './search.controller';
 import { AdminTagsController } from './admin-tags.controller';
@@ -10,15 +12,34 @@ import { Brand } from '../brands/entities/brand.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { AttributeValue } from '../attributes/entities/attribute-value.entity';
 import { SpecificationValue } from '../specifications/entities/specification-value.entity';
+import { Product } from '../products/entities/product.entity';
+import { ProductAttributeValue } from '../products/entities/product-attribute-value.entity';
+import { ProductSpecificationValue } from '../products/entities/product-specification-value.entity';
 import { ProductsModule } from '../products/products.module';
+import { TypesenseBackfillService } from '../typesense/typesense-backfill.service';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Tag, Category, Brand, Vendor, AttributeValue, SpecificationValue]),
+    TypeOrmModule.forFeature([
+      Tag,
+      Category,
+      Brand,
+      Vendor,
+      AttributeValue,
+      SpecificationValue,
+      Product,
+      ProductAttributeValue,
+      ProductSpecificationValue,
+    ]),
     forwardRef(() => ProductsModule),
   ],
-  controllers: [SearchController, AdminTagsController],
-  providers: [SearchService, TagsService],
-  exports: [TagsService],
+  controllers: [SearchController, AdminTagsController, AdminSearchController],
+  providers: [
+    SearchService,
+    SearchCacheService,
+    TypesenseBackfillService,
+    TagsService,
+  ],
+  exports: [SearchCacheService, TagsService],
 })
 export class SearchModule {}

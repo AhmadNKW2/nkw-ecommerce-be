@@ -37,6 +37,7 @@ import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
 import { SettingsService } from '../settings/settings.service';
 import { TypesenseService } from '../typesense/typesense.service';
+import { SearchCacheService } from '../search/search-cache.service';
 import {
   hasAdminAccess,
   stripProductPricingFields,
@@ -199,6 +200,7 @@ export class ProductsService {
     private readonly tagsService: TagsService,
     private readonly settingsService: SettingsService,
     private readonly typesenseService: TypesenseService,
+    private readonly searchCacheService: SearchCacheService,
   ) {}
 
   private async syncProductToTypesense(productId: number): Promise<void> {
@@ -273,6 +275,10 @@ export class ProductsService {
       const chunk = normalizedIds.slice(index, index + concurrency);
       await Promise.all(chunk.map((id) => this.syncProductToTypesense(id)));
     }
+
+    await this.searchCacheService.invalidateSearchCache(
+      `typesense sync (${normalizedIds.length} products)`,
+    );
   }
 
   async syncProductsByBrandToTypesense(brandId: number): Promise<void> {

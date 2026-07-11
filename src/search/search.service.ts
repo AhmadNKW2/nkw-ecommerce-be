@@ -32,6 +32,7 @@ import {
 } from '../typesense/product-search-fields';
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
+import { SearchCacheService } from './search-cache.service';
 
 // Matches current production behavior (previously hardcoded at two call sites:
 // buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
@@ -119,6 +120,7 @@ export class SearchService {
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
     private readonly typesenseService: TypesenseService,
+    private readonly searchCacheService: SearchCacheService,
     private readonly configService: ConfigService,
     @InjectRepository(Category)
     private readonly categoriesRepository: Repository<Category>,
@@ -2297,18 +2299,21 @@ export class SearchService {
     const cacheDto = willNormalizeQueryForCacheKey
       ? { ...preparedDto, q: normalizeSearchQuery(preparedDto.q) }
       : preparedDto;
-    const cacheKey = `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}:${JSON.stringify(cacheDto)}`;
+    const cacheKey = await this.searchCacheService.buildCacheKey(
+      `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}`,
+      JSON.stringify(cacheDto),
+    );
     const skipResponseCache = dto.is_admin === true || debugSearchEnabled;
     const cached =
       useRandomBrowse || skipResponseCache
         ? null
         : await this.cacheManager.get<any>(cacheKey);
-    const bypassCacheForBrandCategoryQuery = canUseTypesense && Boolean(
+    const bypassCacheForEmptyResults = canUseTypesense && Boolean(
       preparedDto.q &&
         this.tokenizeQueryForExpansion(preparedDto.q).length > 0 &&
         (cached?.meta?.total ?? 0) === 0,
     );
-    if (cached && !bypassCacheForBrandCategoryQuery) {
+    if (cached && !bypassCacheForEmptyResults) {
       if (debugSearchEnabled) {
         await this.writeSearchDebugLog({
           kind: 'search',
@@ -2401,7 +2406,10 @@ export class SearchService {
     // Same reasoning as search(): only normalize the cache key's query text
     // when Typesense (whose index is normalized) is what will actually run.
     const cacheQ = willUseTypesense ? normalizeSearchQuery(dto.q) : dto.q;
-    const cacheKey = `autocomplete:${cacheQ}:${dto.per_page}`;
+    const cacheKey = await this.searchCacheService.buildCacheKey(
+      'autocomplete',
+      `${cacheQ}:${dto.per_page}`,
+    );
     const cached =
       await this.cacheManager.get<AutocompleteResponseDto>(cacheKey);
     if (cached) return cached;
