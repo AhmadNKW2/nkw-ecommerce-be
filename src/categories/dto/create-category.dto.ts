@@ -34,48 +34,6 @@ export class CreateCategoryDto {
   @IsOptional()
   description_ar?: string;
 
-  @IsOptional()
-  @Transform(({ value }) => {
-    if (value === undefined) return undefined;
-    if (value === '' || value === null) return [];
-    if (typeof value === 'string') {
-      try {
-        const parsed = JSON.parse(value);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return value
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean);
-      }
-    }
-    return Array.isArray(value) ? value : [];
-  })
-  @IsArray()
-  @IsString({ each: true })
-  tags_en?: string[];
-
-  @IsOptional()
-  @Transform(({ value }) => {
-    if (value === undefined) return undefined;
-    if (value === '' || value === null) return [];
-    if (typeof value === 'string') {
-      try {
-        const parsed = JSON.parse(value);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch {
-        return value
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean);
-      }
-    }
-    return Array.isArray(value) ? value : [];
-  })
-  @IsArray()
-  @IsString({ each: true })
-  tags_ar?: string[];
-
   @IsString()
   @IsOptional()
   image?: string;

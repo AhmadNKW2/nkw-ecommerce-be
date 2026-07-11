@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "nest build",
-    "migrate:category-tags": "node add-category-tags-columns.js",
+    "migrate:drop-category-tags": "node remove-category-tags-columns.js",
     "clear:review-original-vendor-categories": "node clear-review-original-vendor-categories.js",
     "delete:review-products": "node delete-review-products.js",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",

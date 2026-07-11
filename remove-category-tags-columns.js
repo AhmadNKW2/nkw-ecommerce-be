@@ -48,34 +48,34 @@ async function main() {
     const tagsEnExists = await columnExists(client, 'categories', 'tags_en');
     const tagsArExists = await columnExists(client, 'categories', 'tags_ar');
 
-    if (tagsEnExists && tagsArExists) {
-      console.log('categories.tags_en and categories.tags_ar already exist. Nothing to do.');
+    if (!tagsEnExists && !tagsArExists) {
+      console.log('categories.tags_en and categories.tags_ar are already removed. Nothing to do.');
       return;
     }
 
     await client.query('BEGIN');
 
-    if (!tagsEnExists) {
+    if (tagsEnExists) {
       await client.query(`
         ALTER TABLE "categories"
-        ADD COLUMN IF NOT EXISTS "tags_en" text[] NOT NULL DEFAULT '{}'::text[]
+        DROP COLUMN IF EXISTS "tags_en"
       `);
-      console.log('Added categories.tags_en');
+      console.log('Dropped categories.tags_en');
     }
 
-    if (!tagsArExists) {
+    if (tagsArExists) {
       await client.query(`
         ALTER TABLE "categories"
-        ADD COLUMN IF NOT EXISTS "tags_ar" text[] NOT NULL DEFAULT '{}'::text[]
+        DROP COLUMN IF EXISTS "tags_ar"
       `);
-      console.log('Added categories.tags_ar');
+      console.log('Dropped categories.tags_ar');
     }
 
     await client.query('COMMIT');
-    console.log('Category tags columns migration completed successfully.');
+    console.log('Category tags columns removal completed successfully.');
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
-    console.error('Category tags columns migration failed:', error.message);
+    console.error('Category tags columns removal failed:', error.message);
     process.exitCode = 1;
   } finally {
     await client.end();

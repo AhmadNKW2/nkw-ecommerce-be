@@ -46,20 +46,6 @@ export class Category {
   @Column({ nullable: true })
   image: string;
 
-  @Column({
-    type: 'text',
-    array: true,
-    default: () => "'{}'",
-  })
-  tags_en: string[];
-
-  @Column({
-    type: 'text',
-    array: true,
-    default: () => "'{}'",
-  })
-  tags_ar: string[];
-
   @Column({ default: 0 })
   level: number; // 0 = main category, 1 = sub, 2 = sub-sub
 
