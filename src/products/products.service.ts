@@ -322,6 +322,10 @@ export class ProductsService {
     attributes?: unknown;
     specifications?: unknown;
     linked_product_ids?: unknown;
+    original_vendor_price?: unknown;
+    original_vendor_sale_price?: unknown;
+    original_price?: unknown;
+    original_sale_price?: unknown;
     weight?: unknown;
     weight_unit?: unknown;
     length?: unknown;
@@ -334,6 +338,11 @@ export class ProductsService {
 
       if (toggles.vendors_enabled === false) {
         dto.vendor_id = undefined;
+        dto.linked_product_ids = undefined;
+        dto.original_vendor_price = undefined;
+        dto.original_vendor_sale_price = undefined;
+        dto.original_price = undefined;
+        dto.original_sale_price = undefined;
       }
       if (toggles.attributes_enabled === false) {
         dto.attributes = undefined;
@@ -341,7 +350,10 @@ export class ProductsService {
       if (toggles.specifications_enabled === false) {
         dto.specifications = undefined;
       }
-      if (toggles.linked_products_enabled === false) {
+      if (
+        toggles.linked_products_enabled === false ||
+        toggles.vendors_enabled === false
+      ) {
         dto.linked_product_ids = undefined;
       }
       if (toggles.weight_and_dimensions_enabled === false) {
@@ -921,7 +933,10 @@ export class ProductsService {
     message: string;
   }> {
     const toggles = await this.settingsService.getProductFieldToggles();
-    if (toggles.linked_products_enabled === false) {
+    if (
+      toggles.linked_products_enabled === false ||
+      toggles.vendors_enabled === false
+    ) {
       throw new BadRequestException('Linked products are disabled');
     }
 
