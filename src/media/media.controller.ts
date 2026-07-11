@@ -8,6 +8,8 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  ParseIntPipe,
+  StreamableFile,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -76,6 +78,25 @@ export class MediaController {
 
     const media = await this.mediaService.uploadDocumentAndCreate(file);
     return media;
+  }
+
+  /**
+   * Download a product document attachment.
+   * Public endpoint used by the storefront to force a file download instead of
+   * opening the raw R2 URL inline in the browser.
+   */
+  @Get('attachments/:id/download')
+  async downloadAttachment(
+    @Param('id', ParseIntPipe) id: number,
+  ): Promise<StreamableFile> {
+    const file = await this.mediaService.getDocumentDownload(id);
+    const safeFilename = file.filename.replace(/[\r\n"]/g, '');
+    const encodedFilename = encodeURIComponent(safeFilename);
+
+    return new StreamableFile(file.buffer, {
+      type: file.mimeType,
+      disposition: `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodedFilename}`,
+    });
   }
 
   /**

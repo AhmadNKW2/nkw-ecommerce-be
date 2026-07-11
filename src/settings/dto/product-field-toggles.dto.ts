@@ -52,6 +52,10 @@ export class UpdateProductFieldTogglesDto {
 
   @IsOptional()
   @IsBoolean()
+  product_files_enabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   pricing_view_enabled?: boolean;
 
   @IsOptional()

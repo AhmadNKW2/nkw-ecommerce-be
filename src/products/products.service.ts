@@ -332,6 +332,7 @@ export class ProductsService {
     vendor_id?: unknown;
     attributes?: unknown;
     specifications?: unknown;
+    attachments?: unknown;
     linked_product_ids?: unknown;
     original_vendor_price?: unknown;
     original_vendor_sale_price?: unknown;
@@ -361,6 +362,9 @@ export class ProductsService {
       if (toggles.specifications_enabled === false) {
         dto.specifications = undefined;
       }
+      if (toggles.product_files_enabled === false) {
+        dto.attachments = undefined;
+      }
       if (
         toggles.linked_products_enabled === false ||
         toggles.vendors_enabled === false
@@ -380,6 +384,25 @@ export class ProductsService {
     }
 
     return dto;
+  }
+
+  private async stripDisabledProductFieldsFromResponse<T extends {
+    attachments?: unknown;
+  }>(product: T, isAdmin: boolean): Promise<T> {
+    if (isAdmin) {
+      return product;
+    }
+
+    try {
+      const toggles = await this.settingsService.getProductFieldToggles();
+      if (toggles.product_files_enabled === false) {
+        product.attachments = [];
+      }
+    } catch {
+      // If toggles can't be read, preserve existing behavior.
+    }
+
+    return product;
   }
 
   private resolveStorefrontPricing(
@@ -2658,10 +2681,12 @@ export class ProductsService {
     const showSalePricing = isAdmin ? true : await this.shouldShowSalePricing();
 
     // Return detailed product structure
-    return {
+    const product = {
       ...this.transformProductDetail(productBase, isAdmin, showSalePricing),
       ...linkedProductsState,
     };
+
+    return this.stripDisabledProductFieldsFromResponse(product, isAdmin);
   }
 
   async findOneBySlug(slug: string, isAdmin = false): Promise<any> {

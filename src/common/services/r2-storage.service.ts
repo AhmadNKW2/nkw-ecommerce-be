@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import {
   S3Client,
   PutObjectCommand,
+  GetObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
@@ -133,6 +134,7 @@ export class R2StorageService {
     file: Express.Multer.File,
     folder: string,
     options?: ImageOptimizationOptions,
+    downloadFilename?: string,
   ): Promise<UploadResult> {
     let fileBuffer = file.buffer;
     let mimeType = file.mimetype;
@@ -159,13 +161,16 @@ export class R2StorageService {
 
     const uniqueId = crypto.randomUUID();
     const key = `${folder}/${uniqueId}${ext}`;
+    const contentDisposition = downloadFilename
+      ? `attachment; filename="${downloadFilename.replace(/"/g, '')}"`
+      : undefined;
 
     try {
       // Use multipart upload for files larger than 5MB
       if (fileSize > 5 * 1024 * 1024) {
-        await this.uploadLargeFile(key, fileBuffer, mimeType);
+        await this.uploadLargeFile(key, fileBuffer, mimeType, contentDisposition);
       } else {
-        await this.uploadSmallFile(key, fileBuffer, mimeType);
+        await this.uploadSmallFile(key, fileBuffer, mimeType, contentDisposition);
       }
 
       const url = this.buildPublicUrl(key);
@@ -252,6 +257,7 @@ export class R2StorageService {
     key: string,
     buffer: Buffer,
     mimeType: string,
+    contentDisposition?: string,
   ): Promise<void> {
     await this.s3Client.send(
       new PutObjectCommand({
@@ -259,6 +265,7 @@ export class R2StorageService {
         Key: key,
         Body: buffer,
         ContentType: mimeType,
+        ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
         CacheControl: 'public, max-age=31536000',
       }),
     );
@@ -271,6 +278,7 @@ export class R2StorageService {
     key: string,
     buffer: Buffer,
     mimeType: string,
+    contentDisposition?: string,
   ): Promise<void> {
     const upload = new Upload({
       client: this.s3Client,
@@ -279,6 +287,7 @@ export class R2StorageService {
         Key: key,
         Body: buffer,
         ContentType: mimeType,
+        ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
         CacheControl: 'public, max-age=31536000',
       },
       queueSize: 4, // Number of concurrent parts
@@ -393,5 +402,30 @@ export class R2StorageService {
    */
   getPublicUrl(key: string): string {
     return this.buildPublicUrl(key);
+  }
+
+  /**
+   * Download a file from R2 as a buffer
+   */
+  async getFileBuffer(keyOrUrl: string): Promise<Buffer> {
+    const key = this.extractKeyFromUrl(keyOrUrl);
+
+    if (!key) {
+      throw new Error(`Cannot extract key from: ${keyOrUrl}`);
+    }
+
+    const response = await this.s3Client.send(
+      new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      }),
+    );
+
+    const bytes = await response.Body?.transformToByteArray();
+    if (!bytes || bytes.length === 0) {
+      throw new Error(`File is empty or missing: ${key}`);
+    }
+
+    return Buffer.from(bytes);
   }
 }
