@@ -86,6 +86,22 @@ export class AuthService {
     return role === UserRole.CONSTANT_TOKEN_ADMIN || role === 'products_api';
   }
 
+  private async resolveStaticAccessToken(
+    userId: number,
+    accessPayload: TokenPayload,
+  ): Promise<string> {
+    const storedToken = await this.usersService.getConstantAccessToken(userId);
+    if (storedToken) {
+      return storedToken;
+    }
+
+    const accessToken = this.jwtService.sign(accessPayload, {
+      noTimestamp: true,
+    });
+    await this.usersService.setConstantAccessToken(userId, accessToken);
+    return accessToken;
+  }
+
   /**
    * Generate access and refresh tokens
    */
@@ -121,9 +137,7 @@ export class AuthService {
       type: isStaticAccessToken ? 'static_access' : 'access',
     };
     const accessToken = isStaticAccessToken
-      ? this.jwtService.sign(accessPayload, {
-          noTimestamp: true,
-        })
+      ? await this.resolveStaticAccessToken(userId, accessPayload)
       : this.jwtService.sign(accessPayload, {
           expiresIn: this.accessTokenExpiresIn,
         });

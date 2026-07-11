@@ -66,6 +66,9 @@ export class User {
   @Column({ name: 'admin_access', type: 'jsonb', nullable: true })
   adminAccess: AdminAccess | null;
 
+  @Column({ name: 'constant_access_token', type: 'text', nullable: true })
+  constant_access_token: string | null;
+
   @OneToMany(() => Address, (address) => address.user)
   addresses: Address[];
 

@@ -51,6 +51,43 @@ export class UsersService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.ensureAdminAccessColumn();
+    await this.ensureConstantAccessTokenColumn();
+  }
+
+  private async ensureConstantAccessTokenColumn(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasColumn('users', 'constant_access_token'))) {
+        await queryRunner.addColumn(
+          'users',
+          new TableColumn({
+            name: 'constant_access_token',
+            type: 'text',
+            isNullable: true,
+          }),
+        );
+      }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async getConstantAccessToken(userId: number): Promise<string | null> {
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+      select: { id: true, constant_access_token: true },
+    });
+
+    return user?.constant_access_token ?? null;
+  }
+
+  async setConstantAccessToken(userId: number, token: string): Promise<void> {
+    await this.usersRepository.update(userId, {
+      constant_access_token: token,
+    });
   }
 
   private async ensureAdminAccessColumn(): Promise<void> {
