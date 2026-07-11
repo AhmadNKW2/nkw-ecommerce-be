@@ -35,6 +35,7 @@ import { SpecificationsModule } from './specifications/specifications.module';
 import { SettingsModule } from './settings/settings.module';
 import { TypesenseModule } from './typesense/typesense.module';
 import { AdminNotificationsModule } from './admin-notifications/admin-notifications.module';
+import { TermsModule } from './terms/terms.module';
 
 @Module({
   imports: [
@@ -90,6 +91,7 @@ import { AdminNotificationsModule } from './admin-notifications/admin-notificati
     SettingsModule,
     TypesenseModule,
     AdminNotificationsModule,
+    TermsModule,
   ],
 })
 export class AppModule implements NestModule {

@@ -12,37 +12,12 @@ type UserWithAccess = {
   adminAccess?: AdminAccess | null;
 };
 
-export function normalizeAdminAccess(
-  value: unknown,
-): AdminAccess | null {
-  if (!value || typeof value !== 'object') {
-    return null;
-  }
-
-  const record = value as Record<string, unknown>;
-  const normalized = {} as AdminAccess;
-
-  for (const key of ADMIN_ACCESS_KEYS) {
-    normalized[key] = record[key] === true;
-  }
-
-  return normalized;
-}
-
-export function resolveAdminAccess(user: UserWithAccess): AdminAccess {
-  const explicit = normalizeAdminAccess(user.adminAccess);
-  if (explicit) {
-    return explicit;
-  }
-
-  if (user.role === UserRole.CATALOG_MANAGER) {
+function getDefaultAccessForRole(role: UserRole): AdminAccess {
+  if (role === UserRole.CATALOG_MANAGER) {
     return { ...DEFAULT_CATALOG_MANAGER_ACCESS };
   }
 
-  if (
-    user.role === UserRole.ADMIN ||
-    user.role === UserRole.CONSTANT_TOKEN_ADMIN
-  ) {
+  if (role === UserRole.ADMIN || role === UserRole.CONSTANT_TOKEN_ADMIN) {
     return { ...DEFAULT_ADMIN_ACCESS };
   }
 
@@ -50,6 +25,36 @@ export function resolveAdminAccess(user: UserWithAccess): AdminAccess {
     acc[key] = false;
     return acc;
   }, {} as AdminAccess);
+}
+
+export function normalizeAdminAccess(
+  value: unknown,
+  fallback: AdminAccess = DEFAULT_ADMIN_ACCESS,
+): AdminAccess | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const normalized = { ...fallback };
+
+  for (const key of ADMIN_ACCESS_KEYS) {
+    if (typeof record[key] === 'boolean') {
+      normalized[key] = record[key] === true;
+    }
+  }
+
+  return normalized;
+}
+
+export function resolveAdminAccess(user: UserWithAccess): AdminAccess {
+  const fallback = getDefaultAccessForRole(user.role);
+  const explicit = normalizeAdminAccess(user.adminAccess, fallback);
+  if (explicit) {
+    return explicit;
+  }
+
+  return fallback;
 }
 
 export function hasAdminAccess(

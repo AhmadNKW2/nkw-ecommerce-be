@@ -42,6 +42,11 @@ export interface RequestMetadata {
   ipAddress?: string;
 }
 
+function parsePositiveIntConfig(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 @Injectable()
 export class AuthService {
   private readonly accessTokenExpiresIn: number;
@@ -61,18 +66,40 @@ export class AuthService {
     private tokenBlacklistRepository: Repository<TokenBlacklist>,
   ) {
     // Access token: 60 minutes (in seconds)
-    this.accessTokenExpiresIn =
-      this.configService.get<number>('ACCESS_TOKEN_EXPIRES_IN') || 3600;
+    this.accessTokenExpiresIn = parsePositiveIntConfig(
+      this.configService.get('ACCESS_TOKEN_EXPIRES_IN'),
+      3600,
+    );
     // Refresh token: 7 days (in seconds)
-    this.refreshTokenExpiresIn =
-      this.configService.get<number>('REFRESH_TOKEN_EXPIRES_IN') || 604800;
+    this.refreshTokenExpiresIn = parsePositiveIntConfig(
+      this.configService.get('REFRESH_TOKEN_EXPIRES_IN'),
+      604800,
+    );
     // Max age for refresh token sliding expiration: 30 days (in seconds)
-    this.refreshTokenMaxAge =
-      this.configService.get<number>('REFRESH_TOKEN_MAX_AGE') || 2592000;
+    this.refreshTokenMaxAge = parsePositiveIntConfig(
+      this.configService.get('REFRESH_TOKEN_MAX_AGE'),
+      2592000,
+    );
   }
 
   private isStaticAccessRole(role: string): boolean {
     return role === UserRole.CONSTANT_TOKEN_ADMIN || role === 'products_api';
+  }
+
+  private async resolveStaticAccessToken(
+    userId: number,
+    accessPayload: TokenPayload,
+  ): Promise<string> {
+    const storedToken = await this.usersService.getConstantAccessToken(userId);
+    if (storedToken) {
+      return storedToken;
+    }
+
+    const accessToken = this.jwtService.sign(accessPayload, {
+      noTimestamp: true,
+    });
+    await this.usersService.setConstantAccessToken(userId, accessToken);
+    return accessToken;
   }
 
   /**
@@ -110,9 +137,7 @@ export class AuthService {
       type: isStaticAccessToken ? 'static_access' : 'access',
     };
     const accessToken = isStaticAccessToken
-      ? this.jwtService.sign(accessPayload, {
-          noTimestamp: true,
-        })
+      ? await this.resolveStaticAccessToken(userId, accessPayload)
       : this.jwtService.sign(accessPayload, {
           expiresIn: this.accessTokenExpiresIn,
         });

@@ -38,6 +38,7 @@ import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
 import { SettingsService } from '../settings/settings.service';
 import { TypesenseService } from '../typesense/typesense.service';
+import { SearchCacheService } from '../search/search-cache.service';
 import {
   hasAdminAccess,
   stripProductPricingFields,
@@ -150,58 +151,37 @@ export class ProductsService {
     }));
   }
 
-  async findProductContent(
-    filterDto: FilterProductDto,
-    isAdmin = false,
-  ): Promise<{
-    data: Array<{
-      id: number;
-      name_en: string;
-      name_ar: string;
-      long_description_en: string | null;
-      long_description_ar: string | null;
-      images: string[];
-    }>;
-    meta: {
-      total: number;
-      page: number;
-      limit: number;
-      totalPages: number;
-    };
-  }> {
+  async findProductContent(filterDto: FilterProductDto, isAdmin = false) {
     const result = await this.findAll(filterDto, isAdmin);
 
     return {
-      data: (result.data || []).map((product: any) => {
-        const mediaItems = Array.isArray(product.media) ? product.media : [];
-        const imageUrls = mediaItems
-          .filter((item: any) => item?.type === MediaType.IMAGE && item?.url)
-          .sort((left: any, right: any) => {
-            if (left.is_primary !== right.is_primary) {
-              return left.is_primary ? -1 : 1;
-            }
-
-            const leftOrder = left.sort_order ?? 0;
-            const rightOrder = right.sort_order ?? 0;
-            if (leftOrder !== rightOrder) {
-              return leftOrder - rightOrder;
-            }
-
-            return (left.id ?? 0) - (right.id ?? 0);
-          })
-          .map((item: any) => item.url as string);
-
-        return {
-          id: product.id,
-          name_en: product.name_en,
-          name_ar: product.name_ar,
-          long_description_en: product.long_description_en ?? null,
-          long_description_ar: product.long_description_ar ?? null,
-          images: imageUrls,
-        };
-      }),
+      data: (result.data ?? []).map((product) => ({
+        id: product.id,
+        name_en: product.name_en,
+        name_ar: product.name_ar,
+        long_description_en: product.long_description_en,
+        long_description_ar: product.long_description_ar,
+        images: this.getProductImageUrls(product.media),
+      })),
       meta: result.meta,
     };
+  }
+
+  private getProductImageUrls(
+    media: Array<Media & { is_primary?: boolean; sort_order?: number }> = [],
+  ): string[] {
+    const imageMedia = media
+      .filter((item) => item?.type === MediaType.IMAGE && typeof item.url === 'string')
+      .sort((left, right) => {
+        const primaryDelta = Number(Boolean(right?.is_primary)) - Number(Boolean(left?.is_primary));
+        if (primaryDelta !== 0) {
+          return primaryDelta;
+        }
+
+        return (left?.sort_order ?? 0) - (right?.sort_order ?? 0);
+      });
+
+    return imageMedia.map((item) => item.url);
   }
 
   constructor(
@@ -225,6 +205,7 @@ export class ProductsService {
     private readonly tagsService: TagsService,
     private readonly settingsService: SettingsService,
     private readonly typesenseService: TypesenseService,
+    private readonly searchCacheService: SearchCacheService,
   ) {}
 
   private async syncProductToTypesense(productId: number): Promise<void> {
@@ -299,6 +280,10 @@ export class ProductsService {
       const chunk = normalizedIds.slice(index, index + concurrency);
       await Promise.all(chunk.map((id) => this.syncProductToTypesense(id)));
     }
+
+    await this.searchCacheService.invalidateSearchCache(
+      `typesense sync (${normalizedIds.length} products)`,
+    );
   }
 
   async syncProductsByBrandToTypesense(brandId: number): Promise<void> {
@@ -348,6 +333,10 @@ export class ProductsService {
     attributes?: unknown;
     specifications?: unknown;
     linked_product_ids?: unknown;
+    original_vendor_price?: unknown;
+    original_vendor_sale_price?: unknown;
+    original_price?: unknown;
+    original_sale_price?: unknown;
     weight?: unknown;
     weight_unit?: unknown;
     length?: unknown;
@@ -360,6 +349,11 @@ export class ProductsService {
 
       if (toggles.vendors_enabled === false) {
         dto.vendor_id = undefined;
+        dto.linked_product_ids = undefined;
+        dto.original_vendor_price = undefined;
+        dto.original_vendor_sale_price = undefined;
+        dto.original_price = undefined;
+        dto.original_sale_price = undefined;
       }
       if (toggles.attributes_enabled === false) {
         dto.attributes = undefined;
@@ -367,7 +361,10 @@ export class ProductsService {
       if (toggles.specifications_enabled === false) {
         dto.specifications = undefined;
       }
-      if (toggles.linked_products_enabled === false) {
+      if (
+        toggles.linked_products_enabled === false ||
+        toggles.vendors_enabled === false
+      ) {
         dto.linked_product_ids = undefined;
       }
       if (toggles.weight_and_dimensions_enabled === false) {
@@ -947,7 +944,10 @@ export class ProductsService {
     message: string;
   }> {
     const toggles = await this.settingsService.getProductFieldToggles();
-    if (toggles.linked_products_enabled === false) {
+    if (
+      toggles.linked_products_enabled === false ||
+      toggles.vendors_enabled === false
+    ) {
       throw new BadRequestException('Linked products are disabled');
     }
 

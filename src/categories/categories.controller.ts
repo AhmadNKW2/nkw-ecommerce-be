@@ -46,7 +46,6 @@ import { UpdateCategoryUrlDto } from './dto/update-category-url.dto';
 import { FilterCategoryUrlDto } from './dto/filter-category-url.dto';
 import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { AssignProductsToCategoryDto } from './dto/assign-products.dto';
-import { GenerateCategoryTagsDto } from './dto/generate-category-tags.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
@@ -382,17 +381,4 @@ export class CategoriesController {
     return this.categoriesService.getProducts(id);
   }
 
-  @Post('tags/generate')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
-  generateTags(@Body() dto: GenerateCategoryTagsDto) {
-    return this.categoriesService.startCategoryTagsGeneration(dto);
-  }
-
-  @Get('tags/jobs/:jobId')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
-  getGenerateTagsJobStatus(@Param('jobId') jobId: string) {
-    return this.categoriesService.getCategoryTagsGenerationJob(jobId);
-  }
 }

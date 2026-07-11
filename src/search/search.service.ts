@@ -22,8 +22,17 @@ import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
 import { AutocompleteResponseDto } from './dto/search-response.dto';
 import type { SearchParams } from 'typesense/lib/Typesense/Documents';
 import { TypesenseService } from '../typesense/typesense.service';
+import {
+  AUTOCOMPLETE_SEARCH_QUERY_BY,
+  AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS,
+  PRODUCT_CARD_QUERY_BY,
+  PRODUCT_ID_LOOKUP_QUERY_BY,
+  PRODUCT_SEARCH_QUERY_BY,
+  PRODUCT_SEARCH_QUERY_BY_WEIGHTS,
+} from '../typesense/product-search-fields';
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
+import { SearchCacheService } from './search-cache.service';
 
 // Matches current production behavior (previously hardcoded at two call sites:
 // buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
@@ -31,14 +40,13 @@ import { parsePriceFromQuery } from './utils/parse-price-from-query';
 const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
 
 // Field priority for relevance ranking: name (title) highest, short
-// description second, long description lowest of the text fields. Order and
-// weights must stay in sync with PRODUCT_QUERY_BY below.
-// name_en, name_ar_norm, brand_name_en, brand_name_ar_norm, category_names_en,
-// category_names_ar_norm, short_description_en, short_description_ar_norm,
-// long_description_en, long_description_ar_norm, sku, slug
-const PRODUCT_QUERY_BY =
-  'name_en,name_ar_norm,brand_name_en,brand_name_ar_norm,category_names_en,category_names_ar_norm,short_description_en,short_description_ar_norm,long_description_en,long_description_ar_norm,sku,slug';
-const PRODUCT_QUERY_BY_WEIGHTS = '5,5,4,4,3,3,3,3,1,1,4,2';
+// description second, long description lowest. Arabic matching uses *_norm
+// fields at full weight; plain Arabic display fields stay at lower weight for
+// legacy documents until reindex. See product-search-fields.ts.
+const PRODUCT_QUERY_BY = PRODUCT_SEARCH_QUERY_BY;
+const PRODUCT_QUERY_BY_WEIGHTS = PRODUCT_SEARCH_QUERY_BY_WEIGHTS;
+const AUTOCOMPLETE_QUERY_BY = AUTOCOMPLETE_SEARCH_QUERY_BY;
+const AUTOCOMPLETE_QUERY_BY_WEIGHTS = AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS;
 const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 
 type ExpansionTierKey =
@@ -112,6 +120,7 @@ export class SearchService {
     @Inject(forwardRef(() => ProductsService))
     private readonly productsService: ProductsService,
     private readonly typesenseService: TypesenseService,
+    private readonly searchCacheService: SearchCacheService,
     private readonly configService: ConfigService,
     @InjectRepository(Category)
     private readonly categoriesRepository: Repository<Category>,
@@ -149,6 +158,7 @@ export class SearchService {
         : undefined;
     const isOutOfStock = Boolean(document.is_out_of_stock);
 
+    // Display Arabic from name_ar only — never use *_norm fields in responses.
     return {
       id: String(document.id ?? ''),
       slug: typeof document.slug === 'string' ? document.slug : undefined,
@@ -317,7 +327,7 @@ export class SearchService {
       const batchSize = Math.min(this.typesenseIdPageSize, remaining);
       const result = await this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar_norm,slug',
+        query_by: PRODUCT_ID_LOOKUP_QUERY_BY,
         filter_by: filterBy,
         page,
         per_page: batchSize,
@@ -1483,7 +1493,7 @@ export class SearchService {
     const [result, imageUrlsByProductId] = await Promise.all([
       this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar_norm,sku,slug',
+        query_by: PRODUCT_CARD_QUERY_BY,
         filter_by: filterBy,
         per_page: productIds.length,
         page: 1,
@@ -2052,11 +2062,11 @@ export class SearchService {
           hitsById.set(id, hit);
         }
       });
+
       const mappedFromHits = pageProductIds
-        .map((hit: any) => {
-          const sourceHit = typeof hit === 'number' ? hitsById.get(hit) : hit;
-          const productId = Number(sourceHit?.document?.id ?? hit);
-          if (!Number.isInteger(productId) || productId <= 0 || !sourceHit?.document) {
+        .map((productId) => {
+          const sourceHit = hitsById.get(productId);
+          if (!sourceHit?.document) {
             return undefined;
           }
 
@@ -2066,19 +2076,26 @@ export class SearchService {
           );
         })
         .filter((product): product is Record<string, any> => Boolean(product));
-      const missingIds = pageProductIds.filter((id) => !hitsById.has(Number(id)));
+
+      const missingIds = pageProductIds.filter((id) => !hitsById.has(id));
       const missingCards =
-        shouldExpand && missingIds.length > 0
+        missingIds.length > 0
           ? await this.buildSearchCardsFromTypesenseIds(missingIds, isAdmin)
           : [];
-      products = [...mappedFromHits, ...missingCards];
+
+      const cardsById = new Map<string, any>(
+        [...mappedFromHits, ...missingCards].map((card) => [String(card.id), card]),
+      );
+      products = pageProductIds
+        .map((id) => cardsById.get(String(id)))
+        .filter((card): card is NonNullable<typeof card> => Boolean(card));
     }
 
     let facetCountsSource = result.facet_counts;
     if (shouldExpand && orderedProductIds.length > 0) {
       const facetsFromExpandedPool = await this.typesenseService.search({
         q: '*',
-        query_by: 'name_en,name_ar_norm,sku,slug',
+        query_by: PRODUCT_CARD_QUERY_BY,
         filter_by: `id:=[${orderedProductIds.join(',')}]`,
         facet_by: this.getTypesenseFacetFields(),
         max_facet_values: 100,
@@ -2188,9 +2205,8 @@ export class SearchService {
 
     const result = await this.typesenseService.search({
       q: normalizeSearchQuery(dto.q),
-      query_by:
-        'name_en,name_ar_norm,brand_name_en,brand_name_ar_norm,category_names_en,category_names_ar_norm,sku,slug',
-      query_by_weights: '5,5,4,4,3,3,4,2',
+      query_by: AUTOCOMPLETE_QUERY_BY,
+      query_by_weights: AUTOCOMPLETE_QUERY_BY_WEIGHTS,
       text_match_type: 'max_weight',
       prioritize_token_position: true,
       ...(filterBy ? { filter_by: filterBy } : {}),
@@ -2283,18 +2299,21 @@ export class SearchService {
     const cacheDto = willNormalizeQueryForCacheKey
       ? { ...preparedDto, q: normalizeSearchQuery(preparedDto.q) }
       : preparedDto;
-    const cacheKey = `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}:${JSON.stringify(cacheDto)}`;
+    const cacheKey = await this.searchCacheService.buildCacheKey(
+      `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}`,
+      JSON.stringify(cacheDto),
+    );
     const skipResponseCache = dto.is_admin === true || debugSearchEnabled;
     const cached =
       useRandomBrowse || skipResponseCache
         ? null
         : await this.cacheManager.get<any>(cacheKey);
-    const bypassCacheForBrandCategoryQuery = canUseTypesense && Boolean(
+    const bypassCacheForEmptyResults = canUseTypesense && Boolean(
       preparedDto.q &&
         this.tokenizeQueryForExpansion(preparedDto.q).length > 0 &&
         (cached?.meta?.total ?? 0) === 0,
     );
-    if (cached && !bypassCacheForBrandCategoryQuery) {
+    if (cached && !bypassCacheForEmptyResults) {
       if (debugSearchEnabled) {
         await this.writeSearchDebugLog({
           kind: 'search',
@@ -2387,7 +2406,10 @@ export class SearchService {
     // Same reasoning as search(): only normalize the cache key's query text
     // when Typesense (whose index is normalized) is what will actually run.
     const cacheQ = willUseTypesense ? normalizeSearchQuery(dto.q) : dto.q;
-    const cacheKey = `autocomplete:${cacheQ}:${dto.per_page}`;
+    const cacheKey = await this.searchCacheService.buildCacheKey(
+      'autocomplete',
+      `${cacheQ}:${dto.per_page}`,
+    );
     const cached =
       await this.cacheManager.get<AutocompleteResponseDto>(cacheKey);
     if (cached) return cached;

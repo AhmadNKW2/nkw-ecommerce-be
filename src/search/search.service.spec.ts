@@ -1,5 +1,6 @@
 import { SearchService } from './search.service';
 import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
+import { PRODUCT_SEARCH_QUERY_BY_WEIGHTS } from '../typesense/product-search-fields';
 
 function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: Array<{ id: number; slug: string }> = []) {
   const typesenseSearch = jest.fn().mockResolvedValue(searchResult);
@@ -18,6 +19,13 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
   const configService = {
     get: jest.fn().mockReturnValue('typesense'),
   };
+  const searchCacheService = {
+    getGeneration: jest.fn().mockResolvedValue(1),
+    invalidateSearchCache: jest.fn().mockResolvedValue(2),
+    buildCacheKey: jest.fn((prefix: string, payload: string) =>
+      Promise.resolve(`${prefix}:${payload}`),
+    ),
+  };
   const emptyRepo = { find: jest.fn().mockResolvedValue([]) };
   const categoriesRepository = {
     find: jest.fn().mockResolvedValue(categoryRows),
@@ -27,6 +35,7 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
     cacheManager as any,
     productsService as any,
     typesenseService as any,
+    searchCacheService as any,
     configService as any,
     categoriesRepository as any,
     emptyRepo as any,
@@ -59,6 +68,9 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
     const params = typesenseSearch.mock.calls[0][0];
     expect(params.query_by).toContain('short_description_ar');
     expect(params.query_by).toContain('long_description_ar');
+    expect(params.query_by).toContain('short_description_ar_norm');
+    expect(params.query_by).toContain('long_description_ar_norm');
+    expect(params.query_by).toContain('name_ar_norm');
     // Existing fields must still be present (no regression).
     expect(params.query_by).toContain('short_description_en');
     expect(params.query_by).toContain('long_description_en');
@@ -177,9 +189,12 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
 
     expect(fields.indexOf('name_en')).toBeGreaterThanOrEqual(0);
     expect(weightOf('name_en')).toBeGreaterThan(weightOf('short_description_en'));
-    expect(weightOf('name_ar')).toBeGreaterThan(weightOf('short_description_ar'));
+    expect(weightOf('name_ar_norm')).toBeGreaterThan(weightOf('short_description_ar_norm'));
+    expect(weightOf('name_ar_norm')).toBeGreaterThan(weightOf('name_ar'));
     expect(weightOf('short_description_en')).toBeGreaterThan(weightOf('long_description_en'));
-    expect(weightOf('short_description_ar')).toBeGreaterThan(weightOf('long_description_ar'));
+    expect(weightOf('short_description_ar_norm')).toBeGreaterThan(
+      weightOf('long_description_ar_norm'),
+    );
   });
 
   it('enables prioritize_token_position on the main search call', async () => {
@@ -276,7 +291,7 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     expect(typesenseSearch).toHaveBeenCalledTimes(1);
     const params = typesenseSearch.mock.calls[0][0];
     expect(params.prioritize_token_position).toBe(true);
-    expect(params.query_by_weights).toBe('5,5,3,3,1,1,4,2');
+    expect(params.query_by_weights).toBe(PRODUCT_SEARCH_QUERY_BY_WEIGHTS);
     expect(params.text_match_type).toBe('max_weight');
   });
 });

@@ -702,6 +702,70 @@ export class OrdersService implements OnModuleInit {
     if (dto.paymentMethod !== undefined) {
       fieldsToUpdate.paymentMethod = dto.paymentMethod;
     }
+
+    if (dto.items?.length) {
+      const itemMap = new Map(existingOrder.items.map((i) => [i.id, i]));
+      const toSave: OrderItem[] = [];
+      let subtotalAmount = 0;
+
+      for (const entry of dto.items) {
+        const item = itemMap.get(entry.itemId);
+        if (!item) {
+          throw new NotFoundException(
+            `Order item #${entry.itemId} not found in order #${id}`,
+          );
+        }
+
+        if (entry.price !== undefined) {
+          item.price = entry.price;
+          item.totalPrice = entry.price * item.quantity;
+        }
+        if (entry.cost !== undefined) {
+          item.cost = entry.cost;
+        }
+
+        toSave.push(item);
+        subtotalAmount += Number(item.price) * item.quantity;
+      }
+
+      await this.orderItemsRepository.save(toSave);
+
+      const shippingAmount =
+        dto.shippingAmount !== undefined
+          ? Number(dto.shippingAmount)
+          : Number(existingOrder.shippingAmount);
+      const discountAmount =
+        dto.discountAmount !== undefined
+          ? Number(dto.discountAmount)
+          : Number(existingOrder.discountAmount);
+      const taxAmount = Number(existingOrder.taxAmount ?? 0);
+
+      fieldsToUpdate.subtotalAmount = subtotalAmount;
+      fieldsToUpdate.shippingAmount = shippingAmount;
+      fieldsToUpdate.discountAmount = discountAmount;
+      fieldsToUpdate.totalAmount =
+        subtotalAmount + taxAmount + shippingAmount - discountAmount;
+    } else if (
+      dto.shippingAmount !== undefined ||
+      dto.discountAmount !== undefined
+    ) {
+      const subtotalAmount = Number(existingOrder.subtotalAmount);
+      const shippingAmount =
+        dto.shippingAmount !== undefined
+          ? Number(dto.shippingAmount)
+          : Number(existingOrder.shippingAmount);
+      const discountAmount =
+        dto.discountAmount !== undefined
+          ? Number(dto.discountAmount)
+          : Number(existingOrder.discountAmount);
+      const taxAmount = Number(existingOrder.taxAmount ?? 0);
+
+      fieldsToUpdate.shippingAmount = shippingAmount;
+      fieldsToUpdate.discountAmount = discountAmount;
+      fieldsToUpdate.totalAmount =
+        subtotalAmount + taxAmount + shippingAmount - discountAmount;
+    }
+
     if (Object.keys(fieldsToUpdate).length > 0) {
       await this.ordersRepository.update(id, fieldsToUpdate);
     }

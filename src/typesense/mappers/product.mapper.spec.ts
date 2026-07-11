@@ -38,16 +38,21 @@ describe('mapProductToTypesenseDoc', () => {
     expect(doc.long_description_ar).not.toContain('<');
   });
 
-  it('keeps original Arabic values for display fields', () => {
+  it('keeps original Arabic in display fields and normalized text in *_norm fields', () => {
     const doc = mapProductToTypesenseDoc(makeProduct());
     expect(doc.name_ar).toBe('أحمد الجهاز');
+    expect(doc.name_ar_norm).toBe('احمد جهاز');
     expect(doc.short_description_ar).toBe('جهاز لوحي مُمتاز');
+    expect(doc.short_description_ar_norm).toBe('جهاز لوحي ممتاز');
+    expect(doc.name_ar).not.toBe(doc.name_ar_norm);
   });
 
-  it('stores normalized Arabic values in dedicated *_norm fields for matching', () => {
-    const doc = mapProductToTypesenseDoc(makeProduct());
-    expect(doc.name_ar_norm).toBe('احمد الجهاز');
-    expect(doc.short_description_ar_norm).toBe('جهاز لوحي ممتاز');
+  it('preserves gaming titles without mangling display Arabic', () => {
+    const doc = mapProductToTypesenseDoc(
+      makeProduct({ name_ar: 'مكتب ألعاب احترافي' }),
+    );
+    expect(doc.name_ar).toBe('مكتب ألعاب احترافي');
+    expect(doc.name_ar_norm).toBe('مكتب العاب احترافي');
   });
 
   it('still populates the pre-existing fields unchanged (no regression)', () => {
