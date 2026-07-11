@@ -72,6 +72,18 @@ export class SeoSettings {
   @Column({ type: 'varchar', length: 255, nullable: true })
   twitter_handle: string | null;
 
+  @Column({ type: 'varchar', length: 255, default: 'help@ordonsooq.com' })
+  support_email: string;
+
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  facebook_url: string | null;
+
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  twitter_url: string | null;
+
+  @Column({ type: 'varchar', length: 2048, nullable: true })
+  instagram_url: string | null;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   google_verification: string | null;
 

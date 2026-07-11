@@ -692,6 +692,53 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      const contactAndSocialColumns: Array<{
+        name: string;
+        type: 'varchar';
+        length: string;
+        isNullable?: boolean;
+        default?: string;
+      }> = [
+        {
+          name: 'support_email',
+          type: 'varchar',
+          length: '255',
+          default: `'help@ordonsooq.com'`,
+        },
+        {
+          name: 'facebook_url',
+          type: 'varchar',
+          length: '2048',
+          isNullable: true,
+        },
+        {
+          name: 'twitter_url',
+          type: 'varchar',
+          length: '2048',
+          isNullable: true,
+        },
+        {
+          name: 'instagram_url',
+          type: 'varchar',
+          length: '2048',
+          isNullable: true,
+        },
+      ];
+
+      for (const column of contactAndSocialColumns) {
+        if (!(await queryRunner.hasColumn('seo_settings', column.name))) {
+          missingColumns.push(
+            new TableColumn({
+              name: column.name,
+              type: column.type,
+              length: column.length,
+              isNullable: column.isNullable,
+              default: column.default,
+            }),
+          );
+        }
+      }
+
       const brandColorColumns = [
         'brand_primary',
         'brand_primary_2',

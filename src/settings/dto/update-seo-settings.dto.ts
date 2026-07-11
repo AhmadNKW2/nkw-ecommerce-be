@@ -1,5 +1,6 @@
 import {
   IsBoolean,
+  IsEmail,
   IsNumber,
   IsOptional,
   IsString,
@@ -104,6 +105,26 @@ export class UpdateSeoSettingsDto {
   @IsString()
   @MaxLength(255)
   twitter_handle?: string | null;
+
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(255)
+  support_email?: string;
+
+  @IsOptional()
+  @IsUrl({ require_tld: false }, { message: 'facebook_url must be a valid URL' })
+  @MaxLength(2048)
+  facebook_url?: string | null;
+
+  @IsOptional()
+  @IsUrl({ require_tld: false }, { message: 'twitter_url must be a valid URL' })
+  @MaxLength(2048)
+  twitter_url?: string | null;
+
+  @IsOptional()
+  @IsUrl({ require_tld: false }, { message: 'instagram_url must be a valid URL' })
+  @MaxLength(2048)
+  instagram_url?: string | null;
 
   @IsOptional()
   @IsString()
