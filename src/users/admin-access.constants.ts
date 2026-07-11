@@ -12,6 +12,8 @@ export const ADMIN_ACCESS_KEYS = [
   'banners',
   'cashback_rules',
   'notes',
+  'concepts',
+  'archived',
   'settings',
   'admins',
 ] as const;
@@ -33,6 +35,8 @@ export const DEFAULT_ADMIN_ACCESS: AdminAccess = {
   banners: true,
   cashback_rules: true,
   notes: true,
+  concepts: true,
+  archived: true,
   settings: true,
   admins: true,
 };
@@ -51,6 +55,8 @@ export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
   banners: false,
   cashback_rules: false,
   notes: false,
+  concepts: true,
+  archived: false,
   settings: false,
   admins: false,
 };
