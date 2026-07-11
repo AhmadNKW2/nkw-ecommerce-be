@@ -15,7 +15,7 @@ import { memoryStorage } from 'multer';
 import { MediaService } from './media.service';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { mediaFileFilter } from '../common/utils/file-upload.helper';
+import { mediaFileFilter, documentFileFilter } from '../common/utils/file-upload.helper';
 
 @Controller('media')
 export class MediaController {
@@ -51,6 +51,30 @@ export class MediaController {
 
     // Upload to R2 and create media record
     const media = await this.mediaService.uploadAndCreate(file, 'products');
+    return media;
+  }
+
+  /**
+   * Upload a product document attachment (PDF, Office docs, etc.)
+   *
+   * Max file size: 5MB. Files are linked to products on create/update.
+   */
+  @Post('upload-attachment')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      fileFilter: documentFileFilter,
+      limits: { fileSize: 5 * 1024 * 1024 },
+    }),
+  )
+  async uploadAttachment(@UploadedFile() file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('No file uploaded');
+    }
+
+    const media = await this.mediaService.uploadDocumentAndCreate(file);
     return media;
   }
 

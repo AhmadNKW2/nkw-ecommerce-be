@@ -50,6 +50,49 @@ export const imageFileFilter = (
   }
 };
 
+// File filter for product document attachments (PDF, Office docs, archives, etc.)
+export const documentFileFilter = (
+  req: Request,
+  file: Express.Multer.File,
+  callback: (error: Error | null, acceptFile: boolean) => void,
+) => {
+  const allowedExtensions =
+    /pdf|doc|docx|xls|xlsx|ppt|pptx|txt|csv|zip|rar|7z|json|xml/;
+  const allowedMimeTypes = new Set([
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/plain',
+    'text/csv',
+    'application/zip',
+    'application/x-zip-compressed',
+    'application/x-rar-compressed',
+    'application/x-7z-compressed',
+    'application/json',
+    'application/xml',
+    'text/xml',
+  ]);
+
+  const ext = extname(file.originalname).toLowerCase().slice(1);
+  const mimetype = file.mimetype;
+
+  if (allowedExtensions.test(ext) && allowedMimeTypes.has(mimetype)) {
+    callback(null, true);
+    return;
+  }
+
+  callback(
+    new BadRequestException(
+      'Invalid file type. Allowed: PDF, Word, Excel, PowerPoint, TXT, CSV, ZIP, RAR, 7Z, JSON, XML.',
+    ),
+    false,
+  );
+};
+
 // Generate unique filename
 export const editFileName = (
   req: Request,

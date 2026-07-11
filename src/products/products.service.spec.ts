@@ -1,5 +1,6 @@
 import { MediaType } from '../media/entities/media.entity';
 import { DataSource } from 'typeorm';
+import { NotFoundException } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { ProductStatus } from './entities/product.entity';
 import { ProductCategory } from './entities/product-category.entity';

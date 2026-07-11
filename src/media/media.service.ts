@@ -62,6 +62,41 @@ export class MediaService {
   }
 
   /**
+   * Upload a document attachment to R2 and create a media record
+   */
+  async uploadDocumentAndCreate(
+    file: Express.Multer.File,
+    folder: string = 'product-attachments',
+  ): Promise<Media> {
+    const existingMedia = await this.mediaRepository.findOne({
+      where: {
+        original_name: file.originalname,
+        size: file.size,
+        type: MediaType.DOCUMENT,
+      },
+    });
+
+    if (existingMedia) {
+      this.logger.debug(
+        `Found existing document media with ID ${existingMedia.id}, returning it directly`,
+      );
+      return existingMedia;
+    }
+
+    const uploadResult = await this.r2StorageService.uploadFile(file, folder);
+
+    const media = this.mediaRepository.create({
+      url: uploadResult.url,
+      type: MediaType.DOCUMENT,
+      original_name: uploadResult.originalName,
+      mime_type: uploadResult.mimeType,
+      size: uploadResult.size,
+    });
+
+    return this.mediaRepository.save(media);
+  }
+
+  /**
    * Create a new media record after file upload
    */
   async create(

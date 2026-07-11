@@ -10,6 +10,7 @@ import { ProductAttributeValue } from './entities/product-attribute-value.entity
 import { ProductGroup } from './entities/product-group.entity';
 import { GroupProduct } from './entities/group-product.entity';
 import { ProductMedia } from './entities/product-media.entity';
+import { ProductAttachment } from './entities/product-attachment.entity';
 import { ProductInputJson } from './entities/product-input-json.entity';
 import { AttributesModule } from '../attributes/attributes.module';
 import { AttributeValue } from '../attributes/entities/attribute-value.entity';
@@ -36,6 +37,7 @@ import { SettingsModule } from '../settings/settings.module';
       ProductAttributeValue,
       ProductCategory,
       ProductMedia,
+      ProductAttachment,
       ProductInputJson,
       ProductSpecificationValue,
       ProductGroup,

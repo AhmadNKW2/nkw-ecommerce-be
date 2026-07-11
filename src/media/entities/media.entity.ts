@@ -8,10 +8,12 @@ import {
   OneToMany,
 } from 'typeorm';
 import { ProductMedia } from '../../products/entities/product-media.entity';
+import { ProductAttachment } from '../../products/entities/product-attachment.entity';
 
 export enum MediaType {
   IMAGE = 'image',
   VIDEO = 'video',
+  DOCUMENT = 'document',
 }
 
 /**
@@ -68,6 +70,9 @@ export class Media {
 
   @OneToMany(() => ProductMedia, (productMedia) => productMedia.media)
   productMedia: ProductMedia[];
+
+  @OneToMany(() => ProductAttachment, (productAttachment) => productAttachment.media)
+  productAttachments: ProductAttachment[];
 
   @CreateDateColumn()
   created_at: Date;

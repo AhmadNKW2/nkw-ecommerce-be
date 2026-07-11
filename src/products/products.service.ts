@@ -28,6 +28,7 @@ import { Media, MediaType } from '../media/entities/media.entity';
 import { ProductAttribute } from './entities/product-attribute.entity';
 import { ProductAttributeValue } from './entities/product-attribute-value.entity';
 import { ProductMedia } from './entities/product-media.entity';
+import { ProductAttachment } from './entities/product-attachment.entity';
 import { ProductSpecificationValue } from './entities/product-specification-value.entity';
 import { AttributeValue } from '../attributes/entities/attribute-value.entity';
 import { SpecificationValue } from '../specifications/entities/specification-value.entity';
@@ -52,6 +53,10 @@ import {
   hydrateProductMedia,
   hydrateProductsMedia,
 } from './utils/product-media.util';
+import {
+  hydrateProductAttachments,
+  hydrateProductsAttachments,
+} from './utils/product-attachment.util';
 import { mapProductToTypesenseDoc } from '../typesense/mappers/product.mapper';
 
 import { Like, Not } from 'typeorm';
@@ -143,6 +148,60 @@ export class ProductsService {
       name_en: product.name_en,
       name_ar: product.name_ar,
     }));
+  }
+
+  async findProductContent(
+    filterDto: FilterProductDto,
+    isAdmin = false,
+  ): Promise<{
+    data: Array<{
+      id: number;
+      name_en: string;
+      name_ar: string;
+      long_description_en: string | null;
+      long_description_ar: string | null;
+      images: string[];
+    }>;
+    meta: {
+      total: number;
+      page: number;
+      limit: number;
+      totalPages: number;
+    };
+  }> {
+    const result = await this.findAll(filterDto, isAdmin);
+
+    return {
+      data: (result.data || []).map((product: any) => {
+        const mediaItems = Array.isArray(product.media) ? product.media : [];
+        const imageUrls = mediaItems
+          .filter((item: any) => item?.type === MediaType.IMAGE && item?.url)
+          .sort((left: any, right: any) => {
+            if (left.is_primary !== right.is_primary) {
+              return left.is_primary ? -1 : 1;
+            }
+
+            const leftOrder = left.sort_order ?? 0;
+            const rightOrder = right.sort_order ?? 0;
+            if (leftOrder !== rightOrder) {
+              return leftOrder - rightOrder;
+            }
+
+            return (left.id ?? 0) - (right.id ?? 0);
+          })
+          .map((item: any) => item.url as string);
+
+        return {
+          id: product.id,
+          name_en: product.name_en,
+          name_ar: product.name_ar,
+          long_description_en: product.long_description_en ?? null,
+          long_description_ar: product.long_description_ar ?? null,
+          images: imageUrls,
+        };
+      }),
+      meta: result.meta,
+    };
   }
 
   constructor(
@@ -1327,6 +1386,94 @@ export class ProductsService {
     }
   }
 
+  private async syncProductAttachments(
+    productId: number,
+    attachmentItems: { media_id: number; sort_order?: number }[],
+  ): Promise<void> {
+    if (attachmentItems.length > 3) {
+      throw new BadRequestException(
+        'A product can have at most 3 downloadable attachments.',
+      );
+    }
+
+    const productAttachmentRepo =
+      this.dataSource.getRepository(ProductAttachment);
+    const mediaRepo = this.dataSource.getRepository(Media);
+
+    const mediaIds = attachmentItems.map((item) => item.media_id);
+    if (new Set(mediaIds).size !== mediaIds.length) {
+      throw new BadRequestException(
+        'Duplicate attachment media IDs are not allowed in a product payload.',
+      );
+    }
+
+    const existingLinks = await productAttachmentRepo.find({
+      where: { product_id: productId },
+    });
+    const existingMap = new Map(
+      existingLinks.map((productAttachment) => [
+        productAttachment.media_id,
+        productAttachment,
+      ]),
+    );
+    const payloadIds = new Set<number>();
+
+    if (mediaIds.length > 0) {
+      const uniqueMediaIds = [...new Set(mediaIds)];
+      const existingMedia = await mediaRepo.find({
+        where: { id: In(uniqueMediaIds) },
+      });
+      const existingIds = new Set(existingMedia.map((media) => media.id));
+      const missingIds = uniqueMediaIds.filter(
+        (mediaId) => !existingIds.has(mediaId),
+      );
+
+      if (missingIds.length > 0) {
+        throw new NotFoundException(
+          `Attachment media with ID ${missingIds.join(', ')} not found`,
+        );
+      }
+
+      const invalidTypeIds = existingMedia
+        .filter((media) => media.type !== MediaType.DOCUMENT)
+        .map((media) => media.id);
+
+      if (invalidTypeIds.length > 0) {
+        throw new BadRequestException(
+          `Media IDs ${invalidTypeIds.join(', ')} are not document attachments.`,
+        );
+      }
+    }
+
+    const linksToSave = attachmentItems.map((item, index) => {
+      payloadIds.add(item.media_id);
+
+      const existing = existingMap.get(item.media_id);
+      if (existing) {
+        existing.sort_order = item.sort_order ?? index;
+        return existing;
+      }
+
+      return productAttachmentRepo.create({
+        product_id: productId,
+        media_id: item.media_id,
+        sort_order: item.sort_order ?? index,
+      });
+    });
+
+    if (linksToSave.length > 0) {
+      await productAttachmentRepo.save(linksToSave);
+    }
+
+    const linkIdsToDelete = existingLinks
+      .filter((productAttachment) => !payloadIds.has(productAttachment.media_id))
+      .map((productAttachment) => productAttachment.id);
+
+    if (linkIdsToDelete.length > 0) {
+      await productAttachmentRepo.delete(linkIdsToDelete);
+    }
+  }
+
   private async syncProductAttributes(
     productId: number,
     attributes: ProductAttributeInputDto[],
@@ -1549,6 +1696,11 @@ export class ProductsService {
       // Handle Media
       if (dto.media && dto.media.length > 0) {
         creationTasks.push(this.syncProductMedia(id, dto.media));
+      }
+
+      // Handle Attachments
+      if (dto.attachments && dto.attachments.length > 0) {
+        creationTasks.push(this.syncProductAttachments(id, dto.attachments));
       }
 
       // Handle Specifications
@@ -1987,6 +2139,7 @@ export class ProductsService {
       data,
       productCategories,
       productMediaRows,
+      productAttachmentRows,
       attributes,
       attributeValues,
       specifications,
@@ -1999,6 +2152,12 @@ export class ProductsService {
         },
       }),
       this.dataSource.getRepository(ProductMedia).find({
+        where: { product_id: In(ids) },
+        relations: {
+          media: true
+        },
+      }),
+      this.dataSource.getRepository(ProductAttachment).find({
         where: { product_id: In(ids) },
         relations: {
           media: true
@@ -2043,6 +2202,9 @@ export class ProductsService {
       );
       (product as any).productMedia = productMediaRows.filter(
         (productMedia) => productMedia.product_id === product.id,
+      );
+      (product as any).productAttachments = productAttachmentRows.filter(
+        (productAttachment) => productAttachment.product_id === product.id,
       );
       (product as any).attributes = attributes.filter(
         (a) => a.product_id === product.id,
@@ -2188,9 +2350,11 @@ export class ProductsService {
     showSalePricing = true,
   ): any {
     hydrateProductMedia(product, true);
+    hydrateProductAttachments(product, true);
 
     const {
       media,
+      attachments,
       brand,
       productCategories,
       category,
@@ -2330,6 +2494,27 @@ export class ProductsService {
         sort_order: m.sort_order,
       }));
 
+    const attachmentsList = (attachments || [])
+      .sort((a: any, b: any) => {
+        if (
+          a.sort_order !== undefined &&
+          b.sort_order !== undefined &&
+          a.sort_order !== b.sort_order
+        ) {
+          return a.sort_order - b.sort_order;
+        }
+        return a.id - b.id;
+      })
+      .map((attachment: any) => ({
+        id: attachment.id,
+        url: attachment.url,
+        type: attachment.type,
+        original_name: attachment.original_name,
+        mime_type: attachment.mime_type,
+        size: attachment.size,
+        sort_order: attachment.sort_order,
+      }));
+
     const relationIds = this.buildProductRelationIds(product);
 
     const {
@@ -2375,6 +2560,7 @@ export class ProductsService {
       attributes: attributesMap,
       specifications: specificationsMap,
       media: mediaList,
+      attachments: attachmentsList,
       ...(isAdmin && { original_vendor_price }),
       ...(isAdmin && { original_vendor_sale_price }),
       ...(isAdmin && { cost: cleanRest.cost }),
@@ -2389,6 +2575,7 @@ export class ProductsService {
       productBase,
       productCategories,
       productMedia,
+      productAttachments,
       attributes,
       attributeValues,
       specifications,
@@ -2410,6 +2597,12 @@ export class ProductsService {
         },
       }),
       this.dataSource.getRepository(ProductMedia).find({
+        where: { product_id: id },
+        relations: {
+          media: true
+        },
+      }),
+      this.dataSource.getRepository(ProductAttachment).find({
         where: { product_id: id },
         relations: {
           media: true
@@ -2457,7 +2650,8 @@ export class ProductsService {
     }
 
     productBase.productCategories = productCategories;
-  productBase.productMedia = productMedia;
+    productBase.productMedia = productMedia;
+    productBase.productAttachments = productAttachments;
     productBase.attributes = attributes;
     (productBase as any).attribute_values = attributeValues;
     productBase.specifications = specifications;
@@ -2895,6 +3089,11 @@ export class ProductsService {
       // Sync Media
       if (dto.media !== undefined) {
         syncTasks.push(this.syncProductMedia(id, dto.media || []));
+      }
+
+      // Sync Attachments
+      if (dto.attachments !== undefined) {
+        syncTasks.push(this.syncProductAttachments(id, dto.attachments || []));
       }
 
       // Sync Specifications
