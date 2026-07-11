@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { MediaType } from '../media/entities/media.entity';
 import { DataSource } from 'typeorm';
 import { ProductsService } from './products.service';
