@@ -65,7 +65,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   ) {
     super({
       jwtFromRequest: cookieOrBearerExtractor,
-      ignoreExpiration: false,
+      // Expiration is handled in cookieOrBearerExtractor for bearer tokens.
+      // Static access tokens are signed without an exp claim.
+      ignoreExpiration: true,
       secretOrKey:
         configService.get('JWT_SECRET') ||
         'your-secret-key-change-in-production',

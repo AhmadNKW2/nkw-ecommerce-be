@@ -1,8 +1,20 @@
-import sanitizeHtml from 'sanitize-html';
-
+/**
+ * Strip all HTML tags and collapse whitespace for search indexing.
+ * Kept dependency-free so builds are not blocked by optional native installs.
+ */
 export function stripHtml(html: string | null | undefined): string {
   if (!html) return '';
-  return sanitizeHtml(html, { allowedTags: [], allowedAttributes: {} })
+
+  return html
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<\/?[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
     .replace(/\s+/g, ' ')
     .trim();
 }

@@ -10,6 +10,7 @@ import {
   MaxLength,
   Min,
   IsEnum,
+  ArrayMaxSize,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import {
@@ -37,6 +38,20 @@ class MediaInput {
   is_primary?: boolean;
 
   @ApiPropertyOptional({ example: 1, description: 'Sort order for the images' })
+  @IsNumber()
+  @IsOptional()
+  sort_order?: number;
+}
+
+/**
+ * Attachment item DTO for linking pre-uploaded document media to products
+ */
+class AttachmentInput {
+  @ApiProperty({ example: 210, description: 'ID of the uploaded document media item' })
+  @IsNumber()
+  media_id: number;
+
+  @ApiPropertyOptional({ example: 1, description: 'Sort order for the attachment' })
   @IsNumber()
   @IsOptional()
   sort_order?: number;
@@ -288,6 +303,23 @@ export class CreateProductDto {
   @Type(() => MediaInput)
   @IsOptional()
   media?: MediaInput[];
+
+  // ============== Attachments ==============
+
+  @ApiPropertyOptional({
+    type: [AttachmentInput],
+    example: [
+      { media_id: 210, sort_order: 1 },
+      { media_id: 211, sort_order: 2 },
+    ],
+    description: 'Optional downloadable files linked to this product (max 3)',
+  })
+  @IsArray()
+  @ArrayMaxSize(3)
+  @ValidateNested({ each: true })
+  @Type(() => AttachmentInput)
+  @IsOptional()
+  attachments?: AttachmentInput[];
 
   // ============== Attributes ==============
 

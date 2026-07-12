@@ -70,6 +70,11 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
+        name: 'product_files_enabled',
+        type: 'boolean',
+        default: true,
+      },
+      {
         name: 'pricing_view_enabled',
         type: 'boolean',
         default: true,

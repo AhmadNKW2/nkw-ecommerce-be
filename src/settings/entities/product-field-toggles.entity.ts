@@ -49,6 +49,9 @@ export class ProductFieldToggles {
   product_status_enabled: boolean;
 
   @Column({ type: 'boolean', default: true })
+  product_files_enabled: boolean;
+
+  @Column({ type: 'boolean', default: true })
   pricing_view_enabled: boolean;
 
   @Column({ type: 'boolean', default: false })

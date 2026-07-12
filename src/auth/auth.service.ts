@@ -92,11 +92,16 @@ export class AuthService {
   ): Promise<string> {
     const storedToken = await this.usersService.getConstantAccessToken(userId);
     if (storedToken) {
-      return storedToken;
+      try {
+        this.jwtService.verify(storedToken);
+        return storedToken;
+      } catch {
+        // Stored token is invalid or was signed with an old secret — regenerate.
+      }
     }
 
     const accessToken = this.jwtService.sign(accessPayload, {
-      noTimestamp: true,
+      expiresIn: this.staticAccessTokenCookieMaxAge,
     });
     await this.usersService.setConstantAccessToken(userId, accessToken);
     return accessToken;

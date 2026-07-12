@@ -5,6 +5,7 @@ import { ProductsService } from './products.service';
 import { ProductStatus } from './entities/product.entity';
 import { ProductCategory } from './entities/product-category.entity';
 import { ProductMedia } from './entities/product-media.entity';
+import { ProductAttachment } from './entities/product-attachment.entity';
 import { ProductAttribute } from './entities/product-attribute.entity';
 import { ProductAttributeValue } from './entities/product-attribute-value.entity';
 import { ProductSpecificationValue } from './entities/product-specification-value.entity';
@@ -104,6 +105,7 @@ describe('ProductsService detail attributes', () => {
     repositoryByEntity = new Map<unknown, { find: jest.Mock }>([
       [ProductCategory, { find: jest.fn().mockResolvedValue([]) }],
       [ProductMedia, { find: jest.fn().mockResolvedValue([]) }],
+      [ProductAttachment, { find: jest.fn().mockResolvedValue([]) }],
       [ProductAttribute, { find: jest.fn().mockResolvedValue([]) }],
       [ProductAttributeValue, { find: jest.fn().mockResolvedValue([]) }],
       [ProductSpecificationValue, { find: jest.fn().mockResolvedValue([]) }],

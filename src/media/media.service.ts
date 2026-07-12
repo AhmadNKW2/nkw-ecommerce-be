@@ -2,6 +2,8 @@ import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import { Media, MediaType } from './entities/media.entity';
+import { ProductAttachment } from '../products/entities/product-attachment.entity';
+import { SettingsService } from '../settings/settings.service';
 import {
   R2StorageService,
   UploadResult,
@@ -14,7 +16,10 @@ export class MediaService {
   constructor(
     @InjectRepository(Media)
     private mediaRepository: Repository<Media>,
+    @InjectRepository(ProductAttachment)
+    private productAttachmentRepository: Repository<ProductAttachment>,
     private r2StorageService: R2StorageService,
+    private settingsService: SettingsService,
   ) {}
 
   /**
@@ -62,6 +67,46 @@ export class MediaService {
   }
 
   /**
+   * Upload a document attachment to R2 and create a media record
+   */
+  async uploadDocumentAndCreate(
+    file: Express.Multer.File,
+    folder: string = 'product-attachments',
+  ): Promise<Media> {
+    const existingMedia = await this.mediaRepository.findOne({
+      where: {
+        original_name: file.originalname,
+        size: file.size,
+        type: MediaType.DOCUMENT,
+      },
+    });
+
+    if (existingMedia) {
+      this.logger.debug(
+        `Found existing document media with ID ${existingMedia.id}, returning it directly`,
+      );
+      return existingMedia;
+    }
+
+    const uploadResult = await this.r2StorageService.uploadFile(
+      file,
+      folder,
+      undefined,
+      file.originalname,
+    );
+
+    const media = this.mediaRepository.create({
+      url: uploadResult.url,
+      type: MediaType.DOCUMENT,
+      original_name: uploadResult.originalName,
+      mime_type: uploadResult.mimeType,
+      size: uploadResult.size,
+    });
+
+    return this.mediaRepository.save(media);
+  }
+
+  /**
    * Create a new media record after file upload
    */
   async create(
@@ -90,6 +135,43 @@ export class MediaService {
       throw new NotFoundException(`Media with ID ${id} not found`);
     }
     return media;
+  }
+
+  /**
+   * Stream a product document attachment with Content-Disposition: attachment
+   */
+  async getDocumentDownload(
+    mediaId: number,
+  ): Promise<{ buffer: Buffer; mimeType: string; filename: string }> {
+    const toggles = await this.settingsService.getProductFieldToggles();
+    if (toggles.product_files_enabled === false) {
+      throw new NotFoundException('Product file not found');
+    }
+
+    const media = await this.findOne(mediaId);
+    if (media.type !== MediaType.DOCUMENT || !media.url) {
+      throw new NotFoundException('Product file not found');
+    }
+
+    const isLinkedToVisibleProduct = await this.productAttachmentRepository
+      .createQueryBuilder('attachment')
+      .innerJoin('attachment.product', 'product')
+      .where('attachment.media_id = :mediaId', { mediaId })
+      .andWhere('product.visible = :visible', { visible: true })
+      .andWhere('product.deleted_at IS NULL')
+      .getExists();
+
+    if (!isLinkedToVisibleProduct) {
+      throw new NotFoundException('Product file not found');
+    }
+
+    const buffer = await this.r2StorageService.getFileBuffer(media.url);
+
+    return {
+      buffer,
+      mimeType: media.mime_type || 'application/octet-stream',
+      filename: media.original_name || `file-${media.id}`,
+    };
   }
 
   /**

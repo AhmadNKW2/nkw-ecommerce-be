@@ -23,6 +23,7 @@ import { Media } from '../../media/entities/media.entity';
 import { ProductAttribute } from './product-attribute.entity';
 import { ProductCategory } from './product-category.entity';
 import { ProductMedia } from './product-media.entity';
+import { ProductAttachment } from './product-attachment.entity';
 import { ProductInputJson } from './product-input-json.entity';
 import { ProductSpecificationValue } from './product-specification-value.entity';
 import { GroupProduct } from './group-product.entity';
@@ -171,7 +172,17 @@ export class Product {
   })
   productMedia: ProductMedia[];
 
+  @OneToMany(
+    () => ProductAttachment,
+    (productAttachment) => productAttachment.product,
+    {
+      cascade: true,
+    },
+  )
+  productAttachments: ProductAttachment[];
+
   media?: Array<Media & { is_primary: boolean; sort_order: number }>;
+  attachments?: Array<Media & { sort_order: number }>;
 
   // ── Pricing (flat) ────────────────────────────────────────────
   @Column('decimal', {
