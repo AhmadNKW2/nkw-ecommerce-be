@@ -758,17 +758,22 @@ export class SearchService {
   }
 
   private async writeSearchDebugLog(payload: Record<string, unknown>): Promise<void> {
+    const report = this.formatSearchDebugReport({
+      ts: new Date().toISOString(),
+      ...payload,
+    });
+
+    // Emit the full report to application logs (Railway, Docker, local terminal).
+    // Filter with "[search-debug]" in your log viewer.
+    this.logger.log(`[search-debug]\n${report}`);
+
     try {
       const logDir = join(process.cwd(), 'logs');
       await mkdir(logDir, { recursive: true });
-      const report = this.formatSearchDebugReport({
-        ts: new Date().toISOString(),
-        ...payload,
-      });
       await writeFile(join(logDir, 'search-debug.log'), report, 'utf8');
     } catch (error) {
       this.logger.warn(
-        `Failed to write search debug log: ${
+        `Failed to write search debug log file: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
