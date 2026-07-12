@@ -31,12 +31,18 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
     find: jest.fn().mockResolvedValue(categoryRows),
   };
 
+  const termConceptLexicon = {
+    resolveAllConceptsInQuery: jest.fn().mockResolvedValue([]),
+    getConceptTokensFromMatches: jest.fn().mockReturnValue(new Set()),
+  };
+
   const service = new SearchService(
     cacheManager as any,
     productsService as any,
     typesenseService as any,
     searchCacheService as any,
     configService as any,
+    termConceptLexicon as any,
     categoriesRepository as any,
     emptyRepo as any,
     emptyRepo as any,

@@ -17,6 +17,8 @@ import { ProductAttributeValue } from '../products/entities/product-attribute-va
 import { ProductSpecificationValue } from '../products/entities/product-specification-value.entity';
 import { ProductsModule } from '../products/products.module';
 import { TypesenseBackfillService } from '../typesense/typesense-backfill.service';
+import { TermGroup } from '../terms/entities/term-group.entity';
+import { TermConceptLexiconService } from './term-concept-lexicon.service';
 
 @Module({
   imports: [
@@ -30,6 +32,7 @@ import { TypesenseBackfillService } from '../typesense/typesense-backfill.servic
       Product,
       ProductAttributeValue,
       ProductSpecificationValue,
+      TermGroup,
     ]),
     forwardRef(() => ProductsModule),
   ],
@@ -39,6 +42,7 @@ import { TypesenseBackfillService } from '../typesense/typesense-backfill.servic
     SearchCacheService,
     TypesenseBackfillService,
     TagsService,
+    TermConceptLexiconService,
   ],
   exports: [SearchCacheService, TagsService],
 })

@@ -32,7 +32,15 @@ import {
 } from '../typesense/product-search-fields';
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
+import {
+  buildProgressiveConceptSearchQueries,
+  buildProgressiveWordSearchQueries,
+  extractQueryWordsInAppearanceOrder,
+  normalizeSearchLocale,
+  orderWordsByQueryDirection,
+} from './utils/spec-expansion.utils';
 import { SearchCacheService } from './search-cache.service';
+import { TermConceptLexiconService } from './term-concept-lexicon.service';
 
 // Matches current production behavior (previously hardcoded at two call sites:
 // buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
@@ -122,6 +130,7 @@ export class SearchService {
     private readonly typesenseService: TypesenseService,
     private readonly searchCacheService: SearchCacheService,
     private readonly configService: ConfigService,
+    private readonly termConceptLexicon: TermConceptLexiconService,
     @InjectRepository(Category)
     private readonly categoriesRepository: Repository<Category>,
     @InjectRepository(Brand)
@@ -450,6 +459,38 @@ export class SearchService {
     return new Set(enabled);
   }
 
+  private getMaxConceptVariantCombos(): number {
+    const configured = Number(
+      this.configService.get<string>(
+        'SEARCH_EXPANSION_MAX_CONCEPT_VARIANT_COMBOS',
+        '50',
+      ),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 50;
+    }
+    return Math.min(200, configured);
+  }
+
+  private buildProgressiveExpansionQueries(params: {
+    matchedConcepts: Array<{ orderedVariants: string[] }>;
+    categoryIntentQuery: string;
+    orderedFallbackWords: string[];
+  }): string[] {
+    if (params.matchedConcepts.length > 0) {
+      return buildProgressiveConceptSearchQueries(
+        params.matchedConcepts,
+        params.orderedFallbackWords,
+        this.getMaxConceptVariantCombos(),
+      );
+    }
+
+    return buildProgressiveWordSearchQueries(
+      params.categoryIntentQuery,
+      params.orderedFallbackWords,
+    );
+  }
+
   private getPrimaryEnoughCount(): number {
     const configured = Number(
       this.configService.get<string>('SEARCH_EXPANSION_PRIMARY_ENOUGH_COUNT', '125'),
@@ -512,6 +553,17 @@ export class SearchService {
       lines.push(`  Category:     ${payload.detected_category_labels}`);
     } else if (payload.detected_category_ids) {
       lines.push(`  Category id(s): ${payload.detected_category_ids}`);
+    }
+    if (Array.isArray(payload.matched_concepts) && payload.matched_concepts.length > 0) {
+      lines.push(
+        `  Concepts:     ${(payload.matched_concepts as string[]).join(' · ')}`,
+      );
+    }
+    if (Array.isArray(payload.expansion_queries) && payload.expansion_queries.length > 0) {
+      lines.push('', '▶ CONCEPT EXPANSION QUERIES (sample)');
+      (payload.expansion_queries as string[]).forEach((query, index) => {
+        lines.push(`  ${index + 1}. ${query}`);
+      });
     }
 
     if (
@@ -627,30 +679,23 @@ export class SearchService {
     return 1;
   }
 
-  private getSpecTokensFromQuery(tokens: string[]): string[] {
-    const unique = new Set<string>();
-    const specPatterns = [
-      /^i[3579]$/i,
-      /^ryzen$/i,
-      /^ryzen[3579]$/i,
-      /^rtx$/i,
-      /^gtx$/i,
-      /^[3456]\d{3}$/,
-      /^\d{2,4}gb$/i,
-      /^\d{3,4}ssd$/i,
-      /^ssd$/i,
-      /^hdd$/i,
-      /^nvme$/i,
-      /^ddr[345]$/i,
-    ];
+  private async getCategoryTokensForIds(
+    categoryIds: number[],
+  ): Promise<Set<string>> {
+    if (categoryIds.length === 0) {
+      return new Set();
+    }
 
-    tokens.forEach((token) => {
-      if (specPatterns.some((pattern) => pattern.test(token))) {
-        unique.add(token);
-      }
+    const lexicon = await this.getCategoryLexicon();
+    const tokens = new Set<string>();
+    const idSet = new Set(categoryIds);
+
+    lexicon.forEach((entry) => {
+      if (!idSet.has(entry.id)) return;
+      entry.normalizedTokens.forEach((token) => tokens.add(token));
     });
 
-    return Array.from(unique);
+    return tokens;
   }
 
   private async getBrandTokensForIds(brandIds: number[]): Promise<Set<string>> {
@@ -1668,6 +1713,15 @@ export class SearchService {
     detectedBrandIds: number[];
     detectedCategoryIds: number[];
     tierNotes: Partial<Record<ExpansionTierKey, string>>;
+    matchedConcepts: Array<{
+      groupId: number;
+      conceptKey: string;
+      userTerm: string;
+      matchedTokens: string[];
+      orderedVariants: string[];
+      matchStart: number;
+    }>;
+    expansionQueries: string[];
   }> {
     const maxCandidates = Math.max(
       params.requestedLimit,
@@ -1714,24 +1768,54 @@ export class SearchService {
       new Set([...detected.brandIds, ...brandIdsFromFilters]),
     );
     const brandIdsFromQueryOnly = detected.brandIds;
+    const categoryIdsFromQueryOnly = detected.categoryIds;
     const hasBrandInQuery = brandIdsFromQueryOnly.length > 0;
     const brandTokensFromQuery = hasBrandInQuery
       ? await this.getBrandTokensForIds(brandIdsFromQueryOnly)
       : new Set<string>();
-    const intentTokensWithoutBrand = tokens.filter(
-      (token) => !brandTokensFromQuery.has(token),
+    const categoryTokensFromQuery =
+      categoryIdsFromQueryOnly.length > 0
+        ? await this.getCategoryTokensForIds(categoryIdsFromQueryOnly)
+        : new Set<string>();
+    const searchLocale = normalizeSearchLocale(params.dto.locale, tokens);
+    const matchedConcepts = await this.termConceptLexicon.resolveAllConceptsInQuery(
+      normalizedQ,
+      tokens,
+      searchLocale,
     );
-    const specTokens = this.getSpecTokensFromQuery(tokens);
-    const nonSpecIntentTokens = intentTokensWithoutBrand.filter(
-      (token) => !specTokens.includes(token),
+    const conceptTokensFromQuery =
+      this.termConceptLexicon.getConceptTokensFromMatches(matchedConcepts);
+    const excludedFromFallback = new Set<string>([
+      ...brandTokensFromQuery,
+      ...categoryTokensFromQuery,
+      ...conceptTokensFromQuery,
+    ]);
+    const fallbackWordsInAppearanceOrder = extractQueryWordsInAppearanceOrder(
+      tokens,
+      excludedFromFallback,
     );
-    const categoryIntentQuery = nonSpecIntentTokens.join(' ').trim();
+    const orderedFallbackWords = orderWordsByQueryDirection(
+      fallbackWordsInAppearanceOrder,
+      tokens,
+    );
+    const baseIntentQuery = tokens
+      .filter((token) => categoryTokensFromQuery.has(token))
+      .join(' ')
+      .trim();
+    const categoryIntentQuery = baseIntentQuery;
+    const progressiveExpansionQueries = this.buildProgressiveExpansionQueries({
+      matchedConcepts,
+      categoryIntentQuery,
+      orderedFallbackWords,
+    });
+    const hasConceptMatches = matchedConcepts.length > 0;
+    const hasExpansionQueries = progressiveExpansionQueries.length > 0;
 
     if (
       enabledLevels.has('cross_brand_spec') &&
       hasBrandInQuery &&
       uniqueIds.size < params.requestedLimit &&
-      (specTokens.length > 0 || nonSpecIntentTokens.length > 0)
+      hasExpansionQueries
     ) {
       const crossBrandQueries: string[] = [];
       const seenCrossBrandQueries = new Set<string>();
@@ -1744,16 +1828,8 @@ export class SearchService {
         crossBrandQueries.push(normalized);
       };
 
-      // Exact requested sequence for brand queries:
-      // 1) other-brand: laptop + all specs     (e.g. laptop 5060 i7)
-      // 2) other-brand: laptop + first spec    (e.g. laptop 5060)
-      // 3) other-brand: laptop + second spec   (e.g. laptop i7)
-      const baseIntentQuery = nonSpecIntentTokens.join(' ').trim();
-      const orderedUniqueSpecTokens = Array.from(new Set(specTokens));
-      pushCrossBrandQuery([baseIntentQuery, ...orderedUniqueSpecTokens].join(' '));
-      orderedUniqueSpecTokens.forEach((specToken) => {
-        pushCrossBrandQuery([baseIntentQuery, specToken].join(' '));
-      });
+      // Progressive cross-brand fallback with concept synonym rotation when matched.
+      progressiveExpansionQueries.forEach(pushCrossBrandQuery);
 
       const crossBrandFilters = [params.baseFilterBy];
       if (effectiveCategoryIds.length > 0) {
@@ -1775,7 +1851,9 @@ export class SearchService {
         });
         addIds('cross_brand_spec', ids);
       }
-      tierNotes.cross_brand_spec = 'same specs/category, other brands';
+      tierNotes.cross_brand_spec = hasConceptMatches
+        ? 'concept synonyms + fallback words, other brands'
+        : 'same specs/category, other brands';
     }
 
     if (
@@ -1858,35 +1936,15 @@ export class SearchService {
     if (
       enabledLevels.has('specification') &&
       uniqueIds.size < params.requestedLimit &&
-      specTokens.length > 0
+      hasExpansionQueries
     ) {
       if (hasBrandInQuery) {
         tierNotes.specification = 'handled by cross_brand_spec sequence';
       } else {
-      const seenSpecQueries = new Set<string>();
-      const specQueries: string[] = [];
-
-      // Keep spec fallback progressive:
-      // 1) category/spec intent with all specs together
-      // 2) category/spec intent with each individual spec token
-      const combinedSpecQuery = [categoryIntentQuery, ...specTokens].join(' ').trim();
-      if (combinedSpecQuery) {
-        specQueries.push(combinedSpecQuery);
-        seenSpecQueries.add(combinedSpecQuery);
-      }
-
-      for (const specToken of specTokens) {
-        const perSpecQuery = [categoryIntentQuery, specToken].join(' ').trim();
-        if (perSpecQuery && !seenSpecQueries.has(perSpecQuery)) {
-          specQueries.push(perSpecQuery);
-          seenSpecQueries.add(perSpecQuery);
-        }
-      }
-
-      for (const specQuery of specQueries) {
+      for (const wordQuery of progressiveExpansionQueries) {
         if (uniqueIds.size >= params.requestedLimit) break;
         const ids = await this.searchTypesenseIds({
-          q: specQuery,
+          q: wordQuery,
           filterBy: params.baseFilterBy,
           sortBy: '_text_match:desc,created_at_ts:desc',
           limit: Math.min(40, maxCandidates - uniqueIds.size),
@@ -1894,8 +1952,10 @@ export class SearchService {
         addIds('specification', ids);
       }
 
-      if (hasBrandInQuery && idsByTier.specification.length > 0) {
-        tierNotes.specification = 'progressive laptop+spec fallback';
+      if (idsByTier.specification.length > 0) {
+        tierNotes.specification = hasConceptMatches
+          ? 'progressive concept synonym + word fallback'
+          : 'progressive category+word fallback';
       }
       }
     }
@@ -1905,9 +1965,10 @@ export class SearchService {
       uniqueIds.size < params.requestedLimit &&
       tokens.length > 0
     ) {
-      const keywordTokens = (hasBrandInQuery ? intentTokensWithoutBrand : tokens).filter(
-        (token) => token.length > 2,
-      );
+      const keywordTokens = (hasBrandInQuery
+        ? tokens.filter((token) => !brandTokensFromQuery.has(token))
+        : tokens
+      ).filter((token) => token.length > 2);
       const fallbackQuery = (
         keywordTokens.length > 0 ? keywordTokens : tokens
       ).join(' ');
@@ -1947,6 +2008,8 @@ export class SearchService {
       detectedBrandIds: effectiveBrandIds,
       detectedCategoryIds: effectiveCategoryIds,
       tierNotes,
+      matchedConcepts,
+      expansionQueries: progressiveExpansionQueries.slice(0, 12),
     };
   }
 
@@ -2007,6 +2070,12 @@ export class SearchService {
           detectedBrandIds: number[];
           detectedCategoryIds: number[];
           tierNotes: Partial<Record<ExpansionTierKey, string>>;
+          matchedConcepts?: Array<{
+            groupId: number;
+            conceptKey: string;
+            userTerm: string;
+          }>;
+          expansionQueries?: string[];
         }
       | undefined;
 
@@ -2030,6 +2099,8 @@ export class SearchService {
         detectedBrandIds: expanded.detectedBrandIds,
         detectedCategoryIds: expanded.detectedCategoryIds,
         tierNotes: expanded.tierNotes,
+        matchedConcepts: expanded.matchedConcepts,
+        expansionQueries: expanded.expansionQueries,
       };
     }
     const pageProductIds = orderedProductIds.slice(startOffset, startOffset + perPage);
@@ -2182,6 +2253,14 @@ export class SearchService {
             ? detectedCategoryIds.join(', ')
             : undefined,
         detected_category_labels: entityLabels.categories,
+        matched_concepts:
+          expansionMeta?.matchedConcepts && expansionMeta.matchedConcepts.length
+            ? expansionMeta.matchedConcepts.map(
+                (concept) =>
+                  `${concept.userTerm} (${concept.conceptKey}#${concept.groupId})`,
+              )
+            : undefined,
+        expansion_queries: expansionMeta?.expansionQueries,
         primary_found: expansionMeta?.primaryFoundCount ?? primaryCount,
         final_candidates: orderedProductIds.length,
         primary_enough_threshold: primaryEnoughCount,
