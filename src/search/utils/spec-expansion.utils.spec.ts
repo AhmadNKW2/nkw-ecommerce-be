@@ -1,4 +1,5 @@
 import {
+  applyConceptCategoryRefinement,
   buildConceptSynonymThenProgressiveQueries,
   buildConceptSynonymVariants,
   buildLayeredConceptExpansionQueries,
@@ -221,6 +222,42 @@ describe('spec-expansion.utils', () => {
         'ذاكرة مؤقتة لابتوب',
         'ram لابتوب',
       ]);
+    });
+  });
+
+  describe('applyConceptCategoryRefinement', () => {
+    it('reorders mixed concept-tier hits to prefer matching categories', () => {
+      const categoryIdsByProductId = new Map<number, number[]>([
+        [1, [63]],
+        [2, [78]],
+        [3, [87]],
+        [4, [88]],
+      ]);
+
+      expect(
+        applyConceptCategoryRefinement([2, 1, 4, 3], categoryIdsByProductId, [63, 87]),
+      ).toEqual({
+        ids: [1, 3, 2, 4],
+        applied: true,
+        preferredCount: 2,
+        otherCount: 2,
+      });
+    });
+
+    it('keeps original order when all hits already match the concept categories', () => {
+      const categoryIdsByProductId = new Map<number, number[]>([
+        [1, [63]],
+        [2, [87]],
+      ]);
+
+      expect(
+        applyConceptCategoryRefinement([1, 2], categoryIdsByProductId, [63, 87]),
+      ).toEqual({
+        ids: [1, 2],
+        applied: false,
+        preferredCount: 2,
+        otherCount: 0,
+      });
     });
   });
 

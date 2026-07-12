@@ -6,7 +6,7 @@ const ARABIC_SCRIPT =
 export type SearchLocale = 'ar' | 'en';
 
 /** Bump when concept expansion query ordering changes (visible on GET /health). */
-export const SEARCH_EXPANSION_VERSION = '2026-07-12-concept-synonym-order';
+export const SEARCH_EXPANSION_VERSION = '2026-07-12-query-first-refinement';
 
 export type ConceptSynonymSource = {
   terms_en?: string[] | null;
@@ -357,11 +357,54 @@ export function buildConceptSynonymThenProgressiveQueries(
 
 export type ConceptExpansionLayer = {
   queries: string[];
-  /** Full-phrase / combined concept layers use detected query category. */
-  restrictToDetectedCategory: boolean;
   /** Max new hits per synonym query (prevents one loose match from dominating). */
   perQueryLimit: number;
 };
+
+/**
+ * When concept-tier results mix product types, prefer items whose categories
+ * align with the detected concept — without dropping the rest.
+ */
+export function applyConceptCategoryRefinement(
+  conceptTierIds: number[],
+  productCategoryIdsByProductId: ReadonlyMap<number, number[]>,
+  refinementCategoryIds: number[],
+): {
+  ids: number[];
+  applied: boolean;
+  preferredCount: number;
+  otherCount: number;
+} {
+  if (conceptTierIds.length === 0 || refinementCategoryIds.length === 0) {
+    return {
+      ids: conceptTierIds,
+      applied: false,
+      preferredCount: 0,
+      otherCount: conceptTierIds.length,
+    };
+  }
+
+  const categorySet = new Set(refinementCategoryIds);
+  const preferred: number[] = [];
+  const other: number[] = [];
+
+  conceptTierIds.forEach((productId) => {
+    const categoryIds = productCategoryIdsByProductId.get(productId) ?? [];
+    if (categoryIds.some((categoryId) => categorySet.has(categoryId))) {
+      preferred.push(productId);
+    } else {
+      other.push(productId);
+    }
+  });
+
+  const applied = preferred.length > 0 && other.length > 0;
+  return {
+    ids: applied ? [...preferred, ...other] : conceptTierIds,
+    applied,
+    preferredCount: preferred.length,
+    otherCount: other.length,
+  };
+}
 
 /**
  * Layered concept expansion:
@@ -410,7 +453,6 @@ export function buildLayeredConceptExpansionLayers(params: {
   if (fullPhraseQueries.length > 0) {
     layers.push({
       queries: fullPhraseQueries,
-      restrictToDetectedCategory: true,
       perQueryLimit: 25,
     });
   }
@@ -426,7 +468,6 @@ export function buildLayeredConceptExpansionLayers(params: {
     if (combinedQueries.length > 0) {
       layers.push({
         queries: combinedQueries,
-        restrictToDetectedCategory: true,
         perQueryLimit: 25,
       });
     }
@@ -443,7 +484,6 @@ export function buildLayeredConceptExpansionLayers(params: {
     if (tokenQueries.length > 0) {
       layers.push({
         queries: tokenQueries,
-        restrictToDetectedCategory: false,
         perQueryLimit: 40,
       });
     }

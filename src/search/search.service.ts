@@ -13,6 +13,8 @@ import { In, Repository } from 'typeorm';
 import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { Category } from '../categories/entities/category.entity';
+import { Product } from '../products/entities/product.entity';
+import { TermGroup } from '../terms/entities/term-group.entity';
 import { Brand } from '../brands/entities/brand.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
 import { AttributeValue } from '../attributes/entities/attribute-value.entity';
@@ -39,6 +41,7 @@ import {
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
 import {
+  applyConceptCategoryRefinement,
   buildLayeredConceptExpansionLayers,
   buildLayeredConceptExpansionQueries,
   buildProgressiveConceptSearchQueries,
@@ -50,7 +53,10 @@ import {
   SEARCH_EXPANSION_VERSION,
 } from './utils/spec-expansion.utils';
 import { SearchCacheService } from './search-cache.service';
-import { TermConceptLexiconService } from './term-concept-lexicon.service';
+import {
+  TermConceptLexiconService,
+  type MatchedConceptInQuery,
+} from './term-concept-lexicon.service';
 
 // Matches current production behavior (previously hardcoded at two call sites:
 // buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
@@ -145,6 +151,10 @@ export class SearchService implements OnModuleInit {
     private readonly termConceptLexicon: TermConceptLexiconService,
     @InjectRepository(Category)
     private readonly categoriesRepository: Repository<Category>,
+    @InjectRepository(TermGroup)
+    private readonly termGroupsRepository: Repository<TermGroup>,
+    @InjectRepository(Product)
+    private readonly productsRepository: Repository<Product>,
     @InjectRepository(Brand)
     private readonly brandsRepository: Repository<Brand>,
     @InjectRepository(Vendor)
@@ -506,7 +516,6 @@ export class SearchService implements OnModuleInit {
   }): Promise<{
     conceptLayers: Array<{
       queries: string[];
-      restrictToDetectedCategory: boolean;
       perQueryLimit: number;
     }>;
     expansionQueries: string[];
@@ -575,7 +584,6 @@ export class SearchService implements OnModuleInit {
           ? [
               {
                 queries,
-                restrictToDetectedCategory: true,
                 perQueryLimit: 25,
               },
             ]
@@ -673,6 +681,14 @@ export class SearchService implements OnModuleInit {
         `  Concepts:     ${(payload.matched_concepts as string[]).join(' · ')}`,
       );
     }
+    if (payload.concept_category_ids) {
+      lines.push(`  Concept refinement categories: ${payload.concept_category_ids}`);
+    }
+    if (payload.category_refinement_applied != null) {
+      lines.push(
+        `  Category refinement: ${payload.category_refinement_applied ? 'applied (mixed types reordered)' : 'not needed'}`,
+      );
+    }
     if (Array.isArray(payload.expansion_queries) && payload.expansion_queries.length > 0) {
       lines.push('', '▶ CONCEPT EXPANSION QUERIES (sample)');
       (payload.expansion_queries as string[]).forEach((query, index) => {
@@ -691,7 +707,7 @@ export class SearchService implements OnModuleInit {
           categoryFiltered: boolean;
         }>
       ).forEach((entry, index) => {
-        const filterNote = entry.categoryFiltered ? ' [category filter]' : '';
+        const filterNote = entry.categoryFiltered ? ' [user category filter]' : '';
         lines.push(
           `  ${index + 1}. "${entry.query}" → +${entry.added} new${filterNote}`,
         );
@@ -950,32 +966,33 @@ export class SearchService implements OnModuleInit {
   }
 
   private async resolveCategoryIdsFromMatchedConcepts(
-    matchedConcepts: Array<{ conceptKey: string; orderedVariants: string[] }>,
+    matchedConcepts: MatchedConceptInQuery[],
   ): Promise<number[]> {
     if (matchedConcepts.length === 0) {
       return [];
     }
 
-    const categoryLexicon = await this.getCategoryLexicon();
-    const conceptTermKeys = new Set<string>();
-
-    matchedConcepts.forEach((concept) => {
-      if (concept.conceptKey?.trim()) {
-        conceptTermKeys.add(normalizeConceptTermKey(concept.conceptKey));
-      }
-      concept.orderedVariants.forEach((variant) => {
-        const normalizedVariant = normalizeConceptTermKey(variant);
-        if (!normalizedVariant) {
-          return;
-        }
-        conceptTermKeys.add(normalizedVariant);
-        normalizedVariant
-          .split(/\s+/)
-          .filter(Boolean)
-          .forEach((part) => conceptTermKeys.add(part));
-      });
+    const groupIds = [...new Set(matchedConcepts.map((concept) => concept.groupId))];
+    const groups = await this.termGroupsRepository.find({
+      where: { id: In(groupIds) },
     });
+    const groupsById = new Map(groups.map((group) => [group.id, group]));
 
+    const referenceCategoryIds =
+      await this.resolveCategoryIdsFromReferenceProducts(groups);
+    if (referenceCategoryIds.length > 0) {
+      return this.expandCategoryIdsWithDescendants(referenceCategoryIds);
+    }
+
+    const conceptTermKeys = this.collectNarrowConceptCategoryTermKeys(
+      matchedConcepts,
+      groupsById,
+    );
+    if (conceptTermKeys.size === 0) {
+      return [];
+    }
+
+    const categoryLexicon = await this.getCategoryLexicon();
     const matchedCategoryIds = new Set<number>();
     categoryLexicon.forEach((entry) => {
       const matchesConcept = entry.normalizedTokens.some((token) =>
@@ -987,6 +1004,74 @@ export class SearchService implements OnModuleInit {
     });
 
     return this.expandCategoryIdsWithDescendants(Array.from(matchedCategoryIds));
+  }
+
+  private async resolveCategoryIdsFromReferenceProducts(
+    groups: TermGroup[],
+  ): Promise<number[]> {
+    const productIds = [
+      ...new Set(
+        groups
+          .flatMap((group) => group.reference_product_ids ?? [])
+          .filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    ];
+    if (productIds.length === 0) {
+      return [];
+    }
+
+    const products = await this.productsRepository.find({
+      where: { id: In(productIds) },
+      select: { id: true, category_id: true },
+      relations: { productCategories: true },
+    });
+
+    const categoryIds = new Set<number>();
+    products.forEach((product) => {
+      if (typeof product.category_id === 'number' && product.category_id > 0) {
+        categoryIds.add(product.category_id);
+      }
+      product.productCategories?.forEach((productCategory) => {
+        if (
+          typeof productCategory.category_id === 'number' &&
+          productCategory.category_id > 0
+        ) {
+          categoryIds.add(productCategory.category_id);
+        }
+      });
+    });
+
+    return Array.from(categoryIds);
+  }
+
+  private collectNarrowConceptCategoryTermKeys(
+    matchedConcepts: MatchedConceptInQuery[],
+    groupsById: Map<number, TermGroup>,
+  ): Set<string> {
+    const keys = new Set<string>();
+
+    matchedConcepts.forEach((concept) => {
+      if (concept.conceptKey?.trim()) {
+        keys.add(normalizeConceptTermKey(concept.conceptKey));
+      }
+      if (concept.userTerm?.trim()) {
+        keys.add(normalizeConceptTermKey(concept.userTerm));
+      }
+
+      const group = groupsById.get(concept.groupId);
+      if (!group) {
+        return;
+      }
+
+      [group.concept_label_en, group.concept_label_ar].forEach((label) => {
+        const normalized = normalizeConceptTermKey(label ?? '');
+        if (normalized) {
+          keys.add(normalized);
+        }
+      });
+    });
+
+    return keys;
   }
 
   private async detectEntityIdsFromTokens(
@@ -1819,6 +1904,16 @@ export class SearchService implements OnModuleInit {
     sortBy?: string;
     limit: number;
   }): Promise<number[]> {
+    const hits = await this.searchTypesenseProductHits(params);
+    return hits.map((hit) => hit.id);
+  }
+
+  private async searchTypesenseProductHits(params: {
+    q: string;
+    filterBy?: string;
+    sortBy?: string;
+    limit: number;
+  }): Promise<Array<{ id: number; categoryIds: number[] }>> {
     const result = await this.typesenseService.search({
       q: normalizeSearchQuery(params.q || '*') || '*',
       query_by: PRODUCT_QUERY_BY,
@@ -1827,7 +1922,7 @@ export class SearchService implements OnModuleInit {
       prioritize_token_position: true,
       ...(params.filterBy ? { filter_by: params.filterBy } : {}),
       sort_by: params.sortBy ?? '_text_match:desc,created_at_ts:desc',
-      include_fields: 'id',
+      include_fields: 'id,category_ids',
       page: 1,
       per_page: params.limit,
       num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(params.q)),
@@ -1835,8 +1930,22 @@ export class SearchService implements OnModuleInit {
 
     const hits = Array.isArray(result.hits) ? result.hits : [];
     return hits
-      .map((hit: any) => Number(hit?.document?.id))
-      .filter((id) => Number.isInteger(id) && id > 0);
+      .map((hit: any) => {
+        const id = Number(hit?.document?.id);
+        if (!Number.isInteger(id) || id <= 0) {
+          return null;
+        }
+
+        const rawCategoryIds = hit?.document?.category_ids;
+        const categoryIds = Array.isArray(rawCategoryIds)
+          ? rawCategoryIds
+              .map((value) => Number(value))
+              .filter((value) => Number.isInteger(value) && value > 0)
+          : [];
+
+        return { id, categoryIds };
+      })
+      .filter((hit): hit is { id: number; categoryIds: number[] } => hit != null);
   }
 
   private mergeFilterByClauses(...clauses: Array<string | undefined>): string | undefined {
@@ -1913,6 +2022,8 @@ export class SearchService implements OnModuleInit {
       added: number;
       categoryFiltered: boolean;
     }>;
+    conceptCategoryIds?: number[];
+    categoryRefinementApplied?: boolean;
   }> {
     const maxCandidates = Math.max(
       params.requestedLimit,
@@ -2019,62 +2130,74 @@ export class SearchService implements OnModuleInit {
     const hasConceptMatches =
       matchedConcepts.length > 0 || progressiveExpansionQueries.length > 0;
     const hasExpansionQueries = progressiveExpansionQueries.length > 0;
-    const conceptCategoryIds = await this.resolveCategoryIdsFromMatchedConcepts(
-      matchedConcepts,
-    );
-    const conceptQueryCategoryIds = Array.from(
-      new Set([...categoryIdsFromQueryOnly, ...conceptCategoryIds]),
-    );
+    const conceptRefinementCategoryIds =
+      matchedConcepts.length > 0
+        ? await this.resolveCategoryIdsFromMatchedConcepts(matchedConcepts)
+        : [];
+    const conceptProductCategoryIds = new Map<number, number[]>();
     const conceptQueryDebug: Array<{
       query: string;
       added: number;
       categoryFiltered: boolean;
     }> = [];
+    let categoryRefinementApplied = false;
 
-    // Concept-driven ordering: when the query resolves to one or more concepts,
-    // run the layered concept queries FIRST so they define the primary result
-    // order (exact phrase -> full-phrase concept synonyms -> per-token concept
-    // matches -> fallback words). This is the same leading layer as the primary
-    // search, not a separate fallback tier.
+    // Concept-driven ordering: query expansion defines intent; categories are
+    // not used to filter these searches — only optional post-collection refinement.
     if (conceptDriven && conceptLayers.length > 0) {
       for (const conceptLayer of conceptLayers) {
-        const shouldApplyConceptCategoryFilter =
-          conceptQueryCategoryIds.length > 0 &&
-          (conceptLayer.restrictToDetectedCategory || conceptCategoryIds.length > 0);
-        const layerFilterBy = shouldApplyConceptCategoryFilter
-          ? this.mergeFilterByClauses(
-              params.baseFilterBy,
-              `category_ids:=[${conceptQueryCategoryIds.join(',')}]`,
-            )
-          : params.baseFilterBy;
-
         for (const conceptQuery of conceptLayer.queries) {
           if (uniqueIds.size >= params.requestedLimit) break;
           const beforeSize = uniqueIds.size;
-          const ids = await this.searchTypesenseIds({
+          const hits = await this.searchTypesenseProductHits({
             q: conceptQuery,
-            filterBy: layerFilterBy,
+            filterBy: params.baseFilterBy,
             sortBy: '_text_match:desc,created_at_ts:desc',
             limit: Math.min(
               conceptLayer.perQueryLimit,
               maxCandidates - uniqueIds.size,
             ),
           });
-          addIds('concept', ids);
+          hits.forEach((hit) => {
+            if (hit.categoryIds.length > 0) {
+              conceptProductCategoryIds.set(hit.id, hit.categoryIds);
+            }
+          });
+          addIds(
+            'concept',
+            hits.map((hit) => hit.id),
+          );
           if (params.debug) {
             conceptQueryDebug.push({
               query: conceptQuery,
               added: uniqueIds.size - beforeSize,
-              categoryFiltered: shouldApplyConceptCategoryFilter,
+              categoryFiltered: categoryIdsFromFilters.length > 0,
             });
           }
         }
       }
+
+      if (idsByTier.concept.length > 0 && conceptRefinementCategoryIds.length > 0) {
+        const refinement = applyConceptCategoryRefinement(
+          idsByTier.concept,
+          conceptProductCategoryIds,
+          conceptRefinementCategoryIds,
+        );
+        if (refinement.applied) {
+          idsByTier.concept = refinement.ids;
+          categoryRefinementApplied = true;
+        }
+      }
+
       if (idsByTier.concept.length > 0) {
         tierNotes.concept =
           matchedConcepts.length > 0
-            ? 'exact phrase + concept synonyms (leads ordering)'
-            : 'layered concept phrase matches (leads ordering)';
+            ? categoryRefinementApplied
+              ? 'query expansion + category refinement (mixed types)'
+              : 'query expansion (exact phrase + concept synonyms)'
+            : categoryRefinementApplied
+              ? 'layered concept matches + category refinement'
+              : 'layered concept phrase matches (leads ordering)';
       }
     }
 
@@ -2284,6 +2407,8 @@ export class SearchService implements OnModuleInit {
       matchedConcepts,
       expansionQueries: progressiveExpansionQueries.slice(0, 12),
       conceptQueryDebug: params.debug ? conceptQueryDebug : undefined,
+      conceptCategoryIds: conceptRefinementCategoryIds,
+      categoryRefinementApplied,
     };
   }
 
@@ -2375,6 +2500,8 @@ export class SearchService implements OnModuleInit {
             added: number;
             categoryFiltered: boolean;
           }>;
+          conceptCategoryIds?: number[];
+          categoryRefinementApplied?: boolean;
         }
       | undefined;
 
@@ -2401,6 +2528,8 @@ export class SearchService implements OnModuleInit {
         matchedConcepts: expanded.matchedConcepts,
         expansionQueries: expanded.expansionQueries,
         conceptQueryDebug: expanded.conceptQueryDebug,
+        conceptCategoryIds: expanded.conceptCategoryIds,
+        categoryRefinementApplied: expanded.categoryRefinementApplied,
       };
     }
     const pageProductIds = orderedProductIds.slice(startOffset, startOffset + perPage);
@@ -2563,6 +2692,12 @@ export class SearchService implements OnModuleInit {
             : undefined,
         expansion_queries: expansionMeta?.expansionQueries,
         concept_query_debug: expansionMeta?.conceptQueryDebug,
+        concept_category_ids:
+          expansionMeta?.conceptCategoryIds &&
+          expansionMeta.conceptCategoryIds.length
+            ? expansionMeta.conceptCategoryIds.join(', ')
+            : undefined,
+        category_refinement_applied: expansionMeta?.categoryRefinementApplied,
         primary_found: expansionMeta?.primaryFoundCount ?? primaryCount,
         final_candidates: orderedProductIds.length,
         primary_enough_threshold: primaryEnoughCount,

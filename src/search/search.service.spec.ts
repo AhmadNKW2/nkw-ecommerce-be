@@ -48,6 +48,8 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
     emptyRepo as any,
     emptyRepo as any,
     emptyRepo as any,
+    emptyRepo as any,
+    emptyRepo as any,
   );
 
   return { service, typesenseSearch, productsService, categoriesRepository };
