@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
+import { SEARCH_EXPANSION_VERSION } from '../search/utils/spec-expansion.utils';
 import { TypesenseService } from '../typesense/typesense.service';
 
 @Injectable()
@@ -24,6 +25,13 @@ export class HealthService {
         status: 'ok',
         timestamp,
         uptime,
+        search: {
+          expansion_version: SEARCH_EXPANSION_VERSION,
+          git_commit:
+            process.env.RAILWAY_GIT_COMMIT_SHA ??
+            process.env.GIT_COMMIT_SHA ??
+            undefined,
+        },
         db: {
           status: 'ok',
           latency_ms: latencyMs,

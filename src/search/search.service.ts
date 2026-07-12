@@ -38,8 +38,10 @@ import {
   buildProgressiveConceptSearchQueries,
   buildProgressiveWordSearchQueries,
   extractQueryWordsInAppearanceOrder,
+  normalizeConceptTermKey,
   normalizeSearchLocale,
   orderWordsByQueryDirection,
+  SEARCH_EXPANSION_VERSION,
 } from './utils/spec-expansion.utils';
 import { SearchCacheService } from './search-cache.service';
 import { TermConceptLexiconService } from './term-concept-lexicon.service';
@@ -904,6 +906,50 @@ export class SearchService {
 
     this.categoryLexiconCache = { loadedAt: now, entries };
     return entries;
+  }
+
+  static getSearchExpansionVersion(): string {
+    return SEARCH_EXPANSION_VERSION;
+  }
+
+  private async resolveCategoryIdsFromMatchedConcepts(
+    matchedConcepts: Array<{ conceptKey: string; orderedVariants: string[] }>,
+  ): Promise<number[]> {
+    if (matchedConcepts.length === 0) {
+      return [];
+    }
+
+    const categoryLexicon = await this.getCategoryLexicon();
+    const conceptTermKeys = new Set<string>();
+
+    matchedConcepts.forEach((concept) => {
+      if (concept.conceptKey?.trim()) {
+        conceptTermKeys.add(normalizeConceptTermKey(concept.conceptKey));
+      }
+      concept.orderedVariants.forEach((variant) => {
+        const normalizedVariant = normalizeConceptTermKey(variant);
+        if (!normalizedVariant) {
+          return;
+        }
+        conceptTermKeys.add(normalizedVariant);
+        normalizedVariant
+          .split(/\s+/)
+          .filter(Boolean)
+          .forEach((part) => conceptTermKeys.add(part));
+      });
+    });
+
+    const matchedCategoryIds = new Set<number>();
+    categoryLexicon.forEach((entry) => {
+      const matchesConcept = entry.normalizedTokens.some((token) =>
+        conceptTermKeys.has(normalizeConceptTermKey(token)),
+      );
+      if (matchesConcept) {
+        matchedCategoryIds.add(entry.id);
+      }
+    });
+
+    return this.expandCategoryIdsWithDescendants(Array.from(matchedCategoryIds));
   }
 
   private async detectEntityIdsFromTokens(
@@ -1936,6 +1982,12 @@ export class SearchService {
     const hasConceptMatches =
       matchedConcepts.length > 0 || progressiveExpansionQueries.length > 0;
     const hasExpansionQueries = progressiveExpansionQueries.length > 0;
+    const conceptCategoryIds = await this.resolveCategoryIdsFromMatchedConcepts(
+      matchedConcepts,
+    );
+    const conceptQueryCategoryIds = Array.from(
+      new Set([...categoryIdsFromQueryOnly, ...conceptCategoryIds]),
+    );
     const conceptQueryDebug: Array<{
       query: string;
       added: number;
@@ -1949,14 +2001,15 @@ export class SearchService {
     // search, not a separate fallback tier.
     if (conceptDriven && conceptLayers.length > 0) {
       for (const conceptLayer of conceptLayers) {
-        const layerFilterBy =
-          conceptLayer.restrictToDetectedCategory &&
-          categoryIdsFromQueryOnly.length > 0
-            ? this.mergeFilterByClauses(
-                params.baseFilterBy,
-                `category_ids:=[${categoryIdsFromQueryOnly.join(',')}]`,
-              )
-            : params.baseFilterBy;
+        const shouldApplyConceptCategoryFilter =
+          conceptQueryCategoryIds.length > 0 &&
+          (conceptLayer.restrictToDetectedCategory || conceptCategoryIds.length > 0);
+        const layerFilterBy = shouldApplyConceptCategoryFilter
+          ? this.mergeFilterByClauses(
+              params.baseFilterBy,
+              `category_ids:=[${conceptQueryCategoryIds.join(',')}]`,
+            )
+          : params.baseFilterBy;
 
         for (const conceptQuery of conceptLayer.queries) {
           if (uniqueIds.size >= params.requestedLimit) break;
@@ -1975,7 +2028,7 @@ export class SearchService {
             conceptQueryDebug.push({
               query: conceptQuery,
               added: uniqueIds.size - beforeSize,
-              categoryFiltered: conceptLayer.restrictToDetectedCategory,
+              categoryFiltered: shouldApplyConceptCategoryFilter,
             });
           }
         }
