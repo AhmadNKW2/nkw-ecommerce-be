@@ -1,4 +1,10 @@
-import { Injectable, Inject, forwardRef, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  Inject,
+  forwardRef,
+  Logger,
+  OnModuleInit,
+} from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { ConfigService } from '@nestjs/config';
@@ -73,7 +79,7 @@ type ExpansionTierKey =
   | 'keyword';
 
 @Injectable()
-export class SearchService {
+export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly randomBrowseMaxResults = 2000;
   private readonly typesenseIdPageSize = 250;
@@ -148,6 +154,16 @@ export class SearchService {
     @InjectRepository(SpecificationValue)
     private readonly specificationValuesRepository: Repository<SpecificationValue>,
   ) {}
+
+  onModuleInit() {
+    if (!this.isSearchDebugEnabledByEnv()) {
+      return;
+    }
+
+    this.logger.log(
+      '[search-debug] SEARCH_DEBUG_ENABLED=true — each search writes a full report (filter logs by "[search-debug]")',
+    );
+  }
 
   private get searchProvider(): string {
     return this.configService.get<string>('SEARCH_PROVIDER', 'db').toLowerCase();
@@ -601,8 +617,17 @@ export class SearchService {
   }
 
   private isSearchDebugEnabledByEnv(): boolean {
-    const value = this.configService.get<string>('SEARCH_DEBUG_ENABLED', 'false');
-    return value.trim().toLowerCase() === 'true';
+    const raw = this.configService.get<string>('SEARCH_DEBUG_ENABLED', 'false');
+    if (raw == null) {
+      return false;
+    }
+
+    const normalized = String(raw)
+      .trim()
+      .replace(/^["']|["']$/g, '')
+      .toLowerCase();
+
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
   }
 
   private formatSearchDebugReport(payload: Record<string, unknown>): string {
@@ -763,9 +788,16 @@ export class SearchService {
       ...payload,
     });
 
-    // Emit the full report to application logs (Railway, Docker, local terminal).
-    // Filter with "[search-debug]" in your log viewer.
-    this.logger.log(`[search-debug]\n${report}`);
+    // One log line per row so Railway/Docker log viewers show the full report.
+    this.logger.log('[search-debug] ===== SEARCH DEBUG REPORT START =====');
+    report.split('\n').forEach((line) => {
+      if (line.length === 0) {
+        this.logger.log('[search-debug]');
+        return;
+      }
+      this.logger.log(`[search-debug] ${line}`);
+    });
+    this.logger.log('[search-debug] ===== SEARCH DEBUG REPORT END =====');
 
     try {
       const logDir = join(process.cwd(), 'logs');
