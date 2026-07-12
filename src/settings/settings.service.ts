@@ -789,6 +789,51 @@ export class SettingsService implements OnModuleInit {
 
       const missingColumns: TableColumn[] = [];
 
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'vendors_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'vendors_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'attributes_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'attributes_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('product_field_toggles', 'specifications_enabled'))) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'specifications_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn(
+          'product_field_toggles',
+          'weight_and_dimensions_enabled',
+        ))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'weight_and_dimensions_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
       if (!(await queryRunner.hasColumn('product_field_toggles', 'partners_enabled'))) {
         missingColumns.push(
           new TableColumn({
@@ -913,6 +958,51 @@ export class SettingsService implements OnModuleInit {
         missingColumns.push(
           new TableColumn({
             name: 'pricing_view_enabled',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn(
+          'product_field_toggles',
+          'reference_link_visible_admin',
+        ))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'reference_link_visible_admin',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn(
+          'product_field_toggles',
+          'meta_title_visible_admin',
+        ))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'meta_title_visible_admin',
+            type: 'boolean',
+            default: true,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn(
+          'product_field_toggles',
+          'meta_description_visible_admin',
+        ))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'meta_description_visible_admin',
             type: 'boolean',
             default: true,
           }),

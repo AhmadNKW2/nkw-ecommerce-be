@@ -22,7 +22,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "typesense:backfill": "ts-node -r tsconfig-paths/register src/typesense/seed-typesense.script.ts",
-    "reset-password": "node scripts/reset-password/reset-password.js"
+    "reset-password": "node scripts/reset-password/reset-password.js",
+    "ensure-schema": "node scripts/ensure-schema.cjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1079.0",

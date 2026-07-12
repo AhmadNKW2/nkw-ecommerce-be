@@ -26,6 +26,7 @@ import { ProductSlugRedirect } from './entities/product-slug-redirect.entity';
 import { SpecificationsModule } from '../specifications/specifications.module';
 import { ProductImportService } from './product-import.service';
 import { ProductMediaBackfillService } from './product-media-backfill.service';
+import { ProductSchemaService } from './product-schema.service';
 import { BrandsModule } from '../brands/brands.module';
 import { SettingsModule } from '../settings/settings.module';
 
@@ -63,6 +64,7 @@ import { SettingsModule } from '../settings/settings.module';
     ProductsService,
     ProductImportService,
     ProductMediaBackfillService,
+    ProductSchemaService,
   ],
   exports: [ProductsService],
 })
