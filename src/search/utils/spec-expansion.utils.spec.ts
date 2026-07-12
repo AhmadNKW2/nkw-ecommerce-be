@@ -1,5 +1,7 @@
 import {
+  buildConceptSynonymThenProgressiveQueries,
   buildConceptSynonymVariants,
+  buildLayeredConceptExpansionQueries,
   buildMultiConceptVariantCombinations,
   buildProgressiveConceptSearchQueries,
   buildProgressiveWordCombinations,
@@ -94,19 +96,111 @@ describe('spec-expansion.utils', () => {
     });
   });
 
+  describe('buildLayeredConceptExpansionQueries', () => {
+    it('expands full phrase concepts then each token layer', () => {
+      expect(
+        buildLayeredConceptExpansionQueries({
+          fullPhraseConcepts: [
+            {
+              orderedVariants: ['كرت ذاكرة', 'ram card', 'كرت رام'],
+            },
+          ],
+          combinedConcepts: [],
+          tokenConceptLayers: [
+            [{ orderedVariants: ['كرت', 'gpu card', 'graphics card'] }],
+            [{ orderedVariants: ['ذاكرة', 'ram', 'ذاكرة مؤقتة'] }],
+          ],
+          fallbackWordsAppearanceOrder: [],
+          fallbackWordsProgressiveOrder: [],
+        }),
+      ).toEqual([
+        'كرت ذاكرة',
+        'ram card',
+        'كرت رام',
+        'كرت',
+        'gpu card',
+        'graphics card',
+        'ذاكرة',
+        'ram',
+        'ذاكرة مؤقتة',
+      ]);
+    });
+
+    it('uses combined multi-concept layer when two phrase concepts are present', () => {
+      expect(
+        buildLayeredConceptExpansionQueries({
+          fullPhraseConcepts: [],
+          combinedConcepts: [
+            { orderedVariants: ['ذاكرة مؤقتة', 'ram'] },
+            { orderedVariants: ['حاسب محمول', 'لابتوب'] },
+          ],
+          tokenConceptLayers: [],
+          fallbackWordsAppearanceOrder: [],
+          fallbackWordsProgressiveOrder: [],
+        }),
+      ).toEqual([
+        'ذاكرة مؤقتة حاسب محمول',
+        'ram حاسب محمول',
+        'ذاكرة مؤقتة لابتوب',
+        'ram لابتوب',
+      ]);
+    });
+  });
+
+  describe('buildConceptSynonymThenProgressiveQueries', () => {
+    it('runs exact query, synonym with unchanged tail, then progressive fallback', () => {
+      expect(
+        buildConceptSynonymThenProgressiveQueries({
+          exactQuery: 'دفتريه اسس 5070 i7',
+          matchedConcepts: [{ orderedVariants: ['دفتريه', 'لابتوب', 'حاسب محمول'] }],
+          fallbackWordsAppearanceOrder: ['اسس', '5070', 'i7'],
+          fallbackWordsProgressiveOrder: ['i7', '5070', 'اسس'],
+        }),
+      ).toEqual([
+        'دفتريه اسس 5070 i7',
+        'لابتوب اسس 5070 i7',
+        'حاسب محمول اسس 5070 i7',
+        'دفتريه i7 5070 اسس',
+        'دفتريه i7 5070',
+        'دفتريه i7 اسس',
+        'دفتريه 5070 اسس',
+        'دفتريه i7',
+        'دفتريه 5070',
+        'دفتريه اسس',
+        'لابتوب i7 5070 اسس',
+        'لابتوب i7 5070',
+        'لابتوب i7 اسس',
+        'لابتوب 5070 اسس',
+        'لابتوب i7',
+        'لابتوب 5070',
+        'لابتوب اسس',
+        'حاسب محمول i7 5070 اسس',
+        'حاسب محمول i7 5070',
+        'حاسب محمول i7 اسس',
+        'حاسب محمول 5070 اسس',
+        'حاسب محمول i7',
+        'حاسب محمول 5070',
+        'حاسب محمول اسس',
+      ]);
+    });
+  });
+
   describe('buildProgressiveConceptSearchQueries', () => {
     it('builds single-concept queries with fallback words', () => {
       expect(
         buildProgressiveConceptSearchQueries(
           [{ orderedVariants: ['لابتوب', 'حاسب محمول'] }],
           ['5070', 'i7'],
+          ['5070', 'i7'],
+          50,
+          'لابتوب 5070 i7',
         ),
       ).toEqual([
         'لابتوب 5070 i7',
         'حاسب محمول 5070 i7',
         'لابتوب 5070',
-        'حاسب محمول 5070',
         'لابتوب i7',
+        'حاسب محمول 5070',
         'حاسب محمول i7',
       ]);
     });
@@ -118,6 +212,7 @@ describe('spec-expansion.utils', () => {
             { orderedVariants: ['ذاكرة مؤقتة', 'ram'] },
             { orderedVariants: ['حاسب محمول', 'لابتوب'] },
           ],
+          [],
           [],
         ),
       ).toEqual([

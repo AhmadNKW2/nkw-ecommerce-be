@@ -81,18 +81,46 @@ describe('TermConceptLexiconService', () => {
     expect(tokens.has('محمول')).toBe(true);
   });
 
-  it('matches normalized Arabic variants', async () => {
-    const groupWithSpacedVariant: TermGroup = {
-      ...laptopGroup,
-      terms_ar: ['لاب توب', 'لابتوب', 'حاسب محمول'],
+  it('resolves all concept groups for an exact segment match', async () => {
+    const cardGroup: TermGroup = {
+      id: 9,
+      terms_en: ['graphics card', 'gpu card'],
+      terms_ar: ['كرت', 'كرت شاشة'],
+      reference_product_ids: [],
+      concept_key: 'graphics_card',
+      concept_label_en: 'graphics card',
+      concept_label_ar: 'كرت',
+      source_product_id: null,
+      created_at: new Date(),
+      updated_at: new Date(),
     };
-    const service = makeService([groupWithSpacedVariant]);
-    const matches = await service.resolveAllConceptsInQuery(
-      'لاب توب 5070',
-      ['لاب', 'توب', '5070'],
-      'ar',
-    );
+    const memoryCardGroup: TermGroup = {
+      id: 10,
+      terms_en: ['ram card', 'memory card'],
+      terms_ar: ['كرت ذاكرة', 'كرت رام'],
+      reference_product_ids: [],
+      concept_key: 'memory_card',
+      concept_label_en: 'memory card',
+      concept_label_ar: 'كرت ذاكرة',
+      source_product_id: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const segmentedService = makeService([cardGroup, memoryCardGroup, ramGroup]);
 
-    expect(matches.some((match) => match.groupId === 7)).toBe(true);
+    const fullPhraseMatches =
+      await segmentedService.resolveAllConceptGroupsMatchingSegment(
+        'كرت ذاكرة',
+        'ar',
+      );
+    expect(fullPhraseMatches.map((match) => match.groupId)).toEqual([10]);
+
+    const cardMatches =
+      await segmentedService.resolveAllConceptGroupsMatchingSegment('كرت', 'ar');
+    expect(cardMatches.map((match) => match.groupId)).toEqual([9]);
+
+    const ramMatches =
+      await segmentedService.resolveAllConceptGroupsMatchingSegment('ذاكرة', 'ar');
+    expect(ramMatches.some((match) => match.groupId === 3)).toBe(true);
   });
 });

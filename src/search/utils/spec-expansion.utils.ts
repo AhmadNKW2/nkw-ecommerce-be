@@ -243,39 +243,238 @@ export function buildMultiConceptVariantCombinations(
   return result;
 }
 
-export function buildProgressiveConceptSearchQueries(
-  matchedConcepts: Array<{ orderedVariants: string[] }>,
-  orderedFallbackWords: string[],
-  maxConceptCombos = 50,
+export function collectConceptVariantQueries(
+  concepts: Array<{ orderedVariants: string[] }>,
 ): string[] {
+  const queries: string[] = [];
+  const seen = new Set<string>();
+
+  concepts.forEach((concept) => {
+    concept.orderedVariants.forEach((variant) => {
+      const trimmed = variant.trim();
+      if (!trimmed) {
+        return;
+      }
+      const key = normalizeConceptTermKey(trimmed);
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      queries.push(trimmed);
+    });
+  });
+
+  return queries;
+}
+
+function pushUniqueConceptQuery(
+  query: string,
+  seen: Set<string>,
+  output: string[],
+): void {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return;
+  }
+  const key = normalizeConceptTermKey(trimmed);
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  output.push(trimmed);
+}
+
+export type ConceptExpansionQueryParams = {
+  exactQuery?: string;
+  matchedConcepts: Array<{ orderedVariants: string[] }>;
+  fallbackWordsAppearanceOrder: string[];
+  fallbackWordsProgressiveOrder: string[];
+  maxConceptCombos?: number;
+};
+
+/**
+ * Concept expansion query order:
+ * 1) exact user query
+ * 2) each concept synonym + remaining words in appearance order (unchanged)
+ * 3) each concept synonym + progressive word subsets (RTL/LTR fallback order)
+ */
+export function buildConceptSynonymThenProgressiveQueries(
+  params: ConceptExpansionQueryParams,
+): string[] {
+  const {
+    exactQuery,
+    matchedConcepts,
+    fallbackWordsAppearanceOrder,
+    fallbackWordsProgressiveOrder,
+    maxConceptCombos = 50,
+  } = params;
+
+  const queries: string[] = [];
+  const seen = new Set<string>();
+
+  if (exactQuery?.trim()) {
+    pushUniqueConceptQuery(exactQuery.trim(), seen, queries);
+  }
+
   const conceptCombos = buildMultiConceptVariantCombinations(
     matchedConcepts,
     maxConceptCombos,
   );
   if (conceptCombos.length === 0) {
-    return [];
+    return queries;
   }
 
-  const fallbackCombos =
-    orderedFallbackWords.length > 0
-      ? buildProgressiveWordCombinations(orderedFallbackWords)
-      : [[]];
+  const appearanceTail = fallbackWordsAppearanceOrder
+    .map((word) => word.trim())
+    .filter(Boolean)
+    .join(' ');
 
-  const queries: string[] = [];
-  const seen = new Set<string>();
+  conceptCombos.forEach((conceptCombo) => {
+    const prefix = conceptCombo.join(' ').trim();
+    const query = [prefix, appearanceTail].filter(Boolean).join(' ').trim();
+    pushUniqueConceptQuery(query, seen, queries);
+  });
 
-  fallbackCombos.forEach((fallbackCombo) => {
-    conceptCombos.forEach((conceptCombo) => {
-      const query = [...conceptCombo, ...fallbackCombo].filter(Boolean).join(' ').trim();
-      if (!query || seen.has(query)) {
-        return;
-      }
-      seen.add(query);
-      queries.push(query);
+  const progressiveCombos =
+    fallbackWordsProgressiveOrder.length > 0
+      ? buildProgressiveWordCombinations(fallbackWordsProgressiveOrder)
+      : [];
+
+  conceptCombos.forEach((conceptCombo) => {
+    const prefix = conceptCombo.join(' ').trim();
+    progressiveCombos.forEach((fallbackCombo) => {
+      const fallbackTail = fallbackCombo.join(' ').trim();
+      const query = [prefix, fallbackTail].filter(Boolean).join(' ').trim();
+      pushUniqueConceptQuery(query, seen, queries);
     });
   });
 
   return queries;
+}
+
+export type ConceptExpansionLayer = {
+  queries: string[];
+  /** Full-phrase / combined concept layers use detected query category. */
+  restrictToDetectedCategory: boolean;
+  /** Max new hits per synonym query (prevents one loose match from dominating). */
+  perQueryLimit: number;
+};
+
+/**
+ * Layered concept expansion:
+ * 1) all terms from concepts matching the full query phrase
+ * 2) combined multi-concept synonym cartesian (e.g. RAM + laptop together)
+ * 3) each query token's matching concepts in order (e.g. كرت, then ذاكرة)
+ */
+export function buildLayeredConceptExpansionLayers(params: {
+  exactQuery?: string;
+  fullPhraseConcepts: Array<{ orderedVariants: string[] }>;
+  combinedConcepts: Array<{ orderedVariants: string[] }>;
+  tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>>;
+  fallbackWordsAppearanceOrder: string[];
+  fallbackWordsProgressiveOrder: string[];
+  maxConceptCombos?: number;
+}): ConceptExpansionLayer[] {
+  const {
+    exactQuery,
+    fullPhraseConcepts,
+    combinedConcepts,
+    tokenConceptLayers,
+    fallbackWordsAppearanceOrder,
+    fallbackWordsProgressiveOrder,
+    maxConceptCombos = 50,
+  } = params;
+
+  const layers: ConceptExpansionLayer[] = [];
+  let exactQueryPending = exactQuery?.trim() ?? '';
+
+  const takeExactQuery = (): string | undefined => {
+    if (!exactQueryPending) {
+      return undefined;
+    }
+    const value = exactQueryPending;
+    exactQueryPending = '';
+    return value;
+  };
+
+  const fullPhraseQueries = buildConceptSynonymThenProgressiveQueries({
+    exactQuery: takeExactQuery(),
+    matchedConcepts: fullPhraseConcepts,
+    fallbackWordsAppearanceOrder,
+    fallbackWordsProgressiveOrder,
+    maxConceptCombos,
+  });
+  if (fullPhraseQueries.length > 0) {
+    layers.push({
+      queries: fullPhraseQueries,
+      restrictToDetectedCategory: true,
+      perQueryLimit: 25,
+    });
+  }
+
+  if (combinedConcepts.length >= 2) {
+    const combinedQueries = buildConceptSynonymThenProgressiveQueries({
+      exactQuery: takeExactQuery(),
+      matchedConcepts: combinedConcepts,
+      fallbackWordsAppearanceOrder,
+      fallbackWordsProgressiveOrder,
+      maxConceptCombos,
+    });
+    if (combinedQueries.length > 0) {
+      layers.push({
+        queries: combinedQueries,
+        restrictToDetectedCategory: true,
+        perQueryLimit: 25,
+      });
+    }
+  }
+
+  tokenConceptLayers.forEach((layerConcepts) => {
+    const tokenQueries = buildConceptSynonymThenProgressiveQueries({
+      exactQuery: takeExactQuery(),
+      matchedConcepts: layerConcepts,
+      fallbackWordsAppearanceOrder,
+      fallbackWordsProgressiveOrder,
+      maxConceptCombos,
+    });
+    if (tokenQueries.length > 0) {
+      layers.push({
+        queries: tokenQueries,
+        restrictToDetectedCategory: false,
+        perQueryLimit: 40,
+      });
+    }
+  });
+
+  return layers;
+}
+
+export function buildLayeredConceptExpansionQueries(params: {
+  exactQuery?: string;
+  fullPhraseConcepts: Array<{ orderedVariants: string[] }>;
+  combinedConcepts: Array<{ orderedVariants: string[] }>;
+  tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>>;
+  fallbackWordsAppearanceOrder: string[];
+  fallbackWordsProgressiveOrder: string[];
+  maxConceptCombos?: number;
+}): string[] {
+  return buildLayeredConceptExpansionLayers(params).flatMap((layer) => layer.queries);
+}
+
+export function buildProgressiveConceptSearchQueries(
+  matchedConcepts: Array<{ orderedVariants: string[] }>,
+  fallbackWordsAppearanceOrder: string[],
+  fallbackWordsProgressiveOrder: string[],
+  maxConceptCombos = 50,
+  exactQuery?: string,
+): string[] {
+  return buildConceptSynonymThenProgressiveQueries({
+    exactQuery,
+    matchedConcepts,
+    fallbackWordsAppearanceOrder,
+    fallbackWordsProgressiveOrder,
+    maxConceptCombos,
+  });
 }
 
 export function normalizeSearchLocale(

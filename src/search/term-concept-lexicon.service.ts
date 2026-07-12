@@ -27,6 +27,13 @@ type LexiconPhraseEntry = {
   group: TermGroup;
 };
 
+type LexiconSegmentEntry = {
+  groupId: number;
+  conceptKey: string;
+  group: TermGroup;
+  matchedTerm: string;
+};
+
 @Injectable()
 export class TermConceptLexiconService {
   private lexiconCache:
@@ -40,6 +47,7 @@ export class TermConceptLexiconService {
           normalizedToken: string;
           group: TermGroup;
         }>;
+        segmentToGroups: Map<string, LexiconSegmentEntry[]>;
       }
     | null = null;
 
@@ -151,6 +159,29 @@ export class TermConceptLexiconService {
     return matches.sort((left, right) => left.matchStart - right.matchStart);
   }
 
+  async resolveAllConceptGroupsMatchingSegment(
+    segment: string,
+    locale: SearchLocale,
+  ): Promise<MatchedConceptInQuery[]> {
+    const lexicon = await this.getLexicon();
+    const normalizedSegment = normalizeSearchQuery(segment).trim();
+    if (!normalizedSegment) {
+      return [];
+    }
+
+    const entries = lexicon.segmentToGroups.get(normalizedSegment) ?? [];
+    const userTerm = segment.trim() || normalizedSegment;
+
+    return entries.map((entry, index) => ({
+      groupId: entry.groupId,
+      conceptKey: entry.conceptKey,
+      userTerm,
+      matchedTokens: normalizedSegment.split(/\s+/).filter(Boolean),
+      orderedVariants: buildConceptSynonymVariants(userTerm, entry.group, locale),
+      matchStart: index,
+    }));
+  }
+
   getConceptTokensFromMatches(matches: MatchedConceptInQuery[]): Set<string> {
     const tokens = new Set<string>();
     matches.forEach((match) => {
@@ -179,8 +210,21 @@ export class TermConceptLexiconService {
       normalizedToken: string;
       group: TermGroup;
     }> = [];
+    const segmentToGroups = new Map<string, LexiconSegmentEntry[]>();
     const seenPhraseKeys = new Set<string>();
     const seenTokenKeys = new Set<string>();
+
+    const pushSegmentGroup = (
+      normalizedSegment: string,
+      entry: LexiconSegmentEntry,
+    ) => {
+      const existing = segmentToGroups.get(normalizedSegment) ?? [];
+      if (existing.some((item) => item.groupId === entry.groupId)) {
+        return;
+      }
+      existing.push(entry);
+      segmentToGroups.set(normalizedSegment, existing);
+    };
 
     groups.forEach((group) => {
       const conceptKey = group.concept_key?.trim() || `group-${group.id}`;
@@ -199,6 +243,13 @@ export class TermConceptLexiconService {
         if (!normalizedPhrase) {
           return;
         }
+
+        pushSegmentGroup(normalizedPhrase, {
+          groupId: group.id,
+          conceptKey,
+          group,
+          matchedTerm: phrase,
+        });
 
         const tokenCount = normalizedPhrase.split(/\s+/).filter(Boolean).length;
         const phraseKey = `${group.id}:${normalizedPhrase}`;
@@ -245,6 +296,7 @@ export class TermConceptLexiconService {
       loadedAt: now,
       phraseEntries,
       tokenEntries,
+      segmentToGroups,
     };
 
     return this.lexiconCache;

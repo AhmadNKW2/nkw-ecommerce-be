@@ -33,6 +33,8 @@ import {
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
 import {
+  buildLayeredConceptExpansionLayers,
+  buildLayeredConceptExpansionQueries,
   buildProgressiveConceptSearchQueries,
   buildProgressiveWordSearchQueries,
   extractQueryWordsInAppearanceOrder,
@@ -58,6 +60,7 @@ const AUTOCOMPLETE_QUERY_BY_WEIGHTS = AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS;
 const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 
 type ExpansionTierKey =
+  | 'concept'
   | 'primary'
   | 'strong_partial'
   | 'category_brand'
@@ -85,6 +88,7 @@ export class SearchService {
     'sku',
   ]);
   private readonly expansionTierOrder: ExpansionTierKey[] = [
+    'concept',
     'primary',
     'cross_brand_spec',
     'strong_partial',
@@ -472,23 +476,106 @@ export class SearchService {
     return Math.min(200, configured);
   }
 
-  private buildProgressiveExpansionQueries(params: {
+  private async buildProgressiveExpansionQueries(params: {
+    normalizedQuery: string;
+    queryTokens: string[];
+    searchLocale: ReturnType<typeof normalizeSearchLocale>;
     matchedConcepts: Array<{ orderedVariants: string[] }>;
     categoryIntentQuery: string;
-    orderedFallbackWords: string[];
-  }): string[] {
-    if (params.matchedConcepts.length > 0) {
-      return buildProgressiveConceptSearchQueries(
-        params.matchedConcepts,
-        params.orderedFallbackWords,
-        this.getMaxConceptVariantCombos(),
-      );
+    fallbackWordsAppearanceOrder: string[];
+    fallbackWordsProgressiveOrder: string[];
+    excludedFromConceptSegments: Set<string>;
+  }): Promise<{
+    conceptLayers: Array<{
+      queries: string[];
+      restrictToDetectedCategory: boolean;
+      perQueryLimit: number;
+    }>;
+    expansionQueries: string[];
+    conceptDriven: boolean;
+  }> {
+    const conceptSegmentTokens = params.queryTokens
+      .map((token) => token.trim())
+      .filter((token) => token && !params.excludedFromConceptSegments.has(token));
+
+    const fullPhrase = conceptSegmentTokens.join(' ').trim();
+    const fullPhraseConcepts =
+      fullPhrase.length > 0
+        ? await this.termConceptLexicon.resolveAllConceptGroupsMatchingSegment(
+            fullPhrase,
+            params.searchLocale,
+          )
+        : [];
+
+    const useCombinedConceptLayer = params.matchedConcepts.length >= 2;
+    const tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>> = [];
+
+    if (!useCombinedConceptLayer) {
+      for (const token of conceptSegmentTokens) {
+        const layer = await this.termConceptLexicon.resolveAllConceptGroupsMatchingSegment(
+          token,
+          params.searchLocale,
+        );
+        if (layer.length > 0) {
+          tokenConceptLayers.push(layer);
+        }
+      }
     }
 
-    return buildProgressiveWordSearchQueries(
+    const hasConceptExpansion =
+      fullPhraseConcepts.length > 0 ||
+      useCombinedConceptLayer ||
+      tokenConceptLayers.length > 0;
+
+    if (hasConceptExpansion) {
+      const conceptLayers = buildLayeredConceptExpansionLayers({
+        exactQuery: params.normalizedQuery,
+        fullPhraseConcepts,
+        combinedConcepts: useCombinedConceptLayer ? params.matchedConcepts : [],
+        tokenConceptLayers,
+        fallbackWordsAppearanceOrder: params.fallbackWordsAppearanceOrder,
+        fallbackWordsProgressiveOrder: params.fallbackWordsProgressiveOrder,
+        maxConceptCombos: this.getMaxConceptVariantCombos(),
+      });
+      return {
+        conceptLayers,
+        expansionQueries: conceptLayers.flatMap((layer) => layer.queries),
+        conceptDriven: true,
+      };
+    }
+
+    if (params.matchedConcepts.length > 0) {
+      const queries = buildProgressiveConceptSearchQueries(
+        params.matchedConcepts,
+        params.fallbackWordsAppearanceOrder,
+        params.fallbackWordsProgressiveOrder,
+        this.getMaxConceptVariantCombos(),
+        params.normalizedQuery,
+      );
+      return {
+        conceptLayers: queries.length
+          ? [
+              {
+                queries,
+                restrictToDetectedCategory: true,
+                perQueryLimit: 25,
+              },
+            ]
+          : [],
+        expansionQueries: queries,
+        conceptDriven: true,
+      };
+    }
+
+    const wordQueries = buildProgressiveWordSearchQueries(
       params.categoryIntentQuery,
-      params.orderedFallbackWords,
+      params.fallbackWordsProgressiveOrder,
     );
+    return {
+      conceptLayers: [],
+      expansionQueries: wordQueries,
+      conceptDriven: false,
+    };
   }
 
   private getPrimaryEnoughCount(): number {
@@ -565,6 +652,24 @@ export class SearchService {
         lines.push(`  ${index + 1}. ${query}`);
       });
     }
+    if (
+      Array.isArray(payload.concept_query_debug) &&
+      payload.concept_query_debug.length > 0
+    ) {
+      lines.push('', '▶ CONCEPT QUERY HITS (per synonym, in order)');
+      (
+        payload.concept_query_debug as Array<{
+          query: string;
+          added: number;
+          categoryFiltered: boolean;
+        }>
+      ).forEach((entry, index) => {
+        const filterNote = entry.categoryFiltered ? ' [category filter]' : '';
+        lines.push(
+          `  ${index + 1}. "${entry.query}" → +${entry.added} new${filterNote}`,
+        );
+      });
+    }
 
     if (
       payload.price_stripped_phrases ||
@@ -593,7 +698,9 @@ export class SearchService {
     lines.push(
       `  Decision:     ${
         payload.primary_enough === true
-          ? 'Enough matches → expansion skipped'
+          ? payload.expansion_applied
+            ? 'Enough matches, but concept layer leads → expansion runs'
+            : 'Enough matches → expansion skipped'
           : payload.primary_enough === false
             ? 'Not enough → expansion runs'
             : '—'
@@ -608,10 +715,14 @@ export class SearchService {
         | undefined;
 
       if (tiers && tiers.length > 0) {
+        let startingListEmitted = false;
         tiers.forEach((entry) => {
           const label = entry.tier.padEnd(20);
-          if (entry.tier === 'primary') {
-            lines.push(`  ${label} ${entry.added} products  (starting list)`);
+          if (entry.added > 0 && !startingListEmitted) {
+            startingListEmitted = true;
+            lines.push(
+              `  ${label} ${entry.added} products  (starting list)${entry.note ? `  ${entry.note}` : ''}`,
+            );
             return;
           }
           if (entry.added > 0) {
@@ -723,15 +834,7 @@ export class SearchService {
 
     return this.expansionTierOrder.map((tier) => {
       const added = tiers[tier]?.length ?? 0;
-      if (tier === 'primary') {
-        runningTotal = added;
-        return { tier, added, total: runningTotal, note: notes[tier] };
-      }
-
-      if (added > 0) {
-        runningTotal += added;
-      }
-
+      runningTotal += added;
       return {
         tier,
         added,
@@ -1722,6 +1825,11 @@ export class SearchService {
       matchStart: number;
     }>;
     expansionQueries: string[];
+    conceptQueryDebug?: Array<{
+      query: string;
+      added: number;
+      categoryFiltered: boolean;
+    }>;
   }> {
     const maxCandidates = Math.max(
       params.requestedLimit,
@@ -1736,7 +1844,8 @@ export class SearchService {
       Math.ceil(tokens.length * Math.max(0.5, minTokenMatchRatio)),
     );
     const idsByTier: Record<ExpansionTierKey, number[]> = {
-      primary: [...params.primaryIds],
+      concept: [],
+      primary: [],
       strong_partial: [],
       category_brand: [],
       cross_brand_spec: [],
@@ -1746,7 +1855,10 @@ export class SearchService {
       keyword: [],
     };
     const tierNotes: Partial<Record<ExpansionTierKey, string>> = {};
-    const uniqueIds = new Set<number>(params.primaryIds);
+    // Seeded empty (not with primaryIds) so the concept tier can claim shared
+    // ids first and define the leading order; the loose primary results are
+    // then added as fill for anything the concept layer didn't already cover.
+    const uniqueIds = new Set<number>();
     const primaryFoundCount = params.primaryIds.length;
     const addIds = (tier: ExpansionTierKey, ids: number[]) => {
       ids.forEach((id) => {
@@ -1783,6 +1895,13 @@ export class SearchService {
       tokens,
       searchLocale,
     );
+    // Only brand names are structural noise for concept matching. Category
+    // words (e.g. "كرت"/"ذاكره" for the Memory Cards category) must stay in the
+    // concept segment so the full phrase and per-word concept layers resolve —
+    // otherwise the requested layering (full phrase → each word) breaks.
+    const excludedFromConceptSegments = new Set<string>([
+      ...brandTokensFromQuery,
+    ]);
     const conceptTokensFromQuery =
       this.termConceptLexicon.getConceptTokensFromMatches(matchedConcepts);
     const excludedFromFallback = new Set<string>([
@@ -1803,13 +1922,75 @@ export class SearchService {
       .join(' ')
       .trim();
     const categoryIntentQuery = baseIntentQuery;
-    const progressiveExpansionQueries = this.buildProgressiveExpansionQueries({
-      matchedConcepts,
-      categoryIntentQuery,
-      orderedFallbackWords,
-    });
-    const hasConceptMatches = matchedConcepts.length > 0;
+    const { conceptLayers, expansionQueries: progressiveExpansionQueries, conceptDriven } =
+      await this.buildProgressiveExpansionQueries({
+        normalizedQuery: normalizedQ,
+        queryTokens: tokens,
+        searchLocale,
+        matchedConcepts,
+        categoryIntentQuery,
+        fallbackWordsAppearanceOrder: fallbackWordsInAppearanceOrder,
+        fallbackWordsProgressiveOrder: orderedFallbackWords,
+        excludedFromConceptSegments,
+      });
+    const hasConceptMatches =
+      matchedConcepts.length > 0 || progressiveExpansionQueries.length > 0;
     const hasExpansionQueries = progressiveExpansionQueries.length > 0;
+    const conceptQueryDebug: Array<{
+      query: string;
+      added: number;
+      categoryFiltered: boolean;
+    }> = [];
+
+    // Concept-driven ordering: when the query resolves to one or more concepts,
+    // run the layered concept queries FIRST so they define the primary result
+    // order (exact phrase -> full-phrase concept synonyms -> per-token concept
+    // matches -> fallback words). This is the same leading layer as the primary
+    // search, not a separate fallback tier.
+    if (conceptDriven && conceptLayers.length > 0) {
+      for (const conceptLayer of conceptLayers) {
+        const layerFilterBy =
+          conceptLayer.restrictToDetectedCategory &&
+          categoryIdsFromQueryOnly.length > 0
+            ? this.mergeFilterByClauses(
+                params.baseFilterBy,
+                `category_ids:=[${categoryIdsFromQueryOnly.join(',')}]`,
+              )
+            : params.baseFilterBy;
+
+        for (const conceptQuery of conceptLayer.queries) {
+          if (uniqueIds.size >= params.requestedLimit) break;
+          const beforeSize = uniqueIds.size;
+          const ids = await this.searchTypesenseIds({
+            q: conceptQuery,
+            filterBy: layerFilterBy,
+            sortBy: '_text_match:desc,created_at_ts:desc',
+            limit: Math.min(
+              conceptLayer.perQueryLimit,
+              maxCandidates - uniqueIds.size,
+            ),
+          });
+          addIds('concept', ids);
+          if (params.debug) {
+            conceptQueryDebug.push({
+              query: conceptQuery,
+              added: uniqueIds.size - beforeSize,
+              categoryFiltered: conceptLayer.restrictToDetectedCategory,
+            });
+          }
+        }
+      }
+      if (idsByTier.concept.length > 0) {
+        tierNotes.concept =
+          matchedConcepts.length > 0
+            ? 'exact phrase + concept synonyms (leads ordering)'
+            : 'layered concept phrase matches (leads ordering)';
+      }
+    }
+
+    // Loose primary text-match results fill in behind the concept layer for any
+    // products the concept queries did not already surface.
+    addIds('primary', params.primaryIds);
 
     if (
       enabledLevels.has('cross_brand_spec') &&
@@ -1938,7 +2119,9 @@ export class SearchService {
       uniqueIds.size < params.requestedLimit &&
       hasExpansionQueries
     ) {
-      if (hasBrandInQuery) {
+      if (conceptDriven) {
+        tierNotes.specification = 'handled by concept tier (leads ordering)';
+      } else if (hasBrandInQuery) {
         tierNotes.specification = 'handled by cross_brand_spec sequence';
       } else {
       for (const wordQuery of progressiveExpansionQueries) {
@@ -2010,6 +2193,7 @@ export class SearchService {
       tierNotes,
       matchedConcepts,
       expansionQueries: progressiveExpansionQueries.slice(0, 12),
+      conceptQueryDebug: params.debug ? conceptQueryDebug : undefined,
     };
   }
 
@@ -2058,9 +2242,29 @@ export class SearchService {
       .filter((id) => Number.isInteger(id) && id > 0);
     const primaryCount = orderedProductIds.length;
     const primaryIsEnough = primaryCount >= primaryEnoughCount;
+
+    // Concept-driven queries must always let the concept layer define ordering,
+    // even when the loose primary search alone already returns "enough" hits.
+    // Otherwise the primary_enough threshold would skip the concept layer and
+    // fall back to raw text-match order (the reported كرت ذاكرة bug).
+    const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
+    const conceptDetectionLocale = normalizeSearchLocale(
+      (dto as any).locale,
+      conceptDetectionTokens,
+    );
+    const queryConcepts =
+      expansionEnabled && normalizedQuery && normalizedQuery !== '*'
+        ? await this.termConceptLexicon.resolveAllConceptsInQuery(
+            normalizedQuery,
+            conceptDetectionTokens,
+            conceptDetectionLocale,
+          )
+        : [];
+    const hasQueryConcepts = queryConcepts.length > 0;
+
     const shouldExpand =
       expansionEnabled &&
-      !primaryIsEnough &&
+      (!primaryIsEnough || hasQueryConcepts) &&
       perPage > 0 &&
       startOffset + perPage <= maxCandidates;
     let expansionMeta:
@@ -2076,6 +2280,11 @@ export class SearchService {
             userTerm: string;
           }>;
           expansionQueries?: string[];
+          conceptQueryDebug?: Array<{
+            query: string;
+            added: number;
+            categoryFiltered: boolean;
+          }>;
         }
       | undefined;
 
@@ -2101,6 +2310,7 @@ export class SearchService {
         tierNotes: expanded.tierNotes,
         matchedConcepts: expanded.matchedConcepts,
         expansionQueries: expanded.expansionQueries,
+        conceptQueryDebug: expanded.conceptQueryDebug,
       };
     }
     const pageProductIds = orderedProductIds.slice(startOffset, startOffset + perPage);
@@ -2217,6 +2427,7 @@ export class SearchService {
         detectedCategoryIds,
       );
       const tierCounts: Record<ExpansionTierKey, number[]> = expansionMeta?.tiers ?? {
+        concept: [],
         primary: Array.from({ length: primaryCount }),
         strong_partial: [],
         category_brand: [],
@@ -2261,6 +2472,7 @@ export class SearchService {
               )
             : undefined,
         expansion_queries: expansionMeta?.expansionQueries,
+        concept_query_debug: expansionMeta?.conceptQueryDebug,
         primary_found: expansionMeta?.primaryFoundCount ?? primaryCount,
         final_candidates: orderedProductIds.length,
         primary_enough_threshold: primaryEnoughCount,
