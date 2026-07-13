@@ -16,7 +16,7 @@ export type MatchedConceptInQuery = {
   matchedTokens: string[];
   orderedVariants: string[];
   matchStart: number;
-};
+}; 
 
 export type QueryVariantSegment = {
   text: string;
