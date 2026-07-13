@@ -3076,30 +3076,39 @@ export class ProductsService {
           existingCategoryId: existingProduct.category_id ?? null,
           existingProductCategories: existingProduct.productCategories,
         });
+        const nextVendorId =
+          basicInfoChanges.vendor_id !== undefined
+            ? basicInfoChanges.vendor_id
+            : existingProduct.vendor_id ?? null;
+        const nextBrandId =
+          basicInfoChanges.brand_id !== undefined
+            ? basicInfoChanges.brand_id
+            : existingProduct.brand_id ?? null;
+        const nextOriginalVendorPrice =
+          basicInfoChanges.original_vendor_price !== undefined
+            ? basicInfoChanges.original_vendor_price
+            : existingProduct.original_vendor_price ?? null;
+        const nextOriginalVendorSalePrice =
+          basicInfoChanges.original_vendor_sale_price !== undefined
+            ? basicInfoChanges.original_vendor_sale_price
+            : existingProduct.original_vendor_sale_price ?? null;
         const managedPricingFromRule =
           await this.computeManagedPricingFromOriginalInput({
-            vendor_id:
-              (basicInfoChanges.vendor_id ??
-                existingProduct.vendor_id ??
-                null) as number | null,
-            brand_id:
-              (basicInfoChanges.brand_id ??
-                existingProduct.brand_id ??
-                null) as number | null,
+            vendor_id: nextVendorId as number | null,
+            brand_id: nextBrandId as number | null,
             categoryIds: categoryIdsForPricing,
-            original_vendor_price:
-              basicInfoChanges.original_vendor_price ??
-              existingProduct.original_vendor_price ??
-              null,
-            original_vendor_sale_price:
-              basicInfoChanges.original_vendor_sale_price ??
-              existingProduct.original_vendor_sale_price ??
-              null,
+            original_vendor_price: nextOriginalVendorPrice,
+            original_vendor_sale_price: nextOriginalVendorSalePrice,
           });
 
         if (managedPricingFromRule) {
           basicInfoChanges.price = managedPricingFromRule.price;
           basicInfoChanges.sale_price = managedPricingFromRule.sale_price;
+        } else if (
+          basicInfoChanges.original_vendor_sale_price === null
+        ) {
+          // Clearing the original sale price also removes the managed sale price.
+          basicInfoChanges.sale_price = null;
         }
       }
 

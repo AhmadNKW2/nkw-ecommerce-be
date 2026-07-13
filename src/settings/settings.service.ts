@@ -372,14 +372,6 @@ export class SettingsService implements OnModuleInit {
       params.originalVendorSalePrice !== null &&
       params.originalVendorSalePrice !== undefined
     ) {
-      const salePricingContext: ProductPricingContext = {
-        ...pricingContext,
-        originalPrice: params.originalVendorSalePrice,
-      };
-      const matchedSalePriceRule = params.fixedPercentage
-        ? null
-        : findBestMatchingProductPriceRule(activeRules, salePricingContext);
-
       salePrice =
         params.fixedPercentage !== undefined
           ? calculateManagedPrice(
@@ -387,16 +379,16 @@ export class SettingsService implements OnModuleInit {
               params.fixedPercentage,
               params.fixedAdjustmentType ?? 'decrease',
             )
-          : matchedSalePriceRule
+          : matchedPriceRule
             ? calculateManagedPrice(
                 params.originalVendorSalePrice,
-                matchedSalePriceRule.percentage,
-                matchedSalePriceRule.adjustment_type ?? 'decrease',
+                matchedPriceRule.percentage,
+                matchedPriceRule.adjustment_type ?? 'decrease',
               )
             : roundManagedProductPrice(params.originalVendorSalePrice);
       salePrice = ensureSalePriceBelowPrice(price, salePrice);
-      matchedSaleRule = matchedSalePriceRule
-        ? toAppliedProductPriceRule(matchedSalePriceRule)
+      matchedSaleRule = matchedPriceRule
+        ? toAppliedProductPriceRule(matchedPriceRule)
         : null;
     }
 
@@ -1202,8 +1194,48 @@ export class SettingsService implements OnModuleInit {
           WHERE max_product_price IS NULL
         `);
       }
+
+      await this.relaxLegacyProductPriceRuleColumns(queryRunner);
     } finally {
       await queryRunner.release();
+    }
+  }
+
+  private async relaxLegacyProductPriceRuleColumns(queryRunner: {
+    hasColumn: (table: string, column: string) => Promise<boolean>;
+    query: (sql: string) => Promise<unknown>;
+  }): Promise<void> {
+    if (await queryRunner.hasColumn('product_price_rules', 'min_vendor_price')) {
+      await queryRunner.query(`
+        ALTER TABLE product_price_rules
+        ALTER COLUMN min_vendor_price DROP NOT NULL
+      `);
+    }
+
+    const legacyIndexes = [
+      'idx_product_price_rules_vendor_id',
+      'idx_product_price_rules_brand_id',
+      'idx_product_price_rules_min_vendor_price',
+    ];
+
+    for (const indexName of legacyIndexes) {
+      await queryRunner.query(`DROP INDEX IF EXISTS "${indexName}"`);
+    }
+
+    const legacyColumns = [
+      'vendor_id',
+      'brand_id',
+      'min_vendor_price',
+      'max_vendor_price',
+    ];
+
+    for (const columnName of legacyColumns) {
+      if (await queryRunner.hasColumn('product_price_rules', columnName)) {
+        await queryRunner.query(`
+          ALTER TABLE product_price_rules
+          DROP COLUMN IF EXISTS "${columnName}"
+        `);
+      }
     }
   }
 

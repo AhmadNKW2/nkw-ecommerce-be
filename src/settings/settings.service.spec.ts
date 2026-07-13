@@ -14,6 +14,7 @@ describe('SettingsService', () => {
     hasColumn: jest.Mock;
     createTable: jest.Mock;
     addColumns: jest.Mock;
+    query: jest.Mock;
     release: jest.Mock;
   };
   let productPriceRuleRepository: {
@@ -64,6 +65,7 @@ describe('SettingsService', () => {
       hasColumn: jest.fn().mockResolvedValue(true),
       createTable: jest.fn().mockResolvedValue(undefined),
       addColumns: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue(undefined),
       release: jest.fn().mockResolvedValue(undefined),
     };
 
@@ -202,13 +204,13 @@ describe('SettingsService', () => {
     expect(transactionProductRepository.update).toHaveBeenNthCalledWith(1, 10, {
       original_vendor_price: 33,
       original_vendor_sale_price: 29.99,
-      price: 32.6,
-      sale_price: 29.6,
+      price: 32.5,
+      sale_price: 29.5,
     });
     expect(transactionProductRepository.update).toHaveBeenNthCalledWith(2, 11, {
       original_vendor_price: 12.49,
       original_vendor_sale_price: null,
-      price: 12.3,
+      price: 12.5,
       sale_price: null,
     });
     expect(result).toEqual({
@@ -217,5 +219,46 @@ describe('SettingsService', () => {
       message:
         'Existing product prices were repriced successfully from their current catalog before-sale and after-sale values.',
     });
+  });
+
+  it('applies the rule selected by original price to price and sale price', async () => {
+    productPriceRuleRepository.find.mockResolvedValue([
+      {
+        id: 8,
+        vendor_ids: null,
+        brand_ids: null,
+        category_ids: null,
+        price_condition: 'between',
+        adjustment_type: 'decrease',
+        min_product_price: 90,
+        max_product_price: 110,
+        percentage: 10,
+        is_active: true,
+      },
+    ]);
+
+    const result = await service.calculateManagedProductPrices({
+      originalVendorPrice: 100,
+      originalVendorSalePrice: 80,
+    });
+
+    expect(result.price).toBe(90);
+    expect(result.salePrice).toBe(72);
+    expect(result.appliedPriceRule?.id).toBe(8);
+    expect(result.appliedSalePriceRule?.id).toBe(8);
+  });
+
+  it('keeps original prices when no pricing rule matches', async () => {
+    productPriceRuleRepository.find.mockResolvedValue([]);
+
+    const result = await service.calculateManagedProductPrices({
+      originalVendorPrice: 100.21,
+      originalVendorSalePrice: 80.42,
+    });
+
+    expect(result.price).toBe(100);
+    expect(result.salePrice).toBe(80.5);
+    expect(result.appliedPriceRule).toBeNull();
+    expect(result.appliedSalePriceRule).toBeNull();
   });
 });

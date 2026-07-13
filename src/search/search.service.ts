@@ -516,6 +516,37 @@ export class SearchService implements OnModuleInit {
     return configured;
   }
 
+  private getExpansionOrderedIdsCacheTtlMs(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_EXPANSION_ORDERED_IDS_CACHE_TTL_MS', '300000'),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 300_000;
+    }
+    return configured;
+  }
+
+  private async buildExpansionCacheKey(
+    dto: SearchQueryDto,
+    isAdmin: boolean,
+    filterBy?: string,
+  ): Promise<string> {
+    const payload = JSON.stringify({
+      q: normalizeSearchQuery(dto.q),
+      isAdmin,
+      filterBy: filterBy ?? '',
+      sort_by: dto.sort_by,
+      brand_id: dto.brand_id,
+      brand_ids: (dto as any).brand_ids,
+      category_id: dto.category_id,
+      category_ids: (dto as any).category_ids,
+      min_price: dto.min_price,
+      max_price: dto.max_price,
+      locale: dto.locale,
+    });
+    return this.searchCacheService.buildCacheKey('search-expansion', payload);
+  }
+
   private getConceptExpansionMultiSearchBatchSize(): number {
     const configured = Number(
       this.configService.get<string>(
@@ -2056,7 +2087,7 @@ export class SearchService implements OnModuleInit {
         }
       }
 
-      const perQueryLimit = Math.min(100, maxCandidates);
+      const perQueryLimit = Math.min(60, maxCandidates);
       const batchSize = this.getConceptExpansionMultiSearchBatchSize();
       const hitsByPlanIndex = new Map<number, number[]>();
       for (let index = 0; index < bucketPlans.length; index += batchSize) {
@@ -2198,7 +2229,8 @@ export class SearchService implements OnModuleInit {
     if (
       enabledLevels.has('keyword') &&
       uniqueIds.size < params.requestedLimit &&
-      tokens.length > 0
+      tokens.length > 0 &&
+      !hasBrandInQuery
     ) {
       const keywordTokens = (hasBrandInQuery
         ? tokens.filter((token) => !brandTokensFromQuery.has(token))
@@ -2286,50 +2318,30 @@ export class SearchService implements OnModuleInit {
     const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
     const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
-    const expansionPrepPromise =
+    const detectedEntities =
       expansionEnabled && normalizedQuery && normalizedQuery !== '*'
-        ? this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
-        : Promise.resolve({ brandIds: [], categoryIds: [] });
-    const primaryFetchLimit = Math.min(
-      maxCandidates,
-      Math.max(startOffset + perPage, primaryEnoughCount),
-    );
-    const params: SearchParams<Record<string, any>> = {
-      q: normalizedQuery,
-      query_by: PRODUCT_QUERY_BY,
-      query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
-      text_match_type: 'max_weight',
-      prioritize_token_position: true,
-      drop_tokens_threshold: 0,
-      filter_by: filterBy,
-      sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin, dto.q),
-      facet_by: this.getTypesenseFacetFields(),
-      max_facet_values: 100,
-      page: 1,
-      per_page: primaryFetchLimit,
-      num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(normalizedQuery)),
-      ...(fullResponse ? { include_fields: 'id' } : {}),
-    };
-
-    const [result, detectedEntities] = await Promise.all([
-      this.typesenseService.search(params),
-      expansionPrepPromise,
-    ]);
-    const hits = Array.isArray(result.hits) ? result.hits : [];
-    let orderedProductIds = hits
-      .map((hit: any) => Number(hit?.document?.id))
-      .filter((id) => Number.isInteger(id) && id > 0);
-    const primaryCount = orderedProductIds.length;
-    const primaryIsEnough = primaryCount >= primaryEnoughCount;
+        ? await this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
+        : { brandIds: [], categoryIds: [] };
     const hasStructuredQueryIntent =
       conceptDetectionTokens.length > 1 ||
       detectedEntities.brandIds.length > 0;
-
-    const shouldExpand =
+    const useBrandBucketFastPath =
       expansionEnabled &&
-      (!primaryIsEnough || hasStructuredQueryIntent) &&
+      hasStructuredQueryIntent &&
+      detectedEntities.brandIds.length > 0 &&
       perPage > 0 &&
       startOffset + perPage <= maxCandidates;
+
+    let hits: Array<{ document?: Record<string, any> }> = [];
+    let result: {
+      found?: number;
+      search_time_ms?: number;
+      facet_counts?: unknown;
+    } = { found: 0, search_time_ms: 0 };
+    let orderedProductIds: number[] = [];
+    let primaryCount = 0;
+    let primaryIsEnough = false;
+    let shouldExpand = false;
     let expansionMeta:
       | {
           tiers: Record<ExpansionTierKey, number[]>;
@@ -2347,31 +2359,113 @@ export class SearchService implements OnModuleInit {
         }
       | undefined;
 
-    if (shouldExpand) {
-      const requestedExpansionCount = Math.max(
-        startOffset + perPage,
-        primaryCount + this.getExpansionExtraWhenLow(),
-      );
-      const expanded = await this.collectExpandedTypesenseIds({
+    if (useBrandBucketFastPath) {
+      shouldExpand = true;
+      const expansionCacheKey = await this.buildExpansionCacheKey(
         dto,
         isAdmin,
-        baseFilterBy: filterBy,
-        primaryIds: orderedProductIds,
-        requestedLimit: requestedExpansionCount,
-        debug: debugSearchEnabled,
-      });
-      orderedProductIds = expanded.orderedIds;
-      expansionMeta = {
-        tiers: expanded.idsByTier,
-        primaryFoundCount: expanded.primaryFoundCount,
-        detectedBrandIds: expanded.detectedBrandIds,
-        detectedCategoryIds: expanded.detectedCategoryIds,
-        tierNotes: expanded.tierNotes,
-        segments: expanded.segments,
-        expansionQueries: expanded.expansionQueries,
-        conceptQueryDebug: expanded.conceptQueryDebug,
+        filterBy,
+      );
+      const cachedExpansion =
+        !debugSearchEnabled
+          ? await this.cacheManager.get<{ orderedIds: number[] }>(expansionCacheKey)
+          : null;
+
+      if (cachedExpansion?.orderedIds?.length) {
+        orderedProductIds = cachedExpansion.orderedIds;
+      } else {
+        const expanded = await this.collectExpandedTypesenseIds({
+          dto,
+          isAdmin,
+          baseFilterBy: filterBy,
+          primaryIds: [],
+          requestedLimit: maxCandidates,
+          debug: debugSearchEnabled,
+        });
+        orderedProductIds = expanded.orderedIds;
+        expansionMeta = {
+          tiers: expanded.idsByTier,
+          primaryFoundCount: expanded.primaryFoundCount,
+          detectedBrandIds: expanded.detectedBrandIds,
+          detectedCategoryIds: expanded.detectedCategoryIds,
+          tierNotes: expanded.tierNotes,
+          segments: expanded.segments,
+          expansionQueries: expanded.expansionQueries,
+          conceptQueryDebug: expanded.conceptQueryDebug,
+        };
+        if (!debugSearchEnabled && orderedProductIds.length > 0) {
+          await this.cacheManager.set(
+            expansionCacheKey,
+            { orderedIds: orderedProductIds },
+            this.getExpansionOrderedIdsCacheTtlMs(),
+          );
+        }
+      }
+      result.found = orderedProductIds.length;
+    } else {
+      const primaryFetchLimit = Math.min(
+        maxCandidates,
+        Math.max(startOffset + perPage, primaryEnoughCount),
+      );
+      const params: SearchParams<Record<string, any>> = {
+        q: normalizedQuery,
+        query_by: PRODUCT_QUERY_BY,
+        query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+        text_match_type: 'max_weight',
+        prioritize_token_position: true,
+        drop_tokens_threshold: 0,
+        filter_by: filterBy,
+        sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin, dto.q),
+        facet_by: this.getTypesenseFacetFields(),
+        max_facet_values: 100,
+        page: 1,
+        per_page: primaryFetchLimit,
+        num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(normalizedQuery)),
+        ...(fullResponse ? { include_fields: 'id' } : {}),
       };
+
+      const searchResult = await this.typesenseService.search(params);
+      result = searchResult;
+      hits = Array.isArray(searchResult.hits) ? searchResult.hits : [];
+      orderedProductIds = hits
+        .map((hit: any) => Number(hit?.document?.id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+      primaryCount = orderedProductIds.length;
+      primaryIsEnough = primaryCount >= primaryEnoughCount;
+
+      shouldExpand =
+        expansionEnabled &&
+        (!primaryIsEnough || hasStructuredQueryIntent) &&
+        perPage > 0 &&
+        startOffset + perPage <= maxCandidates;
+
+      if (shouldExpand) {
+        const requestedExpansionCount = Math.max(
+          startOffset + perPage,
+          primaryCount + this.getExpansionExtraWhenLow(),
+        );
+        const expanded = await this.collectExpandedTypesenseIds({
+          dto,
+          isAdmin,
+          baseFilterBy: filterBy,
+          primaryIds: orderedProductIds,
+          requestedLimit: requestedExpansionCount,
+          debug: debugSearchEnabled,
+        });
+        orderedProductIds = expanded.orderedIds;
+        expansionMeta = {
+          tiers: expanded.idsByTier,
+          primaryFoundCount: expanded.primaryFoundCount,
+          detectedBrandIds: expanded.detectedBrandIds,
+          detectedCategoryIds: expanded.detectedCategoryIds,
+          tierNotes: expanded.tierNotes,
+          segments: expanded.segments,
+          expansionQueries: expanded.expansionQueries,
+          conceptQueryDebug: expanded.conceptQueryDebug,
+        };
+      }
     }
+
     const pageProductIds = orderedProductIds.slice(startOffset, startOffset + perPage);
 
     let products: any[] = [];
@@ -2392,6 +2486,8 @@ export class SearchService implements OnModuleInit {
         pageProductIds,
         true,
       );
+    } else if (useBrandBucketFastPath) {
+      products = await this.buildSearchCardsFromTypesenseIds(pageProductIds, isAdmin);
     } else {
       const imageUrlsByProductId =
         await this.productsService.findPrimaryImageUrlsByProductIds(pageProductIds);
@@ -2433,16 +2529,20 @@ export class SearchService implements OnModuleInit {
 
     let facetCountsSource = result.facet_counts;
     if (shouldExpand && orderedProductIds.length > 0) {
+      const facetPoolIds = orderedProductIds.slice(0, this.typesenseIdPageSize);
       const facetsFromExpandedPool = await this.typesenseService.search({
         q: '*',
         query_by: PRODUCT_CARD_QUERY_BY,
-        filter_by: `id:=[${orderedProductIds.join(',')}]`,
+        filter_by: `id:=[${facetPoolIds.join(',')}]`,
         facet_by: this.getTypesenseFacetFields(),
         max_facet_values: 100,
         page: 1,
         per_page: 1,
       });
       facetCountsSource = facetsFromExpandedPool.facet_counts;
+      if (useBrandBucketFastPath) {
+        result.search_time_ms = facetsFromExpandedPool.search_time_ms;
+      }
     }
 
     const totalCount = shouldExpand
