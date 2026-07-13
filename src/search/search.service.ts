@@ -530,6 +530,44 @@ export class SearchService implements OnModuleInit {
     return Math.min(200, configured);
   }
 
+  /**
+   * When Typesense already has multi-way concept synonyms, re-querying every
+   * lexicon synonym as a separate expansion string only multiplies work
+   * (same_brand × cross_brand × bucket levels). Keep the user/locale-first
+   * term; Typesense expands the rest inside each search.
+   */
+  private isTypesenseConceptSynonymsEnabled(): boolean {
+    const raw = this.configService.get<string>(
+      'SEARCH_TYPESENSE_CONCEPT_SYNONYMS',
+      'true',
+    );
+    return raw.trim().toLowerCase() !== 'false';
+  }
+
+  private getMaxVariantsPerConcept(): number | null {
+    const defaultWhenSynonyms = this.isTypesenseConceptSynonymsEnabled()
+      ? '1'
+      : '0';
+    const configured = Number(
+      this.configService.get<string>(
+        'SEARCH_EXPANSION_MAX_VARIANTS_PER_CONCEPT',
+        defaultWhenSynonyms,
+      ),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return null;
+    }
+    return Math.min(50, configured);
+  }
+
+  private limitConceptOrderedVariants(orderedVariants: string[]): string[] {
+    const maxVariants = this.getMaxVariantsPerConcept();
+    if (maxVariants == null) {
+      return orderedVariants;
+    }
+    return orderedVariants.slice(0, maxVariants);
+  }
+
   private getPrimaryEnoughCount(): number {
     const configured = Number(
       this.configService.get<string>('SEARCH_EXPANSION_PRIMARY_ENOUGH_COUNT', '125'),
@@ -2314,7 +2352,9 @@ export class SearchService implements OnModuleInit {
     const variantLevels = buildVariantLevelQueries(
       segmented.segments.map((segment) => ({
         text: segment.text,
-        orderedVariants: segment.orderedVariants,
+        orderedVariants: this.limitConceptOrderedVariants(
+          segment.orderedVariants,
+        ),
       })),
       this.getMaxConceptVariantCombos(),
     );

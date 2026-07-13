@@ -6,7 +6,7 @@ const ARABIC_SCRIPT =
 export type SearchLocale = 'ar' | 'en';
 
 /** Bump when concept expansion query ordering changes (visible on GET /health). */
-export const SEARCH_EXPANSION_VERSION = '2026-07-13-expansion-name-first-levels';
+export const SEARCH_EXPANSION_VERSION = '2026-07-14-typesense-synonym-variants';
 
 export type ConceptSynonymSource = {
   terms_en?: string[] | null;
