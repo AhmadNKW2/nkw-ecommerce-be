@@ -12,7 +12,6 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { BulkUpdateProductPricingDto } from './dto/bulk-update-product-pricing.dto';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { UpdateProductFieldTogglesDto } from './dto/product-field-toggles.dto';
@@ -116,12 +115,5 @@ export class SettingsController {
   @Roles(UserRole.ADMIN)
   repriceExistingProducts() {
     return this.settingsService.repriceExistingProductsByFixedPercentage();
-  }
-
-  @Post('pricing-rules/bulk-update')
-  @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN)
-  bulkUpdateProductPricing(@Body() dto: BulkUpdateProductPricingDto) {
-    return this.settingsService.bulkUpdateProductPricing(dto);
   }
 }

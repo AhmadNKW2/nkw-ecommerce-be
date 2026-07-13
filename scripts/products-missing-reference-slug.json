@@ -1,14 +1,8 @@
 {
-  "generated_at": "2026-07-13T12:17:01.703Z",
+  "generated_at": "2026-07-13T12:58:28.173Z",
   "description": "Products with null or empty reference_slug",
-  "total_products": 3581,
-  "count": 9,
+  "count": 4,
   "summary": [
-    {
-      "vendor_id": 1,
-      "vendor_name": "City Center",
-      "count": 5
-    },
     {
       "vendor_id": 2,
       "vendor_name": "Midas Computer Center",
@@ -24,11 +18,6 @@
     1448,
     1586,
     2390,
-    3540,
-    4791,
-    4792,
-    4795,
-    4796,
     4899
   ],
   "products": [
@@ -60,56 +49,6 @@
       "vendor_id": 2,
       "vendor_name": "Midas Computer Center",
       "reference_link": "https://mcc-jo.com/product/honor-pad-x8a-tablet-snapdragon-680-4g-octa-core-11-inches-ips-19201200?variant=222a89a954700780a4cc9409533ea08c",
-      "reference_slug": null
-    },
-    {
-      "id": 3540,
-      "sku": "PRD-33473356-R86Y",
-      "name_en": "Kingston FURY Renegade G5 1TB PCIe 5.0 NVMe M.2 SSD",
-      "status": "review",
-      "vendor_id": 1,
-      "vendor_name": "City Center",
-      "reference_link": "https://citycenter.jo/computer-hardware/components-solid-state-drive-ssd/internal-ssds/kingston-fury-renegade-g5-1tb-pcie-5-0-nvme-m-2-ssd-up-to-14-200mb-s",
-      "reference_slug": null
-    },
-    {
-      "id": 4791,
-      "sku": "PRD-87881769-8NL6",
-      "name_en": "Synology BeeStation 8TB Personal Cloud NAS Storage Server",
-      "status": "review",
-      "vendor_id": 1,
-      "vendor_name": "City Center",
-      "reference_link": "https://citycenter.jo/computer-hardware/components-hard-drive/desktop-external-hard-drives/synology-beestation-8tb-personal-cloud-nas-storage-server-ai-powered-store-sync-access-and-share-files-from-anywhere-easy-setup-network-data-backup-device-usb-c",
-      "reference_slug": null
-    },
-    {
-      "id": 4792,
-      "sku": "PRD-87925561-N3N9",
-      "name_en": "Kingston KC600 2TB SATA III 2.5-Inch Solid State Drive SSD",
-      "status": "review",
-      "vendor_id": 1,
-      "vendor_name": "City Center",
-      "reference_link": "https://citycenter.jo/computer-hardware/components-solid-state-drive-ssd/internal-ssds/kingston-kc600-2tb-sata-iii-solid-state-drive-ssd",
-      "reference_slug": null
-    },
-    {
-      "id": 4795,
-      "sku": "PRD-88006358-EOEN",
-      "name_en": "Synology BeeStation 8TB Personal Cloud NAS Storage Server",
-      "status": "review",
-      "vendor_id": 1,
-      "vendor_name": "City Center",
-      "reference_link": "https://citycenter.jo/computer-hardware-storage/internal-external-hdds/synology-beestation-8tb-personal-cloud-nas-storage-server-ai-powered-store-sync-access-and-share-files-from-anywhere-easy-setup-network-data-backup-device-usb-c",
-      "reference_slug": null
-    },
-    {
-      "id": 4796,
-      "sku": "PRD-88038263-56J5",
-      "name_en": "Synology BeeStation 8TB Personal Cloud NAS Storage Server",
-      "status": "review",
-      "vendor_id": 1,
-      "vendor_name": "City Center",
-      "reference_link": "https://citycenter.jo/computer-hardware-storage/storage-nas/synology-beestation-8tb-personal-cloud-nas-storage-server-ai-powered-store-sync-access-and-share-files-from-anywhere-easy-setup-network-data-backup-device-usb-c",
       "reference_slug": null
     },
     {

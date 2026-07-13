@@ -1,6 +1,5 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
-  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -15,7 +14,6 @@ import {
   ProductDimensionUnit,
   ProductWeightUnit,
 } from '../products/entities/product.entity';
-import { BulkUpdateProductPricingDto } from './dto/bulk-update-product-pricing.dto';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
@@ -502,67 +500,6 @@ export class SettingsService implements OnModuleInit {
       percentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
       message:
         'Existing product prices were repriced successfully from their current catalog before-sale and after-sale values.',
-    };
-  }
-
-  async bulkUpdateProductPricing(dto: BulkUpdateProductPricingDto) {
-    await this.ensureSchemaReady();
-
-    const normalizedVendorIds = Array.from(
-      new Set((dto.vendor_ids ?? []).map((value) => Number(value)).filter(Number.isFinite)),
-    );
-    const percentage = dto.percentage === undefined ? undefined : Number(dto.percentage);
-
-    if (dto.action !== 'reset' && (!Number.isFinite(percentage) || percentage === undefined)) {
-      throw new BadRequestException('percentage is required for increase or decrease actions');
-    }
-
-    const updatedCount = await this.dataSource.transaction(async (manager) => {
-      const productRepository = manager.getRepository(Product);
-      const query = productRepository
-        .createQueryBuilder('product')
-        .select([
-          'product.id',
-          'product.vendor_id',
-          'product.price',
-          'product.sale_price',
-          'product.original_vendor_price',
-          'product.original_vendor_sale_price',
-        ]);
-
-      if (normalizedVendorIds.length > 0) {
-        query.andWhere('product.vendor_id IN (:...vendor_ids)', {
-          vendor_ids: normalizedVendorIds,
-        });
-      }
-
-      const products = await query.getMany();
-
-      for (const product of products) {
-        const nextPricing = this.getBulkUpdatedPricing({
-          action: dto.action,
-          percentage,
-          price: product.price,
-          salePrice: product.sale_price,
-          originalVendorPrice: product.original_vendor_price,
-          originalVendorSalePrice: product.original_vendor_sale_price,
-        });
-
-        await productRepository.update(product.id, nextPricing);
-      }
-
-      return products.length;
-    });
-
-    return {
-      action: dto.action,
-      percentage: percentage ?? null,
-      vendor_ids: normalizedVendorIds,
-      updated_count: updatedCount,
-      message:
-        dto.action === 'reset'
-          ? `Reset pricing for ${updatedCount} products to original vendor prices.`
-          : `${dto.action === 'increase' ? 'Increased' : 'Decreased'} pricing for ${updatedCount} products by ${percentage}%.`,
     };
   }
 
@@ -1435,55 +1372,17 @@ export class SettingsService implements OnModuleInit {
     };
   }
 
-  private getBulkUpdatedPricing(input: {
-    action: 'increase' | 'decrease' | 'reset';
-    percentage?: number;
-    price: number | null;
-    salePrice: number | null;
-    originalVendorPrice: number | null;
-    originalVendorSalePrice: number | null;
-  }) {
-    const basePrice =
-      input.originalVendorPrice ?? input.price ?? 0;
-    const baseSalePrice =
-      input.originalVendorSalePrice ??
-      input.salePrice ??
-      null;
-
-    if (input.action === 'reset') {
-      const nextPrice = roundManagedProductPrice(basePrice);
-      const nextSalePrice =
-        baseSalePrice === null || baseSalePrice === undefined
-          ? null
-          : roundManagedProductPrice(baseSalePrice);
-
-      return {
-        price: nextPrice,
-        sale_price: ensureSalePriceBelowPrice(nextPrice, nextSalePrice),
-      };
-    }
-
-    const multiplier = input.action === 'increase'
-      ? 1 + (input.percentage ?? 0) / 100
-      : 1 - (input.percentage ?? 0) / 100;
-
-    const nextPrice = roundManagedProductPrice(Math.max(basePrice, 0) * multiplier);
-    const nextSalePrice =
-      baseSalePrice === null || baseSalePrice === undefined
-        ? null
-        : roundManagedProductPrice(Math.max(baseSalePrice, 0) * multiplier);
-
-    return {
-      price: nextPrice,
-      sale_price: ensureSalePriceBelowPrice(nextPrice, nextSalePrice),
-    };
-  }
-
   private async assertNoConflictingProductPriceRule(
     candidate: ReturnType<SettingsService['normalizeProductPriceRulePayload']>,
     excludedRuleId?: number,
   ) {
+    // Inactive rules are treated as if they don't exist, so they never conflict.
+    if (candidate.is_active === false) {
+      return;
+    }
+
     const existingRules = await this.productPriceRuleRepository.find({
+      where: { is_active: true },
       order: { id: 'ASC' },
     });
 
