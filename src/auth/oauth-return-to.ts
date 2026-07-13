@@ -53,12 +53,14 @@ export function buildFrontendRedirectUrl(
   returnTo?: string,
 ): string {
   const safeReturnTo = normalizeOAuthReturnTo(returnTo);
+  const redirectUrl = safeReturnTo
+    ? new URL(safeReturnTo, frontendBaseUrl)
+    : new URL(frontendBaseUrl);
 
-  if (!safeReturnTo) {
-    return frontendBaseUrl;
-  }
+  // Hint for the storefront to fetch /auth/profile after OAuth without probing on every guest visit.
+  redirectUrl.searchParams.set('auth', 'success');
 
-  return new URL(safeReturnTo, frontendBaseUrl).toString();
+  return redirectUrl.toString();
 }
 
 export function buildFrontendLoginUrl(
