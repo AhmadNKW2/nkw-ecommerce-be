@@ -180,13 +180,20 @@ export class SearchService implements OnModuleInit {
   ) {}
 
   onModuleInit() {
-    if (!this.isSearchDebugEnabledByEnv()) {
-      return;
+    if (this.isSearchDebugEnabledByEnv()) {
+      this.logger.log(
+        '[search-debug] SEARCH_DEBUG_ENABLED=true — each search writes a full report (filter logs by "[search-debug]")',
+      );
     }
 
-    this.logger.log(
-      '[search-debug] SEARCH_DEBUG_ENABLED=true — each search writes a full report (filter logs by "[search-debug]")',
-    );
+    // Warm brand lexicon in the background so the first search skips that DB hit.
+    void this.getBrandLexicon().catch((error) => {
+      this.logger.warn(
+        `Failed to warm brand lexicon: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    });
   }
 
   private get searchProvider(): string {
@@ -2125,6 +2132,8 @@ export class SearchService implements OnModuleInit {
     primaryIds: number[];
     requestedLimit: number;
     debug: boolean;
+    /** Skip a second lexicon pass when the caller already detected brands. */
+    preDetectedBrandIds?: number[];
     brandFastPathBatch?: {
       normalizedQuery: string;
       primaryFetchLimit: number;
@@ -2166,7 +2175,9 @@ export class SearchService implements OnModuleInit {
     const tierNotes: Partial<Record<ExpansionTierKey, string>> = {};
     const uniqueIds = new Set<number>();
     const layeredOrderedIds: number[] = [];
-    const documentsById = new Map<number, Record<string, any>>();
+    // Cards are hydrated once for the current page after IDs are ordered — keep
+    // multi_search payloads as ids-only so expansion does not ship full documents
+    // for every bucket hit (same ranking, much less Typesense I/O).
     const conceptQueryDebug: Array<{
       query: string;
       added: number;
@@ -2192,7 +2203,10 @@ export class SearchService implements OnModuleInit {
       });
     };
 
-    const detected = await this.detectEntityIdsFromTokens(tokens, normalizedQ);
+    const detected =
+      params.preDetectedBrandIds != null
+        ? { brandIds: params.preDetectedBrandIds, categoryIds: [] as number[] }
+        : await this.detectEntityIdsFromTokens(tokens, normalizedQ);
     const categoryIdsFromFilters = this.extractCategoryIds(params.dto);
     const brandIdsFromFilters =
       this.parseCsvNumbers((params.dto as any).brand_ids) ??
@@ -2334,18 +2348,35 @@ export class SearchService implements OnModuleInit {
 
       const perQueryLimit = Math.min(this.typesenseIdPageSize, maxCandidates);
       const batchSize = this.getConceptExpansionMultiSearchBatchSize();
-      const hitsByPlanIndex = new Map<
-        number,
-        Array<{
-          id: number;
-          categoryIds: number[];
-          document?: Record<string, any>;
-        }>
-      >();
-      for (let index = 0; index < brandSearchPlans.length; index += batchSize) {
-        const chunk = brandSearchPlans.slice(index, index + batchSize);
+      const bucketPlans = brandSearchPlans
+        .map((plan, planIndex) => ({ plan, planIndex }))
+        .filter(
+          (
+            entry,
+          ): entry is {
+            plan: Extract<BrandSearchPlan, { role: 'bucket' }>;
+            planIndex: number;
+          } => entry.plan.role === 'bucket',
+        );
+      const tailPlans = brandSearchPlans.filter(
+        (plan) => plan.role === 'primary' || plan.role === 'keyword',
+      );
+
+      const runPlanSearch = async (plans: BrandSearchPlan[]) => {
+        if (plans.length === 0) {
+          return [] as Array<{
+            plan: BrandSearchPlan;
+            hits: Array<{
+              id: number;
+              categoryIds: number[];
+              document?: Record<string, any>;
+            }>;
+            found?: number;
+          }>;
+        }
+
         const multiResult = await this.typesenseService.multiSearch(
-          chunk.map((plan) => {
+          plans.map((plan) => {
             if (plan.role === 'primary') {
               return this.buildPrimaryTypesenseSearchParams({
                 normalizedQuery: params.brandFastPathBatch!.normalizedQuery,
@@ -2363,10 +2394,8 @@ export class SearchService implements OnModuleInit {
                   ? Math.min(80, maxCandidates)
                   : perQueryLimit,
               typoTokens: this.tokenizeQueryForExpansion(plan.query),
-              includeFields:
-                plan.role === 'bucket'
-                  ? BUCKET_SEARCH_CARD_INCLUDE_FIELDS
-                  : 'id,category_ids',
+              // IDs only — page cards are hydrated after orderedIds are known.
+              includeFields: 'id,category_ids',
               searchScope:
                 plan.role === 'keyword'
                   ? 'full'
@@ -2376,52 +2405,81 @@ export class SearchService implements OnModuleInit {
             });
           }),
         );
-        chunk.forEach((plan, chunkIndex) => {
+
+        return plans.map((plan, chunkIndex) => {
           const searchResult = multiResult.results?.[chunkIndex] ?? { hits: [] };
-          const hits = this.mapTypesenseProductHits(searchResult);
-          const planIndex = index + chunkIndex;
-
-          if (plan.role === 'bucket') {
-            hitsByPlanIndex.set(planIndex, hits);
-            return;
-          }
-
-          if (plan.role === 'keyword') {
-            batchedKeywordIds = hits.map((hit) => hit.id);
-            return;
-          }
-
-          batchedPrimaryIds = hits.map((hit) => hit.id);
-          primaryTypesenseFoundCount = Number(
-            searchResult.found ?? batchedPrimaryIds.length,
-          );
+          return {
+            plan,
+            hits: this.mapTypesenseProductHits(searchResult),
+            found: searchResult.found,
+          };
         });
-      }
+      };
 
-      brandSearchPlans.forEach((plan, planIndex) => {
-        if (plan.role !== 'bucket') {
+      // Fetch first bucket window + primary/keyword in one multi_search RTT.
+      // Remaining bucket windows early-exit once the candidate pool is full.
+      const firstBucketChunk = bucketPlans
+        .slice(0, batchSize)
+        .map((entry) => entry.plan);
+      const firstPass = await runPlanSearch([...firstBucketChunk, ...tailPlans]);
+      firstPass.forEach(({ plan, hits, found }) => {
+        if (plan.role === 'bucket') {
+          const beforeSize = uniqueIds.size;
+          addBucketIds(
+            plan.tier,
+            hits.map((hit) => hit.id),
+          );
+          if (params.debug) {
+            conceptQueryDebug.push({
+              query: `${plan.query} [${plan.tier}]`,
+              added: uniqueIds.size - beforeSize,
+              categoryFiltered: effectiveCategoryIds.length > 0,
+            });
+          }
           return;
         }
-
-        const beforeSize = uniqueIds.size;
-        const hits = hitsByPlanIndex.get(planIndex) ?? [];
-        hits.forEach((hit) => {
-          if (hit.document && !documentsById.has(hit.id)) {
-            documentsById.set(hit.id, hit.document);
-          }
-        });
-        addBucketIds(
-          plan.tier,
-          hits.map((hit) => hit.id),
-        );
-        if (params.debug) {
-          conceptQueryDebug.push({
-            query: `${plan.query} [${plan.tier}]`,
-            added: uniqueIds.size - beforeSize,
-            categoryFiltered: effectiveCategoryIds.length > 0,
-          });
+        if (plan.role === 'keyword') {
+          batchedKeywordIds = hits.map((hit) => hit.id);
+          return;
+        }
+        if (plan.role === 'primary') {
+          batchedPrimaryIds = hits.map((hit) => hit.id);
+          primaryTypesenseFoundCount = Number(
+            found ?? batchedPrimaryIds.length,
+          );
         }
       });
+
+      for (
+        let index = batchSize;
+        index < bucketPlans.length;
+        index += batchSize
+      ) {
+        if (uniqueIds.size >= maxCandidates) {
+          break;
+        }
+
+        const chunk = bucketPlans.slice(index, index + batchSize);
+        const chunkResults = await runPlanSearch(chunk.map((entry) => entry.plan));
+        chunkResults.forEach(({ plan, hits }) => {
+          if (plan.role !== 'bucket') {
+            return;
+          }
+
+          const beforeSize = uniqueIds.size;
+          addBucketIds(
+            plan.tier,
+            hits.map((hit) => hit.id),
+          );
+          if (params.debug) {
+            conceptQueryDebug.push({
+              query: `${plan.query} [${plan.tier}]`,
+              added: uniqueIds.size - beforeSize,
+              categoryFiltered: effectiveCategoryIds.length > 0,
+            });
+          }
+        });
+      }
 
       if (useBatchTail && batchedKeywordIds.length > 0 && hasBrandInQuery) {
         tierNotes.keyword = 'brand words removed, other brands only';
@@ -2601,7 +2659,8 @@ export class SearchService implements OnModuleInit {
     return {
       idsByTier,
       orderedIds,
-      documentsById: Object.fromEntries(documentsById),
+      // Documents are hydrated per page after ordering (ids-only expansion).
+      documentsById: {},
       primaryFoundCount: resolvedPrimaryIds.length,
       primaryTypesenseFoundCount,
       detectedBrandIds: effectiveBrandIds,
@@ -2685,10 +2744,8 @@ export class SearchService implements OnModuleInit {
       );
       const cachedBundle =
         await this.cacheManager.get<CachedBrandBucketExpansion>(expansionCacheKey);
-      const hasCachedBundle =
-        Boolean(cachedBundle?.orderedIds?.length) &&
-        Boolean(cachedBundle?.documentsById) &&
-        Object.keys(cachedBundle?.documentsById ?? {}).length > 0;
+      // orderedIds alone are enough — cards are hydrated per page from Typesense.
+      const hasCachedBundle = Boolean(cachedBundle?.orderedIds?.length);
 
       if (hasCachedBundle && cachedBundle) {
         useBrandBucketFastPath = true;
@@ -2735,6 +2792,7 @@ export class SearchService implements OnModuleInit {
           primaryIds: [],
           requestedLimit: maxCandidates,
           debug: debugSearchEnabled,
+          preDetectedBrandIds: detectedEntities.brandIds,
           brandFastPathBatch: {
             normalizedQuery,
             primaryFetchLimit,
@@ -2745,7 +2803,7 @@ export class SearchService implements OnModuleInit {
         cachedBrandBucketBundle = {
           orderedIds: orderedProductIds,
           primaryFoundCount: expanded.primaryTypesenseFoundCount,
-          documentsById: expanded.documentsById,
+          documentsById: {},
           enrichedFacets: [],
         };
         expansionMeta = {
@@ -2808,6 +2866,7 @@ export class SearchService implements OnModuleInit {
           primaryIds: orderedProductIds,
           requestedLimit: requestedExpansionCount,
           debug: debugSearchEnabled,
+          preDetectedBrandIds: detectedEntities.brandIds,
         });
         orderedProductIds = expanded.orderedIds;
         expansionMeta = {
@@ -2849,9 +2908,10 @@ export class SearchService implements OnModuleInit {
         );
       }
 
+      // Prefer cached docs when present; otherwise one Typesense hydrate for the page.
       return this.buildSearchCardsFromCachedDocuments(
         pageProductIds,
-        cachedBrandBucketBundle!.documentsById,
+        cachedBrandBucketBundle?.documentsById ?? {},
         isAdmin,
       );
     };
@@ -2865,6 +2925,7 @@ export class SearchService implements OnModuleInit {
         Boolean(expansionCacheKey);
 
       if (needsFacets) {
+        // Facets + page cards in parallel (cards hydrate is a small id:= search).
         [products, enrichedFacets] = await Promise.all([
           buildFastPathProducts(),
           this.computeExpandedSearchFacets(orderedProductIds, dto),

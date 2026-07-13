@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { TermGroup } from '../terms/entities/term-group.entity';
@@ -47,7 +47,8 @@ type LexiconSegmentEntry = {
 };
 
 @Injectable()
-export class TermConceptLexiconService {
+export class TermConceptLexiconService implements OnModuleInit {
+  private readonly logger = new Logger(TermConceptLexiconService.name);
   private lexiconCache:
     | {
         loadedAt: number;
@@ -69,6 +70,19 @@ export class TermConceptLexiconService {
     @InjectRepository(TermGroup)
     private readonly termGroupsRepository: Repository<TermGroup>,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.getLexicon();
+      this.logger.log('Term concept lexicon warmed at startup');
+    } catch (error) {
+      this.logger.warn(
+        `Failed to warm term concept lexicon: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
 
   async resolveAllConceptsInQuery(
     normalizedQuery: string,
@@ -218,40 +232,44 @@ export class TermConceptLexiconService {
       return { segments: [], allSegmentsMatchedByTerms: false };
     }
 
-    const segments: QueryVariantSegment[] = [];
     const allMatchedGroupIds = new Set<number>();
 
-    for (const token of normalizedTokens) {
-      const conceptMatches = await this.resolveAllConceptGroupsMatchingSegment(
-        token,
-        locale,
-      );
-      const matchedGroupIds = [...new Set(conceptMatches.map((match) => match.groupId))];
-      matchedGroupIds.forEach((groupId) => allMatchedGroupIds.add(groupId));
+    // Match each token independently; Promise.all keeps input order.
+    const segments: QueryVariantSegment[] = await Promise.all(
+      normalizedTokens.map(async (token) => {
+        const conceptMatches = await this.resolveAllConceptGroupsMatchingSegment(
+          token,
+          locale,
+        );
+        const matchedGroupIds = [
+          ...new Set(conceptMatches.map((match) => match.groupId)),
+        ];
+        matchedGroupIds.forEach((groupId) => allMatchedGroupIds.add(groupId));
 
-      const seenVariants = new Set<string>();
-      const orderedVariants: string[] = [];
-      const pushVariant = (value: string) => {
-        const trimmed = value.trim();
-        if (!trimmed) return;
-        const key = normalizeConceptTermKey(trimmed);
-        if (!key || seenVariants.has(key)) return;
-        seenVariants.add(key);
-        orderedVariants.push(trimmed);
-      };
+        const seenVariants = new Set<string>();
+        const orderedVariants: string[] = [];
+        const pushVariant = (value: string) => {
+          const trimmed = value.trim();
+          if (!trimmed) return;
+          const key = normalizeConceptTermKey(trimmed);
+          if (!key || seenVariants.has(key)) return;
+          seenVariants.add(key);
+          orderedVariants.push(trimmed);
+        };
 
-      pushVariant(token);
-      conceptMatches.forEach((match) => {
-        match.orderedVariants.forEach((variant) => pushVariant(variant));
-      });
+        pushVariant(token);
+        conceptMatches.forEach((match) => {
+          match.orderedVariants.forEach((variant) => pushVariant(variant));
+        });
 
-      segments.push({
-        text: token,
-        orderedVariants: orderedVariants.length > 0 ? orderedVariants : [token],
-        matchedGroupIds,
-        referenceProductIds: [],
-      });
-    }
+        return {
+          text: token,
+          orderedVariants: orderedVariants.length > 0 ? orderedVariants : [token],
+          matchedGroupIds,
+          referenceProductIds: [] as number[],
+        };
+      }),
+    );
 
     if (allMatchedGroupIds.size > 0) {
       const groups = await this.termGroupsRepository.find({
