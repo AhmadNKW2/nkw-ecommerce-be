@@ -642,6 +642,7 @@ export class SearchService implements OnModuleInit {
       attributes_values_ids: (dto as any).attributes_values_ids ?? null,
       specifications_values_ids: (dto as any).specifications_values_ids ?? null,
       average_rating_min: dto.average_rating_min ?? null,
+      include_facets: dto.include_facets !== false,
     });
   }
 
@@ -3024,6 +3025,7 @@ export class SearchService implements OnModuleInit {
     let products: any[] = [];
     let enrichedFacets: CachedBrandBucketExpansion['enrichedFacets'] = [];
     let shouldPersistExpansionCache = false;
+    const includeFacets = dto.include_facets !== false;
 
     const buildFastPathProducts = async (): Promise<any[]> => {
       if (fullResponse) {
@@ -3054,14 +3056,18 @@ export class SearchService implements OnModuleInit {
     };
 
     if (useBrandBucketFastPath && cachedBrandBucketBundle) {
-      const needsFacets = !cachedBrandBucketBundle.enrichedFacets?.length;
+      const needsFacets =
+        includeFacets && !cachedBrandBucketBundle.enrichedFacets?.length;
       shouldPersistExpansionCache =
         needsFacets &&
         !debugSearchEnabled &&
         orderedProductIds.length > 0 &&
         Boolean(expansionCacheKey);
 
-      if (needsFacets) {
+      if (!includeFacets) {
+        products = await buildFastPathProducts();
+        enrichedFacets = [];
+      } else if (needsFacets) {
         if (fullResponse) {
           [products, enrichedFacets] = await Promise.all([
             buildFastPathProducts(),
@@ -3147,7 +3153,7 @@ export class SearchService implements OnModuleInit {
         .filter((card): card is NonNullable<typeof card> => Boolean(card));
     }
 
-    if (enrichedFacets.length === 0) {
+    if (includeFacets && enrichedFacets.length === 0) {
       let facetCountsSource = result.facet_counts;
       if (shouldExpand && orderedProductIds.length > 0) {
         const facetPoolIds = orderedProductIds.slice(0, this.typesenseIdPageSize);

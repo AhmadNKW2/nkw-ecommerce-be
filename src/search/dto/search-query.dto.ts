@@ -215,6 +215,15 @@ export class SearchQueryDto {
   @Max(100)
   limit?: number;
 
+  /**
+   * When false, skip facet computation so product cards return sooner.
+   * Storefront can fetch facets in a follow-up request (same ranking/products).
+   */
+  @IsOptional()
+  @Transform(({ value }) => parseQueryBoolean(value))
+  @IsBoolean()
+  include_facets?: boolean;
+
   // ── Sorting ─────────────────────────────────────────────────────────────────
 
   @IsOptional()
