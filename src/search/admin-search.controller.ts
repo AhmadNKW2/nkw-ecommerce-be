@@ -44,6 +44,21 @@ export class AdminSearchController {
   }
 
   /**
+   * Deletes all Typesense product documents by recreating the collection.
+   * Does not reindex — use /typesense/backfill afterward.
+   * POST /admin/search/typesense/clear
+   */
+  @Post('typesense/clear')
+  async clearTypesenseCollection() {
+    const result = await this.typesenseBackfillService.clearCollection();
+
+    return {
+      message: 'Typesense product collection cleared.',
+      ...result,
+    };
+  }
+
+  /**
    * GET /admin/search/typesense/backfill/status
    */
   @Get('typesense/backfill/status')

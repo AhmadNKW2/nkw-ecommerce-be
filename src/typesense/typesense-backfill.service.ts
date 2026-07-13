@@ -19,6 +19,7 @@ export type TypesenseBackfillResult = {
   indexed: number;
   batches: number;
   cache_generation: number;
+  cleared?: boolean;
 };
 
 export type TypesenseBackfillStatus = {
@@ -58,11 +59,60 @@ export class TypesenseBackfillService {
   }
 
   startFullBackfillInBackground(): void {
+    this.startInBackground(() => this.runFullBackfill());
+  }
+
+  async clearCollection(): Promise<TypesenseBackfillResult> {
+    if (!this.typesenseService.isEnabled()) {
+      throw new ServiceUnavailableException(
+        'Typesense is disabled. Set TYPESENSE_ENABLED=true before clearing the collection.',
+      );
+    }
+
     if (this.backfillInProgress) {
       throw new ConflictException('A Typesense backfill is already running.');
     }
 
-    void this.runFullBackfill().catch((error) => {
+    this.backfillInProgress = true;
+
+    try {
+      this.logger.log('Clearing Typesense product collection...');
+      await this.typesenseService.recreateProductCollection();
+
+      const cacheGeneration = await this.searchCacheService.invalidateSearchCache(
+        'typesense collection cleared',
+      );
+
+      this.logger.log(
+        `Typesense collection cleared. Search cache generation v${cacheGeneration}.`,
+      );
+
+      const result: TypesenseBackfillResult = {
+        indexed: 0,
+        batches: 0,
+        cache_generation: cacheGeneration,
+        cleared: true,
+      };
+      this.lastResult = result;
+      this.lastError = null;
+      return result;
+    } catch (error) {
+      this.lastError =
+        error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      this.backfillInProgress = false;
+    }
+  }
+
+  private startInBackground(
+    runner: () => Promise<TypesenseBackfillResult>,
+  ): void {
+    if (this.backfillInProgress) {
+      throw new ConflictException('A Typesense backfill is already running.');
+    }
+
+    void runner().catch((error) => {
       this.logger.error(
         `Background Typesense backfill failed: ${
           error instanceof Error ? error.message : String(error)
@@ -166,10 +216,11 @@ export class TypesenseBackfillService {
         `Typesense backfill completed. Indexed ${indexed} products. Search cache generation v${cacheGeneration}.`,
       );
 
-      const result = {
+      const result: TypesenseBackfillResult = {
         indexed,
         batches,
         cache_generation: cacheGeneration,
+        cleared: false,
       };
       this.lastResult = result;
       this.lastError = null;

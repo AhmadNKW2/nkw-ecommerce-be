@@ -198,11 +198,7 @@ export class TypesenseService implements OnModuleInit {
       await this.client.collections(this.collectionName).retrieve();
     } catch {
       try {
-        await this.client.collections().create({
-          ...productSchema,
-          name: this.collectionName,
-        });
-        this.logger.log(`Created Typesense collection: ${this.collectionName}`);
+        await this.createCollection();
       } catch (error) {
         this.logger.warn(
           `Failed to create Typesense collection "${this.collectionName}": ${
@@ -212,6 +208,40 @@ export class TypesenseService implements OnModuleInit {
         throw error;
       }
     }
+  }
+
+  private async createCollection() {
+    await this.client.collections().create({
+      ...productSchema,
+      name: this.collectionName,
+    });
+    this.logger.log(`Created Typesense collection: ${this.collectionName}`);
+  }
+
+  /**
+   * Deletes the product collection (all documents), recreates the schema,
+   * and re-registers synonyms. Used by full rebuild before reindexing.
+   */
+  async recreateProductCollection(): Promise<void> {
+    if (!this.isEnabled()) {
+      throw new Error('Typesense is disabled');
+    }
+
+    try {
+      await this.client.collections(this.collectionName).delete();
+      this.logger.log(`Deleted Typesense collection: ${this.collectionName}`);
+    } catch (error) {
+      // Collection may already be missing; continue to recreate.
+      this.logger.warn(
+        `Typesense collection delete skipped/failed for "${this.collectionName}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    await this.createCollection();
+    await this.ensureCollectionSchema();
+    await this.ensureSynonyms();
   }
 
   async upsertProduct(doc: Record<string, any>) {
