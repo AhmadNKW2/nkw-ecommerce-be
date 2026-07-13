@@ -815,10 +815,24 @@ export class SearchService implements OnModuleInit {
   }
 
   private getTypoBudget(tokens: string[]): 0 | 1 | 2 {
+    if (this.queryRequiresExactTokenMatch(tokens)) {
+      return 0;
+    }
+
     const longest = tokens.reduce((max, token) => Math.max(max, token.length), 0);
     if (longest < SEARCH_TYPO_TOKENS_MIN_LENGTH) return 0;
     if (longest >= 7) return 2;
     return 1;
+  }
+
+  /** Spec/model tokens (5060, i7, rtx5070) must not fuzzy-match neighbours like 5050. */
+  private queryRequiresExactTokenMatch(tokens: string[]): boolean {
+    return tokens.some((token) => {
+      const trimmed = token.trim();
+      if (!trimmed) return false;
+      if (/^\d+$/.test(trimmed)) return true;
+      return /^[a-z]{0,3}\d+[a-z0-9]*$/i.test(trimmed);
+    });
   }
 
   private async getCategoryTokensForIds(
@@ -1775,6 +1789,7 @@ export class SearchService implements OnModuleInit {
       typoTokens: string[];
     },
   ): SearchParams<Record<string, any>> {
+    // Bucket queries are intentional spec layers — disable typos so 5060 does not match 5050.
     return {
       q: normalizeSearchQuery(conceptQuery || '*') || '*',
       query_by: PRODUCT_QUERY_BY,
@@ -1787,7 +1802,7 @@ export class SearchService implements OnModuleInit {
       include_fields: 'id,category_ids',
       page: 1,
       per_page: params.perPage,
-      num_typos: this.getTypoBudget(params.typoTokens),
+      num_typos: 0,
     };
   }
 
@@ -1924,6 +1939,12 @@ export class SearchService implements OnModuleInit {
     };
     const tierNotes: Partial<Record<ExpansionTierKey, string>> = {};
     const uniqueIds = new Set<number>();
+    const layeredOrderedIds: number[] = [];
+    const conceptQueryDebug: Array<{
+      query: string;
+      added: number;
+      categoryFiltered: boolean;
+    }> = [];
     const primaryFoundCount = params.primaryIds.length;
     const addIds = (tier: ExpansionTierKey, ids: number[]) => {
       ids.forEach((id) => {
@@ -1931,6 +1952,52 @@ export class SearchService implements OnModuleInit {
         uniqueIds.add(id);
         idsByTier[tier].push(id);
       });
+    };
+    const addBucketIds = (tier: ExpansionTierKey, ids: number[]) => {
+      ids.forEach((id) => {
+        if (uniqueIds.size >= maxCandidates || uniqueIds.has(id)) return;
+        uniqueIds.add(id);
+        idsByTier[tier].push(id);
+        layeredOrderedIds.push(id);
+      });
+    };
+    const runBucketQueries = async (
+      queries: string[],
+      tier: ExpansionTierKey,
+      baseFilterBy?: string,
+    ) => {
+      if (!enabledLevels.has(tier) || queries.length === 0) {
+        return;
+      }
+
+      const batchResults = await this.runConceptExpansionQueries(
+        queries,
+        {
+          baseFilterBy,
+          perQueryLimit: Math.min(40, maxCandidates - uniqueIds.size),
+          maxCandidates,
+          requestedLimit: params.requestedLimit,
+        },
+        () => uniqueIds.size >= params.requestedLimit,
+      );
+
+      for (const { query, hits } of batchResults) {
+        if (uniqueIds.size >= params.requestedLimit) {
+          break;
+        }
+        const beforeSize = uniqueIds.size;
+        addBucketIds(
+          tier,
+          hits.map((hit) => hit.id),
+        );
+        if (params.debug) {
+          conceptQueryDebug.push({
+            query,
+            added: uniqueIds.size - beforeSize,
+            categoryFiltered: categoryIdsFromFilters.length > 0,
+          });
+        }
+      }
     };
 
     const detected = await this.detectEntityIdsFromTokens(tokens, normalizedQ);
@@ -1973,11 +2040,6 @@ export class SearchService implements OnModuleInit {
           ),
         ]
       : [];
-    const conceptQueryDebug: Array<{
-      query: string;
-      added: number;
-      categoryFiltered: boolean;
-    }> = [];
     if (referenceProductIds.length > 0) {
       const beforeSize = uniqueIds.size;
       addIds('specification', referenceProductIds);
@@ -1993,12 +2055,7 @@ export class SearchService implements OnModuleInit {
       }
     }
 
-    if (
-      enabledLevels.has('same_brand_spec') &&
-      hasBrandInQuery &&
-      uniqueIds.size < params.requestedLimit &&
-      hasExpansionQueries
-    ) {
+    if (hasBrandInQuery && uniqueIds.size < params.requestedLimit && hasExpansionQueries) {
       const sameBrandFilters = [params.baseFilterBy];
       if (effectiveCategoryIds.length > 0) {
         sameBrandFilters.push(
@@ -2009,44 +2066,6 @@ export class SearchService implements OnModuleInit {
         `brand_id:=[${brandIdsFromQueryOnly.join(',')}]`,
       );
 
-      for (const queries of levelQueries) {
-        if (uniqueIds.size >= params.requestedLimit) break;
-        const batchResults = await this.runConceptExpansionQueries(
-          queries,
-          {
-            baseFilterBy: this.mergeFilterByClauses(...sameBrandFilters),
-            perQueryLimit: Math.min(40, maxCandidates - uniqueIds.size),
-            maxCandidates,
-            requestedLimit: params.requestedLimit,
-          },
-          () => uniqueIds.size >= params.requestedLimit,
-        );
-        for (const { query, hits } of batchResults) {
-          const beforeSize = uniqueIds.size;
-          addIds(
-            'same_brand_spec',
-            hits.map((hit) => hit.id),
-          );
-          if (params.debug) {
-            conceptQueryDebug.push({
-              query,
-              added: uniqueIds.size - beforeSize,
-              categoryFiltered: categoryIdsFromFilters.length > 0,
-            });
-          }
-        }
-      }
-      if (idsByTier.same_brand_spec.length > 0) {
-        tierNotes.same_brand_spec = 'requested brand + progressive word/term variants';
-      }
-    }
-
-    if (
-      enabledLevels.has('cross_brand_spec') &&
-      hasBrandInQuery &&
-      uniqueIds.size < params.requestedLimit &&
-      hasExpansionQueries
-    ) {
       const crossBrandFilters = [params.baseFilterBy];
       if (effectiveCategoryIds.length > 0) {
         crossBrandFilters.push(
@@ -2057,34 +2076,34 @@ export class SearchService implements OnModuleInit {
         `brand_id:!=[${brandIdsFromQueryOnly.join(',')}]`,
       );
 
+      // Per level: requested brand first, then other brands (not all Lenovo levels then all others).
       for (const queries of levelQueries) {
-        if (uniqueIds.size >= params.requestedLimit) break;
-        const batchResults = await this.runConceptExpansionQueries(
-          queries,
-          {
-            baseFilterBy: this.mergeFilterByClauses(...crossBrandFilters),
-            perQueryLimit: Math.min(40, maxCandidates - uniqueIds.size),
-            maxCandidates,
-            requestedLimit: params.requestedLimit,
-          },
-          () => uniqueIds.size >= params.requestedLimit,
-        );
-        for (const { query, hits } of batchResults) {
-          const beforeSize = uniqueIds.size;
-          addIds(
-            'cross_brand_spec',
-            hits.map((hit) => hit.id),
-          );
-          if (params.debug) {
-            conceptQueryDebug.push({
-              query,
-              added: uniqueIds.size - beforeSize,
-              categoryFiltered: categoryIdsFromFilters.length > 0,
-            });
-          }
+        if (uniqueIds.size >= params.requestedLimit) {
+          break;
         }
+        await runBucketQueries(
+          queries,
+          'same_brand_spec',
+          this.mergeFilterByClauses(...sameBrandFilters),
+        );
+        if (uniqueIds.size >= params.requestedLimit) {
+          break;
+        }
+        await runBucketQueries(
+          queries,
+          'cross_brand_spec',
+          this.mergeFilterByClauses(...crossBrandFilters),
+        );
       }
-      tierNotes.cross_brand_spec = 'progressive word/term variants, other brands';
+
+      if (idsByTier.same_brand_spec.length > 0) {
+        tierNotes.same_brand_spec =
+          'requested brand + progressive word/term variants (per level)';
+      }
+      if (idsByTier.cross_brand_spec.length > 0) {
+        tierNotes.cross_brand_spec =
+          'progressive word/term variants, other brands (per level)';
+      }
     }
 
     if (!hasBrandInQuery && enabledLevels.has('specification') && hasExpansionQueries) {
@@ -2212,7 +2231,13 @@ export class SearchService implements OnModuleInit {
       }
     }
 
-    const orderedIds = this.expansionTierOrder.flatMap((tier) => idsByTier[tier]);
+    const orderedIds = [
+      ...idsByTier.specification,
+      ...layeredOrderedIds,
+      ...(['category_brand', 'category', 'brand', 'primary', 'keyword'] as const).flatMap(
+        (tier) => idsByTier[tier],
+      ),
+    ];
     if (params.debug) {
       this.logger.log(
         `[search-expansion] q="${params.dto.q ?? ''}" primary=${primaryFoundCount} requested=${params.requestedLimit} final=${orderedIds.length} tiers=${JSON.stringify(
