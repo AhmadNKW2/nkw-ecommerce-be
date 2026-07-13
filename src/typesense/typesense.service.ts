@@ -296,12 +296,18 @@ export class TypesenseService implements OnModuleInit {
       return { results: [] };
     }
 
-    return this.client.multiSearch.perform({
-      searches: searches.map((searchParams) => ({
-        collection: this.collectionName,
-        ...searchParams,
-      })),
-    });
+    return this.client.multiSearch.perform(
+      {
+        searches: searches.map((searchParams) => ({
+          collection: this.collectionName,
+          ...searchParams,
+        })),
+      },
+      {
+        // Default Typesense limit is 50; raise for large expansion batches.
+        limit_multi_searches: Math.max(50, searches.length),
+      },
+    );
   }
 
   async healthCheck() {

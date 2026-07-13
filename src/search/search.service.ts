@@ -611,14 +611,15 @@ export class SearchService implements OnModuleInit {
     const configured = Number(
       this.configService.get<string>(
         'SEARCH_EXPANSION_CONCEPT_MULTI_SEARCH_BATCH',
-        '50',
+        '48',
       ),
     );
     if (!Number.isInteger(configured) || configured <= 0) {
-      return 50;
+      return 48;
     }
-    // Typesense multi_search handles large batches; prefer one RTT over many.
-    return Math.min(100, configured);
+    // Stay under Typesense's default limit_multi_searches (50) unless the
+    // client raises it — leave headroom for primary/keyword in the same RTT.
+    return Math.min(48, configured);
   }
 
   private dedupeConceptExpansionQueries(queries: string[]): string[] {
@@ -2497,12 +2498,14 @@ export class SearchService implements OnModuleInit {
         });
       };
 
-      // Fetch first bucket window + primary/keyword in one multi_search RTT.
-      // Remaining bucket windows early-exit once the candidate pool is full.
+      // Fetch primary/keyword + first bucket window in one multi_search RTT.
+      // Typesense defaults limit_multi_searches to 50 — never exceed batchSize.
+      const firstBucketSlotCount = Math.max(0, batchSize - tailPlans.length);
       const firstBucketChunk = bucketPlans
-        .slice(0, batchSize)
+        .slice(0, firstBucketSlotCount)
         .map((entry) => entry.plan);
-      const firstPass = await runPlanSearch([...firstBucketChunk, ...tailPlans]);
+      // Tails first so a truncated/errored multi_search never drops primary found.
+      const firstPass = await runPlanSearch([...tailPlans, ...firstBucketChunk]);
       firstPass.forEach(({ plan, hits, found }) => {
         if (plan.role === 'bucket') {
           const beforeSize = uniqueIds.size;
@@ -2532,7 +2535,7 @@ export class SearchService implements OnModuleInit {
       });
 
       for (
-        let index = batchSize;
+        let index = firstBucketSlotCount;
         index < bucketPlans.length;
         index += batchSize
       ) {
