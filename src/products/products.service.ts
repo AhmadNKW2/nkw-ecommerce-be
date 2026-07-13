@@ -221,9 +221,6 @@ export class ProductsService {
             category: true,
           },
           specifications: true,
-          productMedia: {
-            media: true,
-          },
           brand: true,
           category: true,
         },
@@ -1650,6 +1647,25 @@ export class ProductsService {
         dto.reference_link,
       );
       const lowStockThreshold = await this.getLowStockThreshold();
+      const originalVendorPriceForRule =
+        dto.original_vendor_price ??
+        dto.original_price ??
+        dto.price ??
+        null;
+      const originalVendorSalePriceForRule =
+        dto.original_vendor_sale_price ??
+        dto.original_sale_price ??
+        dto.sale_price ??
+        null;
+      const managedPricingFromRule = isSimplifiedProductCreator(creatorContext)
+        ? null
+        : await this.computeManagedPricingFromOriginalInput({
+          vendor_id: dto.vendor_id ?? null,
+          brand_id: dto.brand_id ?? null,
+          categoryIds: dto.category_ids ?? [],
+          original_vendor_price: originalVendorPriceForRule,
+          original_vendor_sale_price: originalVendorSalePriceForRule,
+        });
 
       // 1. Create basic product (primary category is first in the list)
       const product = this.productsRepository.create({
@@ -1676,8 +1692,8 @@ export class ProductsService {
         visible: dto.visible ?? true,
         created_by: userId ?? null,
         cost: dto.cost ?? 0,
-        price: dto.price ?? 0,
-        sale_price: dto.sale_price ?? null,
+        price: managedPricingFromRule?.price ?? dto.price ?? 0,
+        sale_price: managedPricingFromRule?.sale_price ?? dto.sale_price ?? null,
         original_vendor_price:
           dto.original_vendor_price ??
           dto.original_price ??
@@ -3043,6 +3059,57 @@ export class ProductsService {
           primaryOriginalVendorCategory?.id ?? null;
         basicInfoChanges.original_vendor_category_name =
           primaryOriginalVendorCategory?.name ?? null;
+      }
+
+      const shouldRecomputeManagedPricing =
+        dto.original_vendor_price !== undefined ||
+        dto.original_vendor_sale_price !== undefined ||
+        dto.original_price !== undefined ||
+        dto.original_sale_price !== undefined ||
+        dto.vendor_id !== undefined ||
+        dto.brand_id !== undefined ||
+        dto.category_ids !== undefined;
+
+      if (shouldRecomputeManagedPricing) {
+        const categoryIdsForPricing = this.resolveCategoryIdsForPricing({
+          dtoCategoryIds: dto.category_ids,
+          existingCategoryId: existingProduct.category_id ?? null,
+          existingProductCategories: existingProduct.productCategories,
+        });
+        const nextVendorId =
+          basicInfoChanges.vendor_id !== undefined
+            ? basicInfoChanges.vendor_id
+            : existingProduct.vendor_id ?? null;
+        const nextBrandId =
+          basicInfoChanges.brand_id !== undefined
+            ? basicInfoChanges.brand_id
+            : existingProduct.brand_id ?? null;
+        const nextOriginalVendorPrice =
+          basicInfoChanges.original_vendor_price !== undefined
+            ? basicInfoChanges.original_vendor_price
+            : existingProduct.original_vendor_price ?? null;
+        const nextOriginalVendorSalePrice =
+          basicInfoChanges.original_vendor_sale_price !== undefined
+            ? basicInfoChanges.original_vendor_sale_price
+            : existingProduct.original_vendor_sale_price ?? null;
+        const managedPricingFromRule =
+          await this.computeManagedPricingFromOriginalInput({
+            vendor_id: nextVendorId as number | null,
+            brand_id: nextBrandId as number | null,
+            categoryIds: categoryIdsForPricing,
+            original_vendor_price: nextOriginalVendorPrice,
+            original_vendor_sale_price: nextOriginalVendorSalePrice,
+          });
+
+        if (managedPricingFromRule) {
+          basicInfoChanges.price = managedPricingFromRule.price;
+          basicInfoChanges.sale_price = managedPricingFromRule.sale_price;
+        } else if (
+          basicInfoChanges.original_vendor_sale_price === null
+        ) {
+          // Clearing the original sale price also removes the managed sale price.
+          basicInfoChanges.sale_price = null;
+        }
       }
 
       if (Object.keys(basicInfoChanges).length > 0) {
