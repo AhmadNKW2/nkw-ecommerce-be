@@ -155,4 +155,57 @@ describe('TermConceptLexiconService', () => {
 
     expect(matches.map((match) => match.groupId).sort()).toEqual([276, 277]);
   });
+
+  it('segments query into word-variant buckets with merged variants', async () => {
+    const service = makeService([laptopGroup]);
+
+    const segmented = await service.segmentQueryWithVariants(
+      'laptop lenovo 5070 i7',
+      ['laptop', 'lenovo', '5070', 'i7'],
+      'en',
+    );
+
+    expect(segmented.segments).toHaveLength(4);
+    expect(segmented.segments[0].orderedVariants.slice(0, 2)).toEqual([
+      'laptop',
+      'notebook',
+    ]);
+    expect(segmented.segments[1].orderedVariants).toEqual(['lenovo']);
+    expect(segmented.allSegmentsMatchedByTerms).toBe(false);
+  });
+
+  it('marks allSegmentsMatchedByTerms and collects reference IDs for قبضة', async () => {
+    const gamepadGroup: TermGroup = {
+      id: 276,
+      terms_en: ['gamepad', 'controller'],
+      terms_ar: ['قبضة', 'يد تحكم'],
+      reference_product_ids: [1608],
+      concept_key: 'gamepad',
+      concept_label_en: 'gamepad',
+      concept_label_ar: 'يد تحكم',
+      source_product_id: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const gripGroup: TermGroup = {
+      id: 277,
+      terms_en: ['grip', 'controller grip'],
+      terms_ar: ['قبضة', 'مقبض'],
+      reference_product_ids: [1607],
+      concept_key: 'controllergrip',
+      concept_label_en: 'grip',
+      concept_label_ar: 'مقبض',
+      source_product_id: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const service = makeService([gamepadGroup, gripGroup]);
+
+    const segmented = await service.segmentQueryWithVariants('قبضة', ['قبضة'], 'ar');
+
+    expect(segmented.allSegmentsMatchedByTerms).toBe(true);
+    expect(segmented.segments[0].referenceProductIds.sort((a, b) => a - b)).toEqual([
+      1607, 1608,
+    ]);
+  });
 });

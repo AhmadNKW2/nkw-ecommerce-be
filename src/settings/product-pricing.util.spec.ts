@@ -2,6 +2,7 @@ import {
   calculateManagedPrice,
   findBestMatchingProductPriceRule,
   normalizeProductPriceRuleShape,
+  roundManagedProductPrice,
 } from './product-pricing.util';
 
 describe('product-pricing.util', () => {
@@ -76,7 +77,14 @@ describe('product-pricing.util', () => {
     );
 
     expect(matched?.id).toBe(3);
-    expect(calculateManagedPrice(50, matched!.percentage, matched!.adjustment_type)).toBe(57.4);
+    expect(calculateManagedPrice(50, matched!.percentage, matched!.adjustment_type)).toBe(57.5);
+  });
+
+  it('rounds managed prices to .00 or .50 endings', () => {
+    expect(roundManagedProductPrice(100.52)).toBe(100.5);
+    expect(roundManagedProductPrice(100.99)).toBe(101);
+    expect(roundManagedProductPrice(100.42)).toBe(100.5);
+    expect(roundManagedProductPrice(100.21)).toBe(100);
   });
 
   it('supports more_than price condition', () => {

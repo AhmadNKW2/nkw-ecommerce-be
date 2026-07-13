@@ -31,6 +31,7 @@ import {
   normalizeCategoryIds,
   normalizeProductPriceRuleShape,
   ProductPricingContext,
+  roundManagedProductPrice,
   toAppliedProductPriceRule,
 } from './product-pricing.util';
 import { createProductPriceRulesTableDefinition } from './product-price-rule.table';
@@ -1364,10 +1365,23 @@ export class SettingsService implements OnModuleInit {
     originalVendorPrice: number | null;
     originalVendorSalePrice: number | null;
   }) {
+    const basePrice =
+      input.originalVendorPrice ?? input.price ?? 0;
+    const baseSalePrice =
+      input.originalVendorSalePrice ??
+      input.salePrice ??
+      null;
+
     if (input.action === 'reset') {
+      const nextPrice = roundManagedProductPrice(basePrice);
+      const nextSalePrice =
+        baseSalePrice === null || baseSalePrice === undefined
+          ? null
+          : roundManagedProductPrice(baseSalePrice);
+
       return {
-        price: input.originalVendorPrice ?? input.price ?? 0,
-        sale_price: input.originalVendorSalePrice ?? null,
+        price: nextPrice,
+        sale_price: ensureSalePriceBelowPrice(nextPrice, nextSalePrice),
       };
     }
 
@@ -1375,17 +1389,16 @@ export class SettingsService implements OnModuleInit {
       ? 1 + (input.percentage ?? 0) / 100
       : 1 - (input.percentage ?? 0) / 100;
 
-    return {
-      price: this.roundManagedPrice((input.price ?? 0) * multiplier),
-      sale_price:
-        input.salePrice === null || input.salePrice === undefined
-          ? null
-          : this.roundManagedPrice(Math.max(input.salePrice, 0) * multiplier),
-    };
-  }
+    const nextPrice = roundManagedProductPrice(Math.max(basePrice, 0) * multiplier);
+    const nextSalePrice =
+      baseSalePrice === null || baseSalePrice === undefined
+        ? null
+        : roundManagedProductPrice(Math.max(baseSalePrice, 0) * multiplier);
 
-  private roundManagedPrice(value: number) {
-    return Math.max(0, Number(value.toFixed(2)));
+    return {
+      price: nextPrice,
+      sale_price: ensureSalePriceBelowPrice(nextPrice, nextSalePrice),
+    };
   }
 
   private async assertNoConflictingProductPriceRule(

@@ -41,21 +41,15 @@ import {
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
 import {
-  applyConceptCategoryRefinement,
-  buildLayeredConceptExpansionLayers,
-  buildLayeredConceptExpansionQueries,
-  buildProgressiveConceptSearchQueries,
-  buildProgressiveWordSearchQueries,
-  extractQueryWordsInAppearanceOrder,
+  buildVariantLevelQueries,
   normalizeConceptTermKey,
   normalizeSearchLocale,
-  orderWordsByQueryDirection,
   SEARCH_EXPANSION_VERSION,
 } from './utils/spec-expansion.utils';
 import { SearchCacheService } from './search-cache.service';
 import {
   TermConceptLexiconService,
-  type MatchedConceptInQuery,
+  type QueryVariantSegment,
 } from './term-concept-lexicon.service';
 
 // Matches current production behavior (previously hardcoded at two call sites:
@@ -74,10 +68,8 @@ const AUTOCOMPLETE_QUERY_BY_WEIGHTS = AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS;
 const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 
 type ExpansionTierKey =
-  | 'concept'
   | 'primary'
   | 'same_brand_spec'
-  | 'strong_partial'
   | 'category_brand'
   | 'cross_brand_spec'
   | 'category'
@@ -103,19 +95,16 @@ export class SearchService implements OnModuleInit {
     'sku',
   ]);
   private readonly expansionTierOrder: ExpansionTierKey[] = [
-    'concept',
     'same_brand_spec',
     'cross_brand_spec',
-    'primary',
-    'strong_partial',
-    'category_brand',
     'specification',
+    'primary',
+    'category_brand',
     'category',
     'brand',
     'keyword',
   ];
   private readonly defaultEnabledExpansionLevels = new Set<ExpansionTierKey>([
-    'strong_partial',
     'same_brand_spec',
     'category_brand',
     'cross_brand_spec',
@@ -507,113 +496,6 @@ export class SearchService implements OnModuleInit {
     return Math.min(200, configured);
   }
 
-  private async buildProgressiveExpansionQueries(params: {
-    normalizedQuery: string;
-    queryTokens: string[];
-    searchLocale: ReturnType<typeof normalizeSearchLocale>;
-    matchedConcepts: Array<{ orderedVariants: string[] }>;
-    categoryIntentQuery: string;
-    fallbackWordsAppearanceOrder: string[];
-    fallbackWordsProgressiveOrder: string[];
-    excludedFromConceptSegments: Set<string>;
-  }): Promise<{
-    conceptLayers: Array<{
-      queries: string[];
-      perQueryLimit: number;
-    }>;
-    expansionQueries: string[];
-    conceptDriven: boolean;
-  }> {
-    const conceptSegmentTokens = params.queryTokens
-      .map((token) => token.trim())
-      .filter((token) => token && !params.excludedFromConceptSegments.has(token));
-
-    const fullPhrase = conceptSegmentTokens.join(' ').trim();
-    const fullPhraseConcepts =
-      fullPhrase.length > 0
-        ? await this.termConceptLexicon.resolveAllConceptGroupsMatchingSegment(
-            fullPhrase,
-            params.searchLocale,
-          )
-        : [];
-
-    const singleSegmentMultiConcept =
-      conceptSegmentTokens.length === 1 && fullPhraseConcepts.length >= 2;
-    const useCombinedConceptLayer =
-      params.matchedConcepts.length >= 2 && !singleSegmentMultiConcept;
-    const tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>> = [];
-
-    if (singleSegmentMultiConcept) {
-      fullPhraseConcepts.forEach((concept) => {
-        tokenConceptLayers.push([concept]);
-      });
-    } else if (!useCombinedConceptLayer) {
-      for (const token of conceptSegmentTokens) {
-        const layer = await this.termConceptLexicon.resolveAllConceptGroupsMatchingSegment(
-          token,
-          params.searchLocale,
-        );
-        if (layer.length > 0) {
-          tokenConceptLayers.push(layer);
-        }
-      }
-    }
-
-    const hasConceptExpansion =
-      fullPhraseConcepts.length > 0 ||
-      useCombinedConceptLayer ||
-      tokenConceptLayers.length > 0;
-
-    if (hasConceptExpansion) {
-      const conceptLayers = buildLayeredConceptExpansionLayers({
-        exactQuery: params.normalizedQuery,
-        fullPhraseConcepts: singleSegmentMultiConcept ? [] : fullPhraseConcepts,
-        combinedConcepts: useCombinedConceptLayer ? params.matchedConcepts : [],
-        tokenConceptLayers,
-        fallbackWordsAppearanceOrder: params.fallbackWordsAppearanceOrder,
-        fallbackWordsProgressiveOrder: params.fallbackWordsProgressiveOrder,
-        maxConceptCombos: this.getMaxConceptVariantCombos(),
-      });
-      return {
-        conceptLayers,
-        expansionQueries: conceptLayers.flatMap((layer) => layer.queries),
-        conceptDriven: true,
-      };
-    }
-
-    if (params.matchedConcepts.length > 0) {
-      const queries = buildProgressiveConceptSearchQueries(
-        params.matchedConcepts,
-        params.fallbackWordsAppearanceOrder,
-        params.fallbackWordsProgressiveOrder,
-        this.getMaxConceptVariantCombos(),
-        params.normalizedQuery,
-      );
-      return {
-        conceptLayers: queries.length
-          ? [
-              {
-                queries,
-                perQueryLimit: 25,
-              },
-            ]
-          : [],
-        expansionQueries: queries,
-        conceptDriven: true,
-      };
-    }
-
-    const wordQueries = buildProgressiveWordSearchQueries(
-      params.categoryIntentQuery,
-      params.fallbackWordsProgressiveOrder,
-    );
-    return {
-      conceptLayers: [],
-      expansionQueries: wordQueries,
-      conceptDriven: false,
-    };
-  }
-
   private getPrimaryEnoughCount(): number {
     const configured = Number(
       this.configService.get<string>('SEARCH_EXPANSION_PRIMARY_ENOUGH_COUNT', '125'),
@@ -634,19 +516,6 @@ export class SearchService implements OnModuleInit {
     return configured;
   }
 
-  private getConceptExpansionQueryConcurrency(): number {
-    const configured = Number(
-      this.configService.get<string>(
-        'SEARCH_EXPANSION_CONCEPT_QUERY_CONCURRENCY',
-        '8',
-      ),
-    );
-    if (!Number.isInteger(configured) || configured <= 0) {
-      return 8;
-    }
-    return Math.min(20, configured);
-  }
-
   private getConceptExpansionMultiSearchBatchSize(): number {
     const configured = Number(
       this.configService.get<string>(
@@ -658,82 +527,6 @@ export class SearchService implements OnModuleInit {
       return 25;
     }
     return Math.min(50, configured);
-  }
-
-  private async loadMatchedTermGroups(
-    matchedConcepts: MatchedConceptInQuery[],
-  ): Promise<TermGroup[]> {
-    if (matchedConcepts.length === 0) {
-      return [];
-    }
-
-    const groupIds = [...new Set(matchedConcepts.map((concept) => concept.groupId))];
-    return this.termGroupsRepository.find({
-      where: { id: In(groupIds) },
-    });
-  }
-
-  private collectReferenceProductIdsFromGroups(groups: TermGroup[]): number[] {
-    return [
-      ...new Set(
-        groups
-          .flatMap((group) => group.reference_product_ids ?? [])
-          .filter((id) => Number.isInteger(id) && id > 0),
-      ),
-    ];
-  }
-
-  private async resolveCategoryIdsFromMatchedConcepts(
-    matchedConcepts: MatchedConceptInQuery[],
-    preloadedGroups?: TermGroup[],
-  ): Promise<number[]> {
-    if (matchedConcepts.length === 0) {
-      return [];
-    }
-
-    const groups =
-      preloadedGroups ?? (await this.loadMatchedTermGroups(matchedConcepts));
-    const groupsById = new Map(groups.map((group) => [group.id, group]));
-
-    const referenceCategoryIds =
-      await this.resolveCategoryIdsFromReferenceProducts(groups);
-    if (referenceCategoryIds.length > 0) {
-      return this.expandCategoryIdsWithDescendants(referenceCategoryIds);
-    }
-
-    const conceptTermKeys = this.collectNarrowConceptCategoryTermKeys(
-      matchedConcepts,
-      groupsById,
-    );
-    if (conceptTermKeys.size === 0) {
-      return [];
-    }
-
-    const categoryLexicon = await this.getCategoryLexicon();
-    const matchedCategoryIds = new Set<number>();
-    categoryLexicon.forEach((entry) => {
-      const matchesConcept = entry.normalizedTokens.some((token) =>
-        conceptTermKeys.has(normalizeConceptTermKey(token)),
-      );
-      if (matchesConcept) {
-        matchedCategoryIds.add(entry.id);
-      }
-    });
-
-    return this.expandCategoryIdsWithDescendants(Array.from(matchedCategoryIds));
-  }
-
-  private async getReferenceProductIdsFromMatchedConcepts(
-    matchedConcepts: MatchedConceptInQuery[],
-    preloadedGroups?: TermGroup[],
-  ): Promise<number[]> {
-    if (matchedConcepts.length === 0) {
-      return [];
-    }
-
-    const groups =
-      preloadedGroups ?? (await this.loadMatchedTermGroups(matchedConcepts));
-    return this.collectReferenceProductIdsFromGroups(groups);
   }
 
   private dedupeConceptExpansionQueries(queries: string[]): string[] {
@@ -1146,74 +939,6 @@ export class SearchService implements OnModuleInit {
 
   static getSearchExpansionVersion(): string {
     return SEARCH_EXPANSION_VERSION;
-  }
-
-  private async resolveCategoryIdsFromReferenceProducts(
-    groups: TermGroup[],
-  ): Promise<number[]> {
-    const productIds = [
-      ...new Set(
-        groups
-          .flatMap((group) => group.reference_product_ids ?? [])
-          .filter((id) => Number.isInteger(id) && id > 0),
-      ),
-    ];
-    if (productIds.length === 0) {
-      return [];
-    }
-
-    const products = await this.productsRepository.find({
-      where: { id: In(productIds) },
-      select: { id: true, category_id: true },
-      relations: { productCategories: true },
-    });
-
-    const categoryIds = new Set<number>();
-    products.forEach((product) => {
-      if (typeof product.category_id === 'number' && product.category_id > 0) {
-        categoryIds.add(product.category_id);
-      }
-      product.productCategories?.forEach((productCategory) => {
-        if (
-          typeof productCategory.category_id === 'number' &&
-          productCategory.category_id > 0
-        ) {
-          categoryIds.add(productCategory.category_id);
-        }
-      });
-    });
-
-    return Array.from(categoryIds);
-  }
-
-  private collectNarrowConceptCategoryTermKeys(
-    matchedConcepts: MatchedConceptInQuery[],
-    groupsById: Map<number, TermGroup>,
-  ): Set<string> {
-    const keys = new Set<string>();
-
-    matchedConcepts.forEach((concept) => {
-      if (concept.conceptKey?.trim()) {
-        keys.add(normalizeConceptTermKey(concept.conceptKey));
-      }
-      if (concept.userTerm?.trim()) {
-        keys.add(normalizeConceptTermKey(concept.userTerm));
-      }
-
-      const group = groupsById.get(concept.groupId);
-      if (!group) {
-        return;
-      }
-
-      [group.concept_label_en, group.concept_label_ar].forEach((label) => {
-        const normalized = normalizeConceptTermKey(label ?? '');
-        if (normalized) {
-          keys.add(normalized);
-        }
-      });
-    });
-
-    return keys;
   }
 
   private async detectEntityIdsFromTokens(
@@ -2171,22 +1896,13 @@ export class SearchService implements OnModuleInit {
     detectedBrandIds: number[];
     detectedCategoryIds: number[];
     tierNotes: Partial<Record<ExpansionTierKey, string>>;
-    matchedConcepts: Array<{
-      groupId: number;
-      conceptKey: string;
-      userTerm: string;
-      matchedTokens: string[];
-      orderedVariants: string[];
-      matchStart: number;
-    }>;
+    segments: QueryVariantSegment[];
     expansionQueries: string[];
     conceptQueryDebug?: Array<{
       query: string;
       added: number;
       categoryFiltered: boolean;
     }>;
-    conceptCategoryIds?: number[];
-    categoryRefinementApplied?: boolean;
   }> {
     const maxCandidates = Math.max(
       params.requestedLimit,
@@ -2195,16 +1911,9 @@ export class SearchService implements OnModuleInit {
     const enabledLevels = this.getEnabledExpansionLevels();
     const normalizedQ = normalizeSearchQuery(params.dto.q);
     const tokens = this.tokenizeQueryForExpansion(normalizedQ);
-    const minTokenMatchRatio = this.getMinTextMatchRatioForExpansion();
-    const minStrongTokens = Math.max(
-      2,
-      Math.ceil(tokens.length * Math.max(0.5, minTokenMatchRatio)),
-    );
     const idsByTier: Record<ExpansionTierKey, number[]> = {
-      concept: [],
       primary: [],
       same_brand_spec: [],
-      strong_partial: [],
       category_brand: [],
       cross_brand_spec: [],
       category: [],
@@ -2213,9 +1922,6 @@ export class SearchService implements OnModuleInit {
       keyword: [],
     };
     const tierNotes: Partial<Record<ExpansionTierKey, string>> = {};
-    // Seeded empty (not with primaryIds) so the concept tier can claim shared
-    // ids first and define the leading order; the loose primary results are
-    // then added as fill for anything the concept layer didn't already cover.
     const uniqueIds = new Set<number>();
     const primaryFoundCount = params.primaryIds.length;
     const addIds = (tier: ExpansionTierKey, ids: number[]) => {
@@ -2241,146 +1947,47 @@ export class SearchService implements OnModuleInit {
       ? await this.getBrandTokensForIds(brandIdsFromQueryOnly)
       : new Set<string>();
     const searchLocale = normalizeSearchLocale(params.dto.locale, tokens);
-    const matchedConcepts = await this.termConceptLexicon.resolveAllConceptsInQuery(
+    const segmented = await this.termConceptLexicon.segmentQueryWithVariants(
       normalizedQ,
       tokens,
       searchLocale,
     );
-    // Only brand names are structural noise for concept matching. Category
-    // words (e.g. "كرت"/"ذاكره" for the Memory Cards category) must stay in the
-    // concept segment so the full phrase and per-word concept layers resolve —
-    // otherwise the requested layering (full phrase → each word) breaks.
-    const excludedFromConceptSegments = new Set<string>([
-      ...brandTokensFromQuery,
-    ]);
-    const conceptTokensFromQuery =
-      this.termConceptLexicon.getConceptTokensFromMatches(matchedConcepts);
-    const excludedFromFallback = new Set<string>([
-      ...brandTokensFromQuery,
-      ...conceptTokensFromQuery,
-    ]);
-    const fallbackWordsInAppearanceOrder = extractQueryWordsInAppearanceOrder(
-      tokens,
-      excludedFromFallback,
+    const variantLevels = buildVariantLevelQueries(
+      segmented.segments.map((segment) => ({
+        text: segment.text,
+        orderedVariants: segment.orderedVariants,
+      })),
+      this.getMaxConceptVariantCombos(),
     );
-    const orderedFallbackWords = orderWordsByQueryDirection(
-      fallbackWordsInAppearanceOrder,
-      tokens,
-    );
-    const categoryIntentQuery = '';
-    const { conceptLayers, expansionQueries: progressiveExpansionQueries, conceptDriven } =
-      await this.buildProgressiveExpansionQueries({
-        normalizedQuery: normalizedQ,
-        queryTokens: tokens,
-        searchLocale,
-        matchedConcepts,
-        categoryIntentQuery,
-        fallbackWordsAppearanceOrder: fallbackWordsInAppearanceOrder,
-        fallbackWordsProgressiveOrder: orderedFallbackWords,
-        excludedFromConceptSegments,
-      });
-    const hasConceptMatches =
-      matchedConcepts.length > 0 || progressiveExpansionQueries.length > 0;
-    const hasExpansionQueries = progressiveExpansionQueries.length > 0;
-    const matchedGroups =
-      matchedConcepts.length > 0
-        ? await this.loadMatchedTermGroups(matchedConcepts)
-        : [];
-    const referenceProductIds =
-      this.collectReferenceProductIdsFromGroups(matchedGroups);
-    const conceptRefinementCategoryIds =
-      matchedConcepts.length > 0
-        ? await this.resolveCategoryIdsFromMatchedConcepts(
-            matchedConcepts,
-            matchedGroups,
-          )
-        : [];
-    const conceptProductCategoryIds = new Map<number, number[]>();
+    const levelQueries = variantLevels.map((level) => level.queries);
+    const expansionQueries = levelQueries.flat();
+    const hasExpansionQueries = expansionQueries.length > 0;
+    const referenceProductIds = segmented.allSegmentsMatchedByTerms
+      ? [
+          ...new Set(
+            segmented.segments.flatMap((segment) => segment.referenceProductIds),
+          ),
+        ]
+      : [];
     const conceptQueryDebug: Array<{
       query: string;
       added: number;
       categoryFiltered: boolean;
     }> = [];
-    let categoryRefinementApplied = false;
-
-    // Concept-driven ordering: query expansion defines intent; categories are
-    // not used to filter these searches — only optional post-collection refinement.
-    if (conceptDriven && conceptLayers.length > 0) {
-      if (referenceProductIds.length > 0) {
-        const beforeSize = uniqueIds.size;
-        addIds('concept', referenceProductIds);
-        if (params.debug) {
-          conceptQueryDebug.push({
-            query: '[reference_product_ids]',
-            added: uniqueIds.size - beforeSize,
-            categoryFiltered: categoryIdsFromFilters.length > 0,
-          });
-        }
+    if (referenceProductIds.length > 0) {
+      const beforeSize = uniqueIds.size;
+      addIds('specification', referenceProductIds);
+      if (params.debug) {
+        conceptQueryDebug.push({
+          query: '[reference_product_ids]',
+          added: uniqueIds.size - beforeSize,
+          categoryFiltered: categoryIdsFromFilters.length > 0,
+        });
       }
-
-      for (const conceptLayer of conceptLayers) {
-        const batchResults = await this.runConceptExpansionQueries(
-          conceptLayer.queries,
-          {
-            baseFilterBy: params.baseFilterBy,
-            perQueryLimit: conceptLayer.perQueryLimit,
-            maxCandidates,
-            requestedLimit: params.requestedLimit,
-          },
-          () => uniqueIds.size >= params.requestedLimit,
-        );
-
-        for (const { query: conceptQuery, hits } of batchResults) {
-          if (uniqueIds.size >= params.requestedLimit) {
-            break;
-          }
-          const beforeSize = uniqueIds.size;
-          hits.forEach((hit) => {
-            if (hit.categoryIds.length > 0) {
-              conceptProductCategoryIds.set(hit.id, hit.categoryIds);
-            }
-          });
-          addIds(
-            'concept',
-            hits.map((hit) => hit.id),
-          );
-          if (params.debug) {
-            conceptQueryDebug.push({
-              query: conceptQuery,
-              added: uniqueIds.size - beforeSize,
-              categoryFiltered: categoryIdsFromFilters.length > 0,
-            });
-          }
-        }
-      }
-
-      if (idsByTier.concept.length > 0 && conceptRefinementCategoryIds.length > 0) {
-        const refinement = applyConceptCategoryRefinement(
-          idsByTier.concept,
-          conceptProductCategoryIds,
-          conceptRefinementCategoryIds,
-        );
-        if (refinement.applied) {
-          idsByTier.concept = refinement.ids;
-          categoryRefinementApplied = true;
-        }
-      }
-
-      if (idsByTier.concept.length > 0) {
-        tierNotes.concept =
-          matchedConcepts.length > 0
-            ? categoryRefinementApplied
-              ? 'query expansion + category refinement (mixed types)'
-              : 'query expansion (exact phrase + concept synonyms)'
-            : categoryRefinementApplied
-              ? 'layered concept matches + category refinement'
-              : 'layered concept phrase matches (leads ordering)';
+      if (idsByTier.specification.length > 0) {
+        tierNotes.specification = 'reference products from matched terms';
       }
     }
-
-    // Loose primary text-match results fill in behind the concept layer for any
-    // products the concept queries did not already surface.
-    addIds('primary', params.primaryIds);
 
     if (
       enabledLevels.has('same_brand_spec') &&
@@ -2398,19 +2005,35 @@ export class SearchService implements OnModuleInit {
         `brand_id:=[${brandIdsFromQueryOnly.join(',')}]`,
       );
 
-      for (const wordQuery of progressiveExpansionQueries) {
+      for (const queries of levelQueries) {
         if (uniqueIds.size >= params.requestedLimit) break;
-        const ids = await this.searchTypesenseIds({
-          q: wordQuery,
-          filterBy: this.mergeFilterByClauses(...sameBrandFilters),
-          sortBy: '_text_match:desc,created_at_ts:desc',
-          limit: Math.min(40, maxCandidates - uniqueIds.size),
-        });
-        addIds('same_brand_spec', ids);
+        const batchResults = await this.runConceptExpansionQueries(
+          queries,
+          {
+            baseFilterBy: this.mergeFilterByClauses(...sameBrandFilters),
+            perQueryLimit: Math.min(40, maxCandidates - uniqueIds.size),
+            maxCandidates,
+            requestedLimit: params.requestedLimit,
+          },
+          () => uniqueIds.size >= params.requestedLimit,
+        );
+        for (const { query, hits } of batchResults) {
+          const beforeSize = uniqueIds.size;
+          addIds(
+            'same_brand_spec',
+            hits.map((hit) => hit.id),
+          );
+          if (params.debug) {
+            conceptQueryDebug.push({
+              query,
+              added: uniqueIds.size - beforeSize,
+              categoryFiltered: categoryIdsFromFilters.length > 0,
+            });
+          }
+        }
       }
       if (idsByTier.same_brand_spec.length > 0) {
-        tierNotes.same_brand_spec =
-          'requested brand + category/spec progressive matches';
+        tierNotes.same_brand_spec = 'requested brand + progressive word/term variants';
       }
     }
 
@@ -2420,20 +2043,6 @@ export class SearchService implements OnModuleInit {
       uniqueIds.size < params.requestedLimit &&
       hasExpansionQueries
     ) {
-      const crossBrandQueries: string[] = [];
-      const seenCrossBrandQueries = new Set<string>();
-      const pushCrossBrandQuery = (value: string) => {
-        const normalized = value.trim();
-        if (!normalized || seenCrossBrandQueries.has(normalized)) {
-          return;
-        }
-        seenCrossBrandQueries.add(normalized);
-        crossBrandQueries.push(normalized);
-      };
-
-      // Progressive cross-brand fallback with concept synonym rotation when matched.
-      progressiveExpansionQueries.forEach(pushCrossBrandQuery);
-
       const crossBrandFilters = [params.baseFilterBy];
       if (effectiveCategoryIds.length > 0) {
         crossBrandFilters.push(
@@ -2444,36 +2053,66 @@ export class SearchService implements OnModuleInit {
         `brand_id:!=[${brandIdsFromQueryOnly.join(',')}]`,
       );
 
-      for (const crossBrandQuery of crossBrandQueries) {
+      for (const queries of levelQueries) {
         if (uniqueIds.size >= params.requestedLimit) break;
-        const ids = await this.searchTypesenseIds({
-          q: crossBrandQuery,
-          filterBy: this.mergeFilterByClauses(...crossBrandFilters),
-          sortBy: '_text_match:desc,created_at_ts:desc',
-          limit: Math.min(40, maxCandidates - uniqueIds.size),
-        });
-        addIds('cross_brand_spec', ids);
+        const batchResults = await this.runConceptExpansionQueries(
+          queries,
+          {
+            baseFilterBy: this.mergeFilterByClauses(...crossBrandFilters),
+            perQueryLimit: Math.min(40, maxCandidates - uniqueIds.size),
+            maxCandidates,
+            requestedLimit: params.requestedLimit,
+          },
+          () => uniqueIds.size >= params.requestedLimit,
+        );
+        for (const { query, hits } of batchResults) {
+          const beforeSize = uniqueIds.size;
+          addIds(
+            'cross_brand_spec',
+            hits.map((hit) => hit.id),
+          );
+          if (params.debug) {
+            conceptQueryDebug.push({
+              query,
+              added: uniqueIds.size - beforeSize,
+              categoryFiltered: categoryIdsFromFilters.length > 0,
+            });
+          }
+        }
       }
-      tierNotes.cross_brand_spec = hasConceptMatches
-        ? 'concept synonyms + fallback words, other brands'
-        : 'same specs/category, other brands';
+      tierNotes.cross_brand_spec = 'progressive word/term variants, other brands';
     }
 
-    if (
-      tokens.length > 1 &&
-      enabledLevels.has('strong_partial') &&
-      uniqueIds.size < params.requestedLimit
-    ) {
-      for (let size = tokens.length - 1; size >= minStrongTokens; size -= 1) {
+    if (!hasBrandInQuery && enabledLevels.has('specification') && hasExpansionQueries) {
+      for (const queries of levelQueries) {
         if (uniqueIds.size >= params.requestedLimit) break;
-        const phraseQuery = tokens.slice(0, size).join(' ');
-        const ids = await this.searchTypesenseIds({
-          q: phraseQuery,
-          filterBy: params.baseFilterBy,
-          sortBy: '_text_match:desc,created_at_ts:desc',
-          limit: Math.min(40, maxCandidates - uniqueIds.size),
-        });
-        addIds('strong_partial', ids);
+        const batchResults = await this.runConceptExpansionQueries(
+          queries,
+          {
+            baseFilterBy: params.baseFilterBy,
+            perQueryLimit: Math.min(40, maxCandidates - uniqueIds.size),
+            maxCandidates,
+            requestedLimit: params.requestedLimit,
+          },
+          () => uniqueIds.size >= params.requestedLimit,
+        );
+        for (const { query, hits } of batchResults) {
+          const beforeSize = uniqueIds.size;
+          addIds(
+            'specification',
+            hits.map((hit) => hit.id),
+          );
+          if (params.debug) {
+            conceptQueryDebug.push({
+              query,
+              added: uniqueIds.size - beforeSize,
+              categoryFiltered: categoryIdsFromFilters.length > 0,
+            });
+          }
+        }
+      }
+      if (idsByTier.specification.length > 0 && !tierNotes.specification) {
+        tierNotes.specification = 'progressive word/term variants';
       }
     }
 
@@ -2505,7 +2144,7 @@ export class SearchService implements OnModuleInit {
       effectiveCategoryIds.length > 0
     ) {
       const ids = await this.searchTypesenseIds({
-        q: categoryIntentQuery || '*',
+        q: '*',
         filterBy: this.mergeFilterByClauses(
           params.baseFilterBy,
           `category_ids:=[${effectiveCategoryIds.join(',')}]`,
@@ -2536,34 +2175,8 @@ export class SearchService implements OnModuleInit {
       tierNotes.brand = 'skipped to avoid weak same-brand matches (e.g. i5)';
     }
 
-    if (
-      enabledLevels.has('specification') &&
-      uniqueIds.size < params.requestedLimit &&
-      hasExpansionQueries
-    ) {
-      if (conceptDriven) {
-        tierNotes.specification = 'handled by concept tier (leads ordering)';
-      } else if (hasBrandInQuery) {
-        tierNotes.specification = 'handled by cross_brand_spec sequence';
-      } else {
-      for (const wordQuery of progressiveExpansionQueries) {
-        if (uniqueIds.size >= params.requestedLimit) break;
-        const ids = await this.searchTypesenseIds({
-          q: wordQuery,
-          filterBy: params.baseFilterBy,
-          sortBy: '_text_match:desc,created_at_ts:desc',
-          limit: Math.min(40, maxCandidates - uniqueIds.size),
-        });
-        addIds('specification', ids);
-      }
-
-      if (idsByTier.specification.length > 0) {
-        tierNotes.specification = hasConceptMatches
-          ? 'progressive concept synonym + word fallback'
-          : 'progressive category+word fallback';
-      }
-      }
-    }
+    // Loose primary text-match results fill in after all layered buckets.
+    addIds('primary', params.primaryIds);
 
     if (
       enabledLevels.has('keyword') &&
@@ -2613,11 +2226,9 @@ export class SearchService implements OnModuleInit {
       detectedBrandIds: effectiveBrandIds,
       detectedCategoryIds: effectiveCategoryIds,
       tierNotes,
-      matchedConcepts,
-      expansionQueries: progressiveExpansionQueries.slice(0, 12),
+      segments: segmented.segments,
       conceptQueryDebug: params.debug ? conceptQueryDebug : undefined,
-      conceptCategoryIds: conceptRefinementCategoryIds,
-      categoryRefinementApplied,
+      expansionQueries: expansionQueries.slice(0, 12),
     };
   }
 
@@ -2642,15 +2253,8 @@ export class SearchService implements OnModuleInit {
     const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
     const expansionPrepPromise =
       expansionEnabled && normalizedQuery && normalizedQuery !== '*'
-        ? Promise.all([
-            this.termConceptLexicon.resolveAllConceptsInQuery(
-              normalizedQuery,
-              conceptDetectionTokens,
-              normalizeSearchLocale((dto as any).locale, conceptDetectionTokens),
-            ),
-            this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery),
-          ])
-        : Promise.resolve([[], { brandIds: [], categoryIds: [] }] as const);
+        ? this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
+        : Promise.resolve({ brandIds: [], categoryIds: [] });
     const primaryFetchLimit = Math.min(
       maxCandidates,
       Math.max(startOffset + perPage, primaryEnoughCount),
@@ -2672,7 +2276,7 @@ export class SearchService implements OnModuleInit {
       ...(fullResponse ? { include_fields: 'id' } : {}),
     };
 
-    const [result, [queryConcepts, detectedEntities]] = await Promise.all([
+    const [result, detectedEntities] = await Promise.all([
       this.typesenseService.search(params),
       expansionPrepPromise,
     ]);
@@ -2682,12 +2286,9 @@ export class SearchService implements OnModuleInit {
       .filter((id) => Number.isInteger(id) && id > 0);
     const primaryCount = orderedProductIds.length;
     const primaryIsEnough = primaryCount >= primaryEnoughCount;
-    const hasQueryConcepts = queryConcepts.length > 0;
     const hasStructuredQueryIntent =
       conceptDetectionTokens.length > 1 ||
-      detectedEntities.brandIds.length > 0 ||
-      detectedEntities.categoryIds.length > 0 ||
-      hasQueryConcepts;
+      detectedEntities.brandIds.length > 0;
 
     const shouldExpand =
       expansionEnabled &&
@@ -2701,19 +2302,13 @@ export class SearchService implements OnModuleInit {
           detectedBrandIds: number[];
           detectedCategoryIds: number[];
           tierNotes: Partial<Record<ExpansionTierKey, string>>;
-          matchedConcepts?: Array<{
-            groupId: number;
-            conceptKey: string;
-            userTerm: string;
-          }>;
+          segments?: QueryVariantSegment[];
           expansionQueries?: string[];
           conceptQueryDebug?: Array<{
             query: string;
             added: number;
             categoryFiltered: boolean;
           }>;
-          conceptCategoryIds?: number[];
-          categoryRefinementApplied?: boolean;
         }
       | undefined;
 
@@ -2737,11 +2332,9 @@ export class SearchService implements OnModuleInit {
         detectedBrandIds: expanded.detectedBrandIds,
         detectedCategoryIds: expanded.detectedCategoryIds,
         tierNotes: expanded.tierNotes,
-        matchedConcepts: expanded.matchedConcepts,
+        segments: expanded.segments,
         expansionQueries: expanded.expansionQueries,
         conceptQueryDebug: expanded.conceptQueryDebug,
-        conceptCategoryIds: expanded.conceptCategoryIds,
-        categoryRefinementApplied: expanded.categoryRefinementApplied,
       };
     }
     const pageProductIds = orderedProductIds.slice(startOffset, startOffset + perPage);
@@ -2858,10 +2451,8 @@ export class SearchService implements OnModuleInit {
         detectedCategoryIds,
       );
       const tierCounts: Record<ExpansionTierKey, number[]> = expansionMeta?.tiers ?? {
-        concept: [],
         primary: Array.from({ length: primaryCount }),
         same_brand_spec: [],
-        strong_partial: [],
         category_brand: [],
         cross_brand_spec: [],
         category: [],
@@ -2897,20 +2488,16 @@ export class SearchService implements OnModuleInit {
             : undefined,
         detected_category_labels: entityLabels.categories,
         matched_concepts:
-          expansionMeta?.matchedConcepts && expansionMeta.matchedConcepts.length
-            ? expansionMeta.matchedConcepts.map(
-                (concept) =>
-                  `${concept.userTerm} (${concept.conceptKey}#${concept.groupId})`,
-              )
+          expansionMeta?.segments && expansionMeta.segments.length
+            ? expansionMeta.segments
+                .filter((segment) => segment.matchedGroupIds.length > 0)
+                .map(
+                  (segment) =>
+                    `${segment.text} (${segment.matchedGroupIds.join(',')})`,
+                )
             : undefined,
         expansion_queries: expansionMeta?.expansionQueries,
         concept_query_debug: expansionMeta?.conceptQueryDebug,
-        concept_category_ids:
-          expansionMeta?.conceptCategoryIds &&
-          expansionMeta.conceptCategoryIds.length
-            ? expansionMeta.conceptCategoryIds.join(', ')
-            : undefined,
-        category_refinement_applied: expansionMeta?.categoryRefinementApplied,
         primary_found: expansionMeta?.primaryFoundCount ?? primaryCount,
         final_candidates: orderedProductIds.length,
         primary_enough_threshold: primaryEnoughCount,

@@ -15,6 +15,7 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
   const typesenseService = {
     isEnabled: jest.fn().mockReturnValue(true),
     search: typesenseSearch,
+    multiSearch: jest.fn().mockResolvedValue({ results: [] }),
   };
   const configService = {
     get: jest.fn().mockReturnValue('typesense'),
@@ -34,6 +35,9 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
   const termConceptLexicon = {
     resolveAllConceptsInQuery: jest.fn().mockResolvedValue([]),
     getConceptTokensFromMatches: jest.fn().mockReturnValue(new Set()),
+    segmentQueryWithVariants: jest
+      .fn()
+      .mockResolvedValue({ segments: [], allSegmentsMatchedByTerms: false }),
   };
 
   const service = new SearchService(

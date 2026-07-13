@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
 
 export const MIN_PRODUCT_PRICE_RULE_PERCENTAGE = 1;
-export const PRODUCT_PRICE_ROUNDING_STEP = 0.1;
+export const PRODUCT_PRICE_ROUNDING_STEP = 0.5;
 
 export type ProductPriceCondition = 'any' | 'more_than' | 'less_than' | 'between';
 export type ProductPriceAdjustmentType = 'increase' | 'decrease';
@@ -41,12 +41,12 @@ export type AppliedProductPriceRule = {
   specificity_score: number;
 };
 
-export function roundDownProductPrice(value: number): number {
+export function roundManagedProductPrice(value: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return 0;
   }
 
-  return Math.floor((value + Number.EPSILON) * 10) / 10;
+  return Math.max(0, Number((Math.round(value * 2) / 2).toFixed(2)));
 }
 
 export function assertProductPriceRuleValues(params: {
@@ -310,7 +310,7 @@ export function calculateManagedPrice(
       ? 1 + percentage / 100
       : 1 - percentage / 100;
 
-  return roundDownProductPrice(sourcePrice * multiplier);
+  return roundManagedProductPrice(sourcePrice * multiplier);
 }
 
 export function ensureSalePriceBelowPrice(
@@ -325,7 +325,7 @@ export function ensureSalePriceBelowPrice(
     return salePrice;
   }
 
-  const forcedSalePrice = roundDownProductPrice(
+  const forcedSalePrice = roundManagedProductPrice(
     price - PRODUCT_PRICE_ROUNDING_STEP,
   );
 

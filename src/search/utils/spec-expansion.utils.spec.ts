@@ -1,12 +1,9 @@
 import {
-  applyConceptCategoryRefinement,
-  buildConceptSynonymThenProgressiveQueries,
   buildConceptSynonymVariants,
-  buildLayeredConceptExpansionQueries,
   buildMultiConceptVariantCombinations,
-  buildProgressiveConceptSearchQueries,
   buildProgressiveWordCombinations,
   buildProgressiveWordSearchQueries,
+  buildVariantLevelQueries,
   extractQueryWordsInAppearanceOrder,
   isArabicToken,
   normalizeSearchLocale,
@@ -97,191 +94,35 @@ describe('spec-expansion.utils', () => {
     });
   });
 
-  describe('buildLayeredConceptExpansionQueries', () => {
-    it('expands full phrase concepts then each token layer', () => {
-      expect(
-        buildLayeredConceptExpansionQueries({
-          fullPhraseConcepts: [
-            {
-              orderedVariants: ['كرت ذاكرة', 'ram card', 'كرت رام'],
-            },
-          ],
-          combinedConcepts: [],
-          tokenConceptLayers: [
-            [{ orderedVariants: ['كرت', 'gpu card', 'graphics card'] }],
-            [{ orderedVariants: ['ذاكرة', 'ram', 'ذاكرة مؤقتة'] }],
-          ],
-          fallbackWordsAppearanceOrder: [],
-          fallbackWordsProgressiveOrder: [],
-        }),
-      ).toEqual([
-        'كرت ذاكرة',
-        'ram card',
-        'كرت رام',
-        'كرت',
-        'gpu card',
-        'graphics card',
-        'ذاكرة',
-        'ram',
-        'ذاكرة مؤقتة',
+  describe('buildVariantLevelQueries', () => {
+    it('builds progressive levels from full query down to singles', () => {
+      const levels = buildVariantLevelQueries([
+        { text: 'laptop', orderedVariants: ['laptop', 'notebook'] },
+        { text: '5070', orderedVariants: ['5070'] },
+        { text: 'i7', orderedVariants: ['i7'] },
       ]);
+
+      expect(levels[0].queries).toEqual(['laptop 5070 i7', 'notebook 5070 i7']);
+      expect(levels[1].queries).toEqual([
+        'laptop 5070',
+        'notebook 5070',
+        'laptop i7',
+        'notebook i7',
+        '5070 i7',
+      ]);
+      expect(levels[2].queries).toEqual(['laptop', 'notebook', '5070', 'i7']);
     });
 
-    it('uses combined multi-concept layer when two phrase concepts are present', () => {
-      expect(
-        buildLayeredConceptExpansionQueries({
-          fullPhraseConcepts: [],
-          combinedConcepts: [
-            { orderedVariants: ['ذاكرة مؤقتة', 'ram'] },
-            { orderedVariants: ['حاسب محمول', 'لابتوب'] },
-          ],
-          tokenConceptLayers: [],
-          fallbackWordsAppearanceOrder: [],
-          fallbackWordsProgressiveOrder: [],
-        }),
-      ).toEqual([
-        'ذاكرة مؤقتة حاسب محمول',
-        'ram حاسب محمول',
-        'ذاكرة مؤقتة لابتوب',
-        'ram لابتوب',
-      ]);
-    });
-
-    it('expands each single-segment concept independently instead of cartesian pairs', () => {
-      expect(
-        buildLayeredConceptExpansionQueries({
-          exactQuery: 'قبضة',
-          fullPhraseConcepts: [],
-          combinedConcepts: [],
-          tokenConceptLayers: [
-            [{ orderedVariants: ['قبضة', 'يد تحكم', 'controller'] }],
-            [{ orderedVariants: ['قبضة', 'مقبض', 'grip'] }],
-          ],
-          fallbackWordsAppearanceOrder: [],
-          fallbackWordsProgressiveOrder: [],
-        }),
-      ).toEqual([
-        'قبضة',
-        'قبضة',
-        'يد تحكم',
-        'controller',
-        'قبضة',
-        'مقبض',
-        'grip',
-      ]);
-    });
-  });
-
-  describe('buildConceptSynonymThenProgressiveQueries', () => {
-    it('runs exact query, synonym with unchanged tail, then progressive fallback', () => {
-      expect(
-        buildConceptSynonymThenProgressiveQueries({
-          exactQuery: 'دفتريه اسس 5070 i7',
-          matchedConcepts: [{ orderedVariants: ['دفتريه', 'لابتوب', 'حاسب محمول'] }],
-          fallbackWordsAppearanceOrder: ['اسس', '5070', 'i7'],
-          fallbackWordsProgressiveOrder: ['i7', '5070', 'اسس'],
-        }),
-      ).toEqual([
-        'دفتريه اسس 5070 i7',
-        'لابتوب اسس 5070 i7',
-        'حاسب محمول اسس 5070 i7',
-        'دفتريه i7 5070 اسس',
-        'دفتريه i7 5070',
-        'دفتريه i7 اسس',
-        'دفتريه 5070 اسس',
-        'دفتريه i7',
-        'دفتريه 5070',
-        'دفتريه اسس',
-        'لابتوب i7 5070 اسس',
-        'لابتوب i7 5070',
-        'لابتوب i7 اسس',
-        'لابتوب 5070 اسس',
-        'لابتوب i7',
-        'لابتوب 5070',
-        'لابتوب اسس',
-        'حاسب محمول i7 5070 اسس',
-        'حاسب محمول i7 5070',
-        'حاسب محمول i7 اسس',
-        'حاسب محمول 5070 اسس',
-        'حاسب محمول i7',
-        'حاسب محمول 5070',
-        'حاسب محمول اسس',
-      ]);
-    });
-  });
-
-  describe('buildProgressiveConceptSearchQueries', () => {
-    it('builds single-concept queries with fallback words', () => {
-      expect(
-        buildProgressiveConceptSearchQueries(
-          [{ orderedVariants: ['لابتوب', 'حاسب محمول'] }],
-          ['5070', 'i7'],
-          ['5070', 'i7'],
-          50,
-          'لابتوب 5070 i7',
-        ),
-      ).toEqual([
-        'لابتوب 5070 i7',
-        'حاسب محمول 5070 i7',
-        'لابتوب 5070',
-        'لابتوب i7',
-        'حاسب محمول 5070',
-        'حاسب محمول i7',
-      ]);
-    });
-
-    it('builds multi-concept queries without fallback words', () => {
-      expect(
-        buildProgressiveConceptSearchQueries(
-          [
-            { orderedVariants: ['ذاكرة مؤقتة', 'ram'] },
-            { orderedVariants: ['حاسب محمول', 'لابتوب'] },
-          ],
-          [],
-          [],
-        ),
-      ).toEqual([
-        'ذاكرة مؤقتة حاسب محمول',
-        'ram حاسب محمول',
-        'ذاكرة مؤقتة لابتوب',
-        'ram لابتوب',
-      ]);
-    });
-  });
-
-  describe('applyConceptCategoryRefinement', () => {
-    it('reorders mixed concept-tier hits to prefer matching categories', () => {
-      const categoryIdsByProductId = new Map<number, number[]>([
-        [1, [63]],
-        [2, [78]],
-        [3, [87]],
-        [4, [88]],
+    it('keeps each concept group independent for one-token multi-group matches (قبضة)', () => {
+      const levels = buildVariantLevelQueries([
+        { text: 'قبضة', orderedVariants: ['قبضة', 'يد تحكم', 'controller'] },
+        { text: 'قبضة', orderedVariants: ['قبضة', 'مقبض', 'grip'] },
       ]);
 
-      expect(
-        applyConceptCategoryRefinement([2, 1, 4, 3], categoryIdsByProductId, [63, 87]),
-      ).toEqual({
-        ids: [1, 3, 2, 4],
-        applied: true,
-        preferredCount: 2,
-        otherCount: 2,
-      });
-    });
-
-    it('keeps original order when all hits already match the concept categories', () => {
-      const categoryIdsByProductId = new Map<number, number[]>([
-        [1, [63]],
-        [2, [87]],
-      ]);
-
-      expect(
-        applyConceptCategoryRefinement([1, 2], categoryIdsByProductId, [63, 87]),
-      ).toEqual({
-        ids: [1, 2],
-        applied: false,
-        preferredCount: 2,
-        otherCount: 0,
-      });
+      expect(levels[0].queries).toContain('قبضة قبضة');
+      expect(levels[1].queries).toEqual(
+        expect.arrayContaining(['قبضة', 'يد تحكم', 'controller', 'مقبض', 'grip']),
+      );
     });
   });
 

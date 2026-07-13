@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { TermGroup } from '../terms/entities/term-group.entity';
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import {
@@ -16,6 +16,18 @@ export type MatchedConceptInQuery = {
   matchedTokens: string[];
   orderedVariants: string[];
   matchStart: number;
+};
+
+export type QueryVariantSegment = {
+  text: string;
+  orderedVariants: string[];
+  matchedGroupIds: number[];
+  referenceProductIds: number[];
+};
+
+export type SegmentedQueryVariants = {
+  segments: QueryVariantSegment[];
+  allSegmentsMatchedByTerms: boolean;
 };
 
 type LexiconPhraseEntry = {
@@ -192,6 +204,82 @@ export class TermConceptLexiconService {
       });
     });
     return tokens;
+  }
+
+  async segmentQueryWithVariants(
+    normalizedQuery: string,
+    tokens: string[],
+    locale: SearchLocale,
+  ): Promise<SegmentedQueryVariants> {
+    const normalizedTokens = tokens
+      .map((token) => token.trim())
+      .filter(Boolean);
+    if (normalizedTokens.length === 0) {
+      return { segments: [], allSegmentsMatchedByTerms: false };
+    }
+
+    const segments: QueryVariantSegment[] = [];
+    const allMatchedGroupIds = new Set<number>();
+
+    for (const token of normalizedTokens) {
+      const conceptMatches = await this.resolveAllConceptGroupsMatchingSegment(
+        token,
+        locale,
+      );
+      const matchedGroupIds = [...new Set(conceptMatches.map((match) => match.groupId))];
+      matchedGroupIds.forEach((groupId) => allMatchedGroupIds.add(groupId));
+
+      const seenVariants = new Set<string>();
+      const orderedVariants: string[] = [];
+      const pushVariant = (value: string) => {
+        const trimmed = value.trim();
+        if (!trimmed) return;
+        const key = normalizeConceptTermKey(trimmed);
+        if (!key || seenVariants.has(key)) return;
+        seenVariants.add(key);
+        orderedVariants.push(trimmed);
+      };
+
+      pushVariant(token);
+      conceptMatches.forEach((match) => {
+        match.orderedVariants.forEach((variant) => pushVariant(variant));
+      });
+
+      segments.push({
+        text: token,
+        orderedVariants: orderedVariants.length > 0 ? orderedVariants : [token],
+        matchedGroupIds,
+        referenceProductIds: [],
+      });
+    }
+
+    if (allMatchedGroupIds.size > 0) {
+      const groups = await this.termGroupsRepository.find({
+        where: { id: In([...allMatchedGroupIds]) },
+      });
+      const referenceByGroupId = new Map<number, number[]>(
+        groups.map((group) => [
+          group.id,
+          (group.reference_product_ids ?? []).filter(
+            (id) => Number.isInteger(id) && id > 0,
+          ),
+        ]),
+      );
+
+      segments.forEach((segment) => {
+        const ids = new Set<number>();
+        segment.matchedGroupIds.forEach((groupId) => {
+          (referenceByGroupId.get(groupId) ?? []).forEach((id) => ids.add(id));
+        });
+        segment.referenceProductIds = [...ids];
+      });
+    }
+
+    return {
+      segments,
+      allSegmentsMatchedByTerms:
+        segments.length > 0 && segments.every((segment) => segment.matchedGroupIds.length > 0),
+    };
   }
 
   private async getLexicon(): Promise<NonNullable<TermConceptLexiconService['lexiconCache']>> {

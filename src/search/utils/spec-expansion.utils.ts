@@ -6,7 +6,7 @@ const ARABIC_SCRIPT =
 export type SearchLocale = 'ar' | 'en';
 
 /** Bump when concept expansion query ordering changes (visible on GET /health). */
-export const SEARCH_EXPANSION_VERSION = '2026-07-13-brand-layered-expansion';
+export const SEARCH_EXPANSION_VERSION = '2026-07-13-word-variant-buckets';
 
 export type ConceptSynonymSource = {
   terms_en?: string[] | null;
@@ -105,6 +105,72 @@ export function buildProgressiveWordCombinations(
   }
 
   return combinations;
+}
+
+export type QueryVariantSegmentInput = {
+  text: string;
+  orderedVariants: string[];
+};
+
+export type VariantQueryLevel = {
+  segmentTexts: string[];
+  queries: string[];
+};
+
+export function buildVariantLevelQueries(
+  segments: QueryVariantSegmentInput[],
+  maxConceptCombos = 50,
+): VariantQueryLevel[] {
+  const cleanedSegments = segments
+    .map((segment) => ({
+      text: segment.text.trim(),
+      orderedVariants: segment.orderedVariants
+        .map((variant) => variant.trim())
+        .filter(Boolean),
+    }))
+    .filter((segment) => segment.text && segment.orderedVariants.length > 0);
+
+  if (cleanedSegments.length === 0) {
+    return [];
+  }
+
+  const levels: VariantQueryLevel[] = [];
+  const seenQueries = new Set<string>();
+
+  for (let size = cleanedSegments.length; size >= 1; size -= 1) {
+    const levelQueries: string[] = [];
+    const levelSegmentTexts: string[] = [];
+
+    combinationsOfIndices(cleanedSegments.length, size).forEach((indexCombo) => {
+      const selectedSegments = indexCombo.map((index) => cleanedSegments[index]);
+      const combos = buildMultiConceptVariantCombinations(
+        selectedSegments.map((segment) => ({
+          orderedVariants: segment.orderedVariants,
+        })),
+        maxConceptCombos,
+      );
+
+      selectedSegments.forEach((segment) => levelSegmentTexts.push(segment.text));
+      combos.forEach((combo) => {
+        const query = combo.join(' ').trim();
+        const key = normalizeConceptTermKey(query);
+        if (!key || seenQueries.has(key)) {
+          return;
+        }
+        seenQueries.add(key);
+        levelQueries.push(query);
+      });
+    });
+
+    if (levelQueries.length > 0) {
+      levels.push({
+        segmentTexts: Array.from(new Set(levelSegmentTexts)),
+        queries: levelQueries,
+      });
+    }
+  }
+
+  return levels;
 }
 
 export function buildProgressiveWordSearchQueries(
@@ -268,256 +334,6 @@ export function collectConceptVariantQueries(
   });
 
   return queries;
-}
-
-function pushUniqueConceptQuery(
-  query: string,
-  seen: Set<string>,
-  output: string[],
-): void {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return;
-  }
-  const key = normalizeConceptTermKey(trimmed);
-  if (seen.has(key)) {
-    return;
-  }
-  seen.add(key);
-  output.push(trimmed);
-}
-
-export type ConceptExpansionQueryParams = {
-  exactQuery?: string;
-  matchedConcepts: Array<{ orderedVariants: string[] }>;
-  fallbackWordsAppearanceOrder: string[];
-  fallbackWordsProgressiveOrder: string[];
-  maxConceptCombos?: number;
-};
-
-/**
- * Concept expansion query order:
- * 1) exact user query
- * 2) each concept synonym + remaining words in appearance order (unchanged)
- * 3) each concept synonym + progressive word subsets (RTL/LTR fallback order)
- */
-export function buildConceptSynonymThenProgressiveQueries(
-  params: ConceptExpansionQueryParams,
-): string[] {
-  const {
-    exactQuery,
-    matchedConcepts,
-    fallbackWordsAppearanceOrder,
-    fallbackWordsProgressiveOrder,
-    maxConceptCombos = 50,
-  } = params;
-
-  const queries: string[] = [];
-  const seen = new Set<string>();
-
-  if (exactQuery?.trim()) {
-    pushUniqueConceptQuery(exactQuery.trim(), seen, queries);
-  }
-
-  const conceptCombos = buildMultiConceptVariantCombinations(
-    matchedConcepts,
-    maxConceptCombos,
-  );
-  if (conceptCombos.length === 0) {
-    return queries;
-  }
-
-  const appearanceTail = fallbackWordsAppearanceOrder
-    .map((word) => word.trim())
-    .filter(Boolean)
-    .join(' ');
-
-  conceptCombos.forEach((conceptCombo) => {
-    const prefix = conceptCombo.join(' ').trim();
-    const query = [prefix, appearanceTail].filter(Boolean).join(' ').trim();
-    pushUniqueConceptQuery(query, seen, queries);
-  });
-
-  const progressiveCombos =
-    fallbackWordsProgressiveOrder.length > 0
-      ? buildProgressiveWordCombinations(fallbackWordsProgressiveOrder)
-      : [];
-
-  conceptCombos.forEach((conceptCombo) => {
-    const prefix = conceptCombo.join(' ').trim();
-    progressiveCombos.forEach((fallbackCombo) => {
-      const fallbackTail = fallbackCombo.join(' ').trim();
-      const query = [prefix, fallbackTail].filter(Boolean).join(' ').trim();
-      pushUniqueConceptQuery(query, seen, queries);
-    });
-  });
-
-  return queries;
-}
-
-export type ConceptExpansionLayer = {
-  queries: string[];
-  /** Max new hits per synonym query (prevents one loose match from dominating). */
-  perQueryLimit: number;
-};
-
-/**
- * When concept-tier results mix product types, prefer items whose categories
- * align with the detected concept — without dropping the rest.
- */
-export function applyConceptCategoryRefinement(
-  conceptTierIds: number[],
-  productCategoryIdsByProductId: ReadonlyMap<number, number[]>,
-  refinementCategoryIds: number[],
-): {
-  ids: number[];
-  applied: boolean;
-  preferredCount: number;
-  otherCount: number;
-} {
-  if (conceptTierIds.length === 0 || refinementCategoryIds.length === 0) {
-    return {
-      ids: conceptTierIds,
-      applied: false,
-      preferredCount: 0,
-      otherCount: conceptTierIds.length,
-    };
-  }
-
-  const categorySet = new Set(refinementCategoryIds);
-  const preferred: number[] = [];
-  const other: number[] = [];
-
-  conceptTierIds.forEach((productId) => {
-    const categoryIds = productCategoryIdsByProductId.get(productId) ?? [];
-    if (categoryIds.some((categoryId) => categorySet.has(categoryId))) {
-      preferred.push(productId);
-    } else {
-      other.push(productId);
-    }
-  });
-
-  const applied = preferred.length > 0 && other.length > 0;
-  return {
-    ids: applied ? [...preferred, ...other] : conceptTierIds,
-    applied,
-    preferredCount: preferred.length,
-    otherCount: other.length,
-  };
-}
-
-/**
- * Layered concept expansion:
- * 1) all terms from concepts matching the full query phrase
- * 2) combined multi-concept synonym cartesian (e.g. RAM + laptop together)
- * 3) each query token's matching concepts in order (e.g. كرت, then ذاكرة)
- */
-export function buildLayeredConceptExpansionLayers(params: {
-  exactQuery?: string;
-  fullPhraseConcepts: Array<{ orderedVariants: string[] }>;
-  combinedConcepts: Array<{ orderedVariants: string[] }>;
-  tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>>;
-  fallbackWordsAppearanceOrder: string[];
-  fallbackWordsProgressiveOrder: string[];
-  maxConceptCombos?: number;
-}): ConceptExpansionLayer[] {
-  const {
-    exactQuery,
-    fullPhraseConcepts,
-    combinedConcepts,
-    tokenConceptLayers,
-    fallbackWordsAppearanceOrder,
-    fallbackWordsProgressiveOrder,
-    maxConceptCombos = 50,
-  } = params;
-
-  const layers: ConceptExpansionLayer[] = [];
-  let exactQueryPending = exactQuery?.trim() ?? '';
-
-  const takeExactQuery = (): string | undefined => {
-    if (!exactQueryPending) {
-      return undefined;
-    }
-    const value = exactQueryPending;
-    exactQueryPending = '';
-    return value;
-  };
-
-  const fullPhraseQueries = buildConceptSynonymThenProgressiveQueries({
-    exactQuery: takeExactQuery(),
-    matchedConcepts: fullPhraseConcepts,
-    fallbackWordsAppearanceOrder,
-    fallbackWordsProgressiveOrder,
-    maxConceptCombos,
-  });
-  if (fullPhraseQueries.length > 0) {
-    layers.push({
-      queries: fullPhraseQueries,
-      perQueryLimit: 25,
-    });
-  }
-
-  if (combinedConcepts.length >= 2) {
-    const combinedQueries = buildConceptSynonymThenProgressiveQueries({
-      exactQuery: takeExactQuery(),
-      matchedConcepts: combinedConcepts,
-      fallbackWordsAppearanceOrder,
-      fallbackWordsProgressiveOrder,
-      maxConceptCombos,
-    });
-    if (combinedQueries.length > 0) {
-      layers.push({
-        queries: combinedQueries,
-        perQueryLimit: 25,
-      });
-    }
-  }
-
-  tokenConceptLayers.forEach((layerConcepts) => {
-    const tokenQueries = buildConceptSynonymThenProgressiveQueries({
-      exactQuery: takeExactQuery(),
-      matchedConcepts: layerConcepts,
-      fallbackWordsAppearanceOrder,
-      fallbackWordsProgressiveOrder,
-      maxConceptCombos,
-    });
-    if (tokenQueries.length > 0) {
-      layers.push({
-        queries: tokenQueries,
-        perQueryLimit: 40,
-      });
-    }
-  });
-
-  return layers;
-}
-
-export function buildLayeredConceptExpansionQueries(params: {
-  exactQuery?: string;
-  fullPhraseConcepts: Array<{ orderedVariants: string[] }>;
-  combinedConcepts: Array<{ orderedVariants: string[] }>;
-  tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>>;
-  fallbackWordsAppearanceOrder: string[];
-  fallbackWordsProgressiveOrder: string[];
-  maxConceptCombos?: number;
-}): string[] {
-  return buildLayeredConceptExpansionLayers(params).flatMap((layer) => layer.queries);
-}
-
-export function buildProgressiveConceptSearchQueries(
-  matchedConcepts: Array<{ orderedVariants: string[] }>,
-  fallbackWordsAppearanceOrder: string[],
-  fallbackWordsProgressiveOrder: string[],
-  maxConceptCombos = 50,
-  exactQuery?: string,
-): string[] {
-  return buildConceptSynonymThenProgressiveQueries({
-    exactQuery,
-    matchedConcepts,
-    fallbackWordsAppearanceOrder,
-    fallbackWordsProgressiveOrder,
-    maxConceptCombos,
-  });
 }
 
 export function normalizeSearchLocale(
