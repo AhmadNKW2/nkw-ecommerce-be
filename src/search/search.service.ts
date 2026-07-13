@@ -76,6 +76,7 @@ const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 type ExpansionTierKey =
   | 'concept'
   | 'primary'
+  | 'same_brand_spec'
   | 'strong_partial'
   | 'category_brand'
   | 'cross_brand_spec'
@@ -103,17 +104,19 @@ export class SearchService implements OnModuleInit {
   ]);
   private readonly expansionTierOrder: ExpansionTierKey[] = [
     'concept',
-    'primary',
+    'same_brand_spec',
     'cross_brand_spec',
+    'primary',
     'strong_partial',
-    'category',
     'category_brand',
-    'brand',
     'specification',
+    'category',
+    'brand',
     'keyword',
   ];
   private readonly defaultEnabledExpansionLevels = new Set<ExpansionTierKey>([
     'strong_partial',
+    'same_brand_spec',
     'category_brand',
     'cross_brand_spec',
     'category',
@@ -1222,10 +1225,7 @@ export class SearchService implements OnModuleInit {
     }
 
     const tokenSet = new Set(tokens);
-    const [brandLexicon, categoryLexicon] = await Promise.all([
-      this.getBrandLexicon(),
-      this.getCategoryLexicon(),
-    ]);
+    const brandLexicon = await this.getBrandLexicon();
 
     const normalizedQueryWithSpaces = ` ${normalizedQuery.trim()} `;
     const hasPhraseMatch = (entryTokens: string[]) =>
@@ -1242,15 +1242,10 @@ export class SearchService implements OnModuleInit {
           hasPhraseMatch(entry.normalizedTokens),
       )
       .map((entry) => entry.id);
-    const categoryIds = categoryLexicon
-      .filter(
-        (entry) =>
-          entry.normalizedTokens.some((token) => tokenSet.has(token)) ||
-          hasPhraseMatch(entry.normalizedTokens),
-      )
-      .map((entry) => entry.id);
 
-    return { brandIds, categoryIds };
+    // Query-time category detection is intentionally disabled.
+    // Category IDs should come only from explicit request filters.
+    return { brandIds, categoryIds: [] };
   }
 
   private hasUnsupportedTypesenseFilters(dto: SearchQueryDto): boolean {
@@ -2208,6 +2203,7 @@ export class SearchService implements OnModuleInit {
     const idsByTier: Record<ExpansionTierKey, number[]> = {
       concept: [],
       primary: [],
+      same_brand_spec: [],
       strong_partial: [],
       category_brand: [],
       cross_brand_spec: [],
@@ -2235,22 +2231,15 @@ export class SearchService implements OnModuleInit {
     const brandIdsFromFilters =
       this.parseCsvNumbers((params.dto as any).brand_ids) ??
       (params.dto.brand_id != null ? [params.dto.brand_id] : []);
-    const effectiveCategoryIds = Array.from(
-      new Set([...detected.categoryIds, ...categoryIdsFromFilters]),
-    );
+    const effectiveCategoryIds = Array.from(new Set(categoryIdsFromFilters));
     const effectiveBrandIds = Array.from(
       new Set([...detected.brandIds, ...brandIdsFromFilters]),
     );
     const brandIdsFromQueryOnly = detected.brandIds;
-    const categoryIdsFromQueryOnly = detected.categoryIds;
     const hasBrandInQuery = brandIdsFromQueryOnly.length > 0;
     const brandTokensFromQuery = hasBrandInQuery
       ? await this.getBrandTokensForIds(brandIdsFromQueryOnly)
       : new Set<string>();
-    const categoryTokensFromQuery =
-      categoryIdsFromQueryOnly.length > 0
-        ? await this.getCategoryTokensForIds(categoryIdsFromQueryOnly)
-        : new Set<string>();
     const searchLocale = normalizeSearchLocale(params.dto.locale, tokens);
     const matchedConcepts = await this.termConceptLexicon.resolveAllConceptsInQuery(
       normalizedQ,
@@ -2268,7 +2257,6 @@ export class SearchService implements OnModuleInit {
       this.termConceptLexicon.getConceptTokensFromMatches(matchedConcepts);
     const excludedFromFallback = new Set<string>([
       ...brandTokensFromQuery,
-      ...categoryTokensFromQuery,
       ...conceptTokensFromQuery,
     ]);
     const fallbackWordsInAppearanceOrder = extractQueryWordsInAppearanceOrder(
@@ -2279,11 +2267,7 @@ export class SearchService implements OnModuleInit {
       fallbackWordsInAppearanceOrder,
       tokens,
     );
-    const baseIntentQuery = tokens
-      .filter((token) => categoryTokensFromQuery.has(token))
-      .join(' ')
-      .trim();
-    const categoryIntentQuery = baseIntentQuery;
+    const categoryIntentQuery = '';
     const { conceptLayers, expansionQueries: progressiveExpansionQueries, conceptDriven } =
       await this.buildProgressiveExpansionQueries({
         normalizedQuery: normalizedQ,
@@ -2397,6 +2381,38 @@ export class SearchService implements OnModuleInit {
     // Loose primary text-match results fill in behind the concept layer for any
     // products the concept queries did not already surface.
     addIds('primary', params.primaryIds);
+
+    if (
+      enabledLevels.has('same_brand_spec') &&
+      hasBrandInQuery &&
+      uniqueIds.size < params.requestedLimit &&
+      hasExpansionQueries
+    ) {
+      const sameBrandFilters = [params.baseFilterBy];
+      if (effectiveCategoryIds.length > 0) {
+        sameBrandFilters.push(
+          `category_ids:=[${effectiveCategoryIds.join(',')}]`,
+        );
+      }
+      sameBrandFilters.push(
+        `brand_id:=[${brandIdsFromQueryOnly.join(',')}]`,
+      );
+
+      for (const wordQuery of progressiveExpansionQueries) {
+        if (uniqueIds.size >= params.requestedLimit) break;
+        const ids = await this.searchTypesenseIds({
+          q: wordQuery,
+          filterBy: this.mergeFilterByClauses(...sameBrandFilters),
+          sortBy: '_text_match:desc,created_at_ts:desc',
+          limit: Math.min(40, maxCandidates - uniqueIds.size),
+        });
+        addIds('same_brand_spec', ids);
+      }
+      if (idsByTier.same_brand_spec.length > 0) {
+        tierNotes.same_brand_spec =
+          'requested brand + category/spec progressive matches';
+      }
+    }
 
     if (
       enabledLevels.has('cross_brand_spec') &&
@@ -2624,16 +2640,17 @@ export class SearchService implements OnModuleInit {
     const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
     const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
-    const lexiconWarmupPromise =
+    const expansionPrepPromise =
       expansionEnabled && normalizedQuery && normalizedQuery !== '*'
-        ? this.termConceptLexicon
-            .resolveAllConceptsInQuery(
+        ? Promise.all([
+            this.termConceptLexicon.resolveAllConceptsInQuery(
               normalizedQuery,
               conceptDetectionTokens,
               normalizeSearchLocale((dto as any).locale, conceptDetectionTokens),
-            )
-            .then(() => undefined)
-        : Promise.resolve();
+            ),
+            this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery),
+          ])
+        : Promise.resolve([[], { brandIds: [], categoryIds: [] }] as const);
     const primaryFetchLimit = Math.min(
       maxCandidates,
       Math.max(startOffset + perPage, primaryEnoughCount),
@@ -2644,6 +2661,7 @@ export class SearchService implements OnModuleInit {
       query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
       text_match_type: 'max_weight',
       prioritize_token_position: true,
+      drop_tokens_threshold: 0,
       filter_by: filterBy,
       sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin, dto.q),
       facet_by: this.getTypesenseFacetFields(),
@@ -2654,9 +2672,9 @@ export class SearchService implements OnModuleInit {
       ...(fullResponse ? { include_fields: 'id' } : {}),
     };
 
-    const [result] = await Promise.all([
+    const [result, [queryConcepts, detectedEntities]] = await Promise.all([
       this.typesenseService.search(params),
-      lexiconWarmupPromise,
+      expansionPrepPromise,
     ]);
     const hits = Array.isArray(result.hits) ? result.hits : [];
     let orderedProductIds = hits
@@ -2664,10 +2682,16 @@ export class SearchService implements OnModuleInit {
       .filter((id) => Number.isInteger(id) && id > 0);
     const primaryCount = orderedProductIds.length;
     const primaryIsEnough = primaryCount >= primaryEnoughCount;
+    const hasQueryConcepts = queryConcepts.length > 0;
+    const hasStructuredQueryIntent =
+      conceptDetectionTokens.length > 1 ||
+      detectedEntities.brandIds.length > 0 ||
+      detectedEntities.categoryIds.length > 0 ||
+      hasQueryConcepts;
 
     const shouldExpand =
       expansionEnabled &&
-      !primaryIsEnough &&
+      (!primaryIsEnough || hasStructuredQueryIntent) &&
       perPage > 0 &&
       startOffset + perPage <= maxCandidates;
     let expansionMeta:
@@ -2836,6 +2860,7 @@ export class SearchService implements OnModuleInit {
       const tierCounts: Record<ExpansionTierKey, number[]> = expansionMeta?.tiers ?? {
         concept: [],
         primary: Array.from({ length: primaryCount }),
+        same_brand_spec: [],
         strong_partial: [],
         category_brand: [],
         cross_brand_spec: [],
