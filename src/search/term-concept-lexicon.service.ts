@@ -152,7 +152,6 @@ export class TermConceptLexiconService {
           orderedVariants: buildConceptSynonymVariants(token.trim(), entry.group, locale),
           matchStart: this.getTokenStartOffset(query, tokens, index),
         });
-        break;
       }
     });
 

@@ -123,4 +123,36 @@ describe('TermConceptLexiconService', () => {
       await segmentedService.resolveAllConceptGroupsMatchingSegment('ذاكرة', 'ar');
     expect(ramMatches.some((match) => match.groupId === 3)).toBe(true);
   });
+
+  it('resolves every concept group that shares the same single token', async () => {
+    const gamepadGroup: TermGroup = {
+      id: 276,
+      terms_en: ['gamepad', 'controller'],
+      terms_ar: ['قبضة', 'يد تحكم'],
+      reference_product_ids: [1608],
+      concept_key: 'gamepad',
+      concept_label_en: 'gamepad',
+      concept_label_ar: 'يد تحكم',
+      source_product_id: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const gripGroup: TermGroup = {
+      id: 277,
+      terms_en: ['grip', 'controller grip'],
+      terms_ar: ['قبضة', 'مقبض'],
+      reference_product_ids: [1607],
+      concept_key: 'controllergrip',
+      concept_label_en: 'grip',
+      concept_label_ar: 'مقبض',
+      source_product_id: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+    };
+    const service = makeService([gamepadGroup, gripGroup]);
+
+    const matches = await service.resolveAllConceptsInQuery('قبضة', ['قبضة'], 'ar');
+
+    expect(matches.map((match) => match.groupId).sort()).toEqual([276, 277]);
+  });
 });

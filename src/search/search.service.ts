@@ -456,14 +456,6 @@ export class SearchService implements OnModuleInit {
     return value.toLowerCase() === 'true';
   }
 
-  private isTypesenseConceptSynonymsEnabled(): boolean {
-    const raw = this.configService.get<string>(
-      'SEARCH_TYPESENSE_CONCEPT_SYNONYMS',
-      'true',
-    );
-    return raw.trim().toLowerCase() !== 'false';
-  }
-
   private getMaxExpansionCandidates(): number {
     const configured = Number(
       this.configService.get<string>('SEARCH_EXPANSION_MAX_CANDIDATES', '240'),
@@ -630,6 +622,61 @@ export class SearchService implements OnModuleInit {
       return 100;
     }
     return configured;
+  }
+
+  private getConceptExpansionQueryConcurrency(): number {
+    const configured = Number(
+      this.configService.get<string>(
+        'SEARCH_EXPANSION_CONCEPT_QUERY_CONCURRENCY',
+        '8',
+      ),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 8;
+    }
+    return Math.min(20, configured);
+  }
+
+  private async runConceptExpansionQueries(
+    queries: string[],
+    params: {
+      baseFilterBy?: string;
+      perQueryLimit: number;
+      maxCandidates: number;
+      requestedLimit: number;
+    },
+  ): Promise<
+    Array<{
+      query: string;
+      hits: Array<{ id: number; categoryIds: number[] }>;
+    }>
+  > {
+    const concurrency = this.getConceptExpansionQueryConcurrency();
+    const results: Array<{
+      query: string;
+      hits: Array<{ id: number; categoryIds: number[] }>;
+    }> = [];
+
+    for (let index = 0; index < queries.length; index += concurrency) {
+      const chunk = queries.slice(index, index + concurrency);
+      const chunkResults = await Promise.all(
+        chunk.map(async (conceptQuery) => {
+          const hits = await this.searchTypesenseProductHits({
+            q: conceptQuery,
+            filterBy: params.baseFilterBy,
+            sortBy: '_text_match:desc,created_at_ts:desc',
+            limit: Math.min(
+              params.perQueryLimit,
+              params.maxCandidates,
+            ),
+          });
+          return { query: conceptQuery, hits };
+        }),
+      );
+      results.push(...chunkResults);
+    }
+
+    return results;
   }
 
   private isSearchDebugEnabledByEnv(): boolean {
@@ -2154,18 +2201,21 @@ export class SearchService implements OnModuleInit {
     // not used to filter these searches — only optional post-collection refinement.
     if (conceptDriven && conceptLayers.length > 0) {
       for (const conceptLayer of conceptLayers) {
-        for (const conceptQuery of conceptLayer.queries) {
-          if (uniqueIds.size >= params.requestedLimit) break;
+        const batchResults = await this.runConceptExpansionQueries(
+          conceptLayer.queries,
+          {
+            baseFilterBy: params.baseFilterBy,
+            perQueryLimit: conceptLayer.perQueryLimit,
+            maxCandidates,
+            requestedLimit: params.requestedLimit,
+          },
+        );
+
+        for (const { query: conceptQuery, hits } of batchResults) {
+          if (uniqueIds.size >= params.requestedLimit) {
+            break;
+          }
           const beforeSize = uniqueIds.size;
-          const hits = await this.searchTypesenseProductHits({
-            q: conceptQuery,
-            filterBy: params.baseFilterBy,
-            sortBy: '_text_match:desc,created_at_ts:desc',
-            limit: Math.min(
-              conceptLayer.perQueryLimit,
-              maxCandidates - uniqueIds.size,
-            ),
-          });
           hits.forEach((hit) => {
             if (hit.categoryIds.length > 0) {
               conceptProductCategoryIds.set(hit.id, hit.categoryIds);
@@ -2484,17 +2534,10 @@ export class SearchService implements OnModuleInit {
           )
         : [];
     const hasQueryConcepts = queryConcepts.length > 0;
-    const canSkipExpansionWithSynonyms =
-      this.isTypesenseConceptSynonymsEnabled() &&
-      this.searchProvider === 'typesense' &&
-      this.typesenseService.isEnabled() &&
-      conceptDetectionTokens.length <= 1;
 
     const shouldExpand =
       expansionEnabled &&
-      !canSkipExpansionWithSynonyms &&
-      (!primaryIsEnough ||
-        (hasQueryConcepts && conceptDetectionTokens.length > 1)) &&
+      (!primaryIsEnough || hasQueryConcepts) &&
       perPage > 0 &&
       startOffset + perPage <= maxCandidates;
     let expansionMeta:
