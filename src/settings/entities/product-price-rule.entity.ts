@@ -27,18 +27,16 @@ const decimalNumberTransformer: ValueTransformer = {
 
 @Entity('product_price_rules')
 @Index('idx_product_price_rules_is_active', ['is_active'])
-@Index('idx_product_price_rules_min_vendor_price', ['min_vendor_price'])
-@Index('idx_product_price_rules_vendor_id', ['vendor_id'])
-@Index('idx_product_price_rules_brand_id', ['brand_id'])
+@Index('idx_product_price_rules_min_product_price', ['min_product_price'])
 export class ProductPriceRule {
   @PrimaryGeneratedColumn('increment')
   id: number;
 
-  @Column({ type: 'int', nullable: true })
-  vendor_id: number | null;
+  @Column({ type: 'jsonb', nullable: true })
+  vendor_ids: number[] | null;
 
-  @Column({ type: 'int', nullable: true })
-  brand_id: number | null;
+  @Column({ type: 'jsonb', nullable: true })
+  brand_ids: number[] | null;
 
   @Column({ type: 'jsonb', nullable: true })
   category_ids: number[] | null;
@@ -60,9 +58,10 @@ export class ProductPriceRule {
   @Column('decimal', {
     precision: 10,
     scale: 2,
+    nullable: true,
     transformer: decimalNumberTransformer,
   })
-  min_vendor_price: number;
+  min_product_price: number | null;
 
   @Column('decimal', {
     precision: 10,
@@ -70,7 +69,7 @@ export class ProductPriceRule {
     nullable: true,
     transformer: decimalNumberTransformer,
   })
-  max_vendor_price: number | null;
+  max_product_price: number | null;
 
   @Column('decimal', {
     precision: 5,

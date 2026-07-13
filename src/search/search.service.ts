@@ -82,6 +82,9 @@ export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly randomBrowseMaxResults = 2000;
   private readonly typesenseIdPageSize = 250;
+  private readonly bucketQueryPageSize = 50;
+  private readonly bucketQueryMaxPages = 3;
+  private conceptAnchorCategoryCache = new Map<string, { loadedAt: number; ids: number[] }>();
   private readonly unsupportedTypesenseFilterKeys = new Set([
     'attributes_ids',
     'specifications_ids',
@@ -516,6 +519,35 @@ export class SearchService implements OnModuleInit {
     return configured;
   }
 
+  /** Small headroom so layered buckets can finish a level before the page slice. */
+  private getExpansionPageBuffer(): number {
+    const configured = Number(
+      this.configService.get<string>('SEARCH_EXPANSION_PAGE_BUFFER', '15'),
+    );
+    if (!Number.isInteger(configured) || configured < 0) {
+      return 15;
+    }
+    return Math.min(50, configured);
+  }
+
+  private hasStructuredExpansionIntent(
+    tokens: string[],
+    brandIds: number[],
+  ): boolean {
+    return tokens.length > 1 || brandIds.length > 0;
+  }
+
+  private getStructuredExpansionTarget(
+    startOffset: number,
+    perPage: number,
+    maxCandidates: number,
+  ): number {
+    return Math.min(
+      maxCandidates,
+      startOffset + perPage + this.getExpansionPageBuffer(),
+    );
+  }
+
   private getConceptExpansionMultiSearchBatchSize(): number {
     const configured = Number(
       this.configService.get<string>(
@@ -570,11 +602,12 @@ export class SearchService implements OnModuleInit {
       hits: Array<{ id: number; categoryIds: number[] }>;
     }> = [];
     const uniqueQueries = this.dedupeConceptExpansionQueries(queries);
-    const perPage = Math.min(params.perQueryLimit, this.typesenseIdPageSize);
+    const perPage = Math.min(params.perQueryLimit, this.bucketQueryPageSize);
     const maxHitsPerQuery = Math.min(
-      params.maxHitsPerQuery ?? this.typesenseIdPageSize,
+      params.maxHitsPerQuery ?? perPage * this.bucketQueryMaxPages,
       params.maxCandidates,
     );
+    const maxPages = this.bucketQueryMaxPages;
 
     for (let index = 0; index < uniqueQueries.length; index += batchSize) {
       if (shouldStop?.()) {
@@ -632,7 +665,8 @@ export class SearchService implements OnModuleInit {
           if (
             mapped.length < perPage ||
             entry.hits.length >= totalFound ||
-            entry.hits.length >= maxHitsPerQuery
+            entry.hits.length >= maxHitsPerQuery ||
+            entry.page >= maxPages
           ) {
             entry.done = true;
             return;
@@ -1866,6 +1900,20 @@ export class SearchService implements OnModuleInit {
   ): Promise<number[]> {
     const anchorSegment = segments[0];
     const referenceIds = anchorSegment?.referenceProductIds ?? [];
+    const cacheKey = [
+      anchorSegment?.text ?? '',
+      ...referenceIds.slice(0, 50).sort((a, b) => a - b),
+      ...(anchorSegment?.orderedVariants ?? []).map((variant) =>
+        normalizeConceptTermKey(variant),
+      ),
+    ].join('\0');
+    const cached = this.conceptAnchorCategoryCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.loadedAt < this.entityLexiconCacheTtlMs) {
+      return cached.ids;
+    }
+
+    let resolved: number[] = [];
     if (referenceIds.length > 0) {
       const products = await this.productsRepository.find({
         where: { id: In(referenceIds.slice(0, 50)) },
@@ -1898,41 +1946,48 @@ export class SearchService implements OnModuleInit {
           restSets.every((set) => set.has(categoryId)),
         );
         if (intersection.length > 0) {
-          return intersection;
+          resolved = intersection;
+        } else {
+          const union = new Set<number>();
+          categoryIdSets.forEach((set) => set.forEach((id) => union.add(id)));
+          resolved = [...union];
         }
-
-        const union = new Set<number>();
-        categoryIdSets.forEach((set) => set.forEach((id) => union.add(id)));
-        return [...union];
       }
     }
 
-    if (!anchorSegment) {
-      return [];
-    }
+    if (resolved.length === 0) {
+      if (!anchorSegment) {
+        this.conceptAnchorCategoryCache.set(cacheKey, { loadedAt: now, ids: [] });
+        return [];
+      }
 
-    const anchorTokens = new Set(
-      anchorSegment.orderedVariants
-        .map((variant) => normalizeConceptTermKey(variant))
-        .filter(Boolean),
-    );
-    if (anchorTokens.size === 0) {
-      return [];
-    }
+      const anchorTokens = new Set(
+        anchorSegment.orderedVariants
+          .map((variant) => normalizeConceptTermKey(variant))
+          .filter(Boolean),
+      );
+      if (anchorTokens.size === 0) {
+        this.conceptAnchorCategoryCache.set(cacheKey, { loadedAt: now, ids: [] });
+        return [];
+      }
 
-    const categoryLexicon = await this.getCategoryLexicon();
-    return categoryLexicon
-      .filter((entry) =>
-        entry.normalizedTokens.some((token) =>
-          [...anchorTokens].some(
-            (anchor) =>
-              token === anchor ||
-              token.startsWith(anchor) ||
-              anchor.startsWith(token),
+      const categoryLexicon = await this.getCategoryLexicon();
+      resolved = categoryLexicon
+        .filter((entry) =>
+          entry.normalizedTokens.some((token) =>
+            [...anchorTokens].some(
+              (anchor) =>
+                token === anchor ||
+                token.startsWith(anchor) ||
+                anchor.startsWith(token),
+            ),
           ),
-        ),
-      )
-      .map((entry) => entry.id);
+        )
+        .map((entry) => entry.id);
+    }
+
+    this.conceptAnchorCategoryCache.set(cacheKey, { loadedAt: now, ids: resolved });
+    return resolved;
   }
 
   private mapTypesenseProductHits(result: {
@@ -2133,11 +2188,14 @@ export class SearchService implements OnModuleInit {
         queries,
         {
           baseFilterBy,
-          perQueryLimit: this.typesenseIdPageSize,
+          perQueryLimit: this.bucketQueryPageSize,
           maxCandidates,
-          maxHitsPerQuery: maxCandidates,
+          maxHitsPerQuery: Math.min(
+            this.bucketQueryPageSize * this.bucketQueryMaxPages,
+            Math.max(params.requestedLimit - uniqueIds.size, this.bucketQueryPageSize),
+          ),
         },
-        () => uniqueIds.size >= maxCandidates,
+        () => uniqueIds.size >= params.requestedLimit,
       );
 
       for (const { query, hits } of batchResults) {
@@ -2187,7 +2245,7 @@ export class SearchService implements OnModuleInit {
       }
     }
 
-    if (hasBrandInQuery && uniqueIds.size < maxCandidates && hasExpansionQueries) {
+    if (hasBrandInQuery && uniqueIds.size < params.requestedLimit && hasExpansionQueries) {
       const sameBrandFilters = [params.baseFilterBy];
       if (bucketCategoryIds.length > 0) {
         sameBrandFilters.push(
@@ -2210,7 +2268,7 @@ export class SearchService implements OnModuleInit {
 
       // Per level: requested brand first, then all other brands (complete each bucket).
       for (const queries of levelQueries) {
-        if (uniqueIds.size >= maxCandidates) {
+        if (uniqueIds.size >= params.requestedLimit) {
           break;
         }
         await runBucketQueries(
@@ -2218,7 +2276,7 @@ export class SearchService implements OnModuleInit {
           'same_brand_spec',
           this.mergeFilterByClauses(...sameBrandFilters),
         );
-        if (uniqueIds.size >= maxCandidates) {
+        if (uniqueIds.size >= params.requestedLimit) {
           break;
         }
         await runBucketQueries(
@@ -2240,16 +2298,19 @@ export class SearchService implements OnModuleInit {
 
     if (!hasBrandInQuery && enabledLevels.has('specification') && hasExpansionQueries) {
       for (const queries of levelQueries) {
-        if (uniqueIds.size >= maxCandidates) break;
+        if (uniqueIds.size >= params.requestedLimit) break;
         const batchResults = await this.runConceptExpansionQueries(
           queries,
           {
             baseFilterBy: params.baseFilterBy,
-            perQueryLimit: this.typesenseIdPageSize,
+            perQueryLimit: this.bucketQueryPageSize,
             maxCandidates,
-            maxHitsPerQuery: maxCandidates,
+            maxHitsPerQuery: Math.min(
+              this.bucketQueryPageSize * this.bucketQueryMaxPages,
+              Math.max(params.requestedLimit - uniqueIds.size, this.bucketQueryPageSize),
+            ),
           },
-          () => uniqueIds.size >= maxCandidates,
+          () => uniqueIds.size >= params.requestedLimit,
         );
         for (const { query, hits } of batchResults) {
           const beforeSize = uniqueIds.size;
@@ -2424,14 +2485,20 @@ export class SearchService implements OnModuleInit {
     const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
     const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
-    const expansionPrepPromise =
+    const detectedEntities =
       expansionEnabled && normalizedQuery && normalizedQuery !== '*'
-        ? this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
-        : Promise.resolve({ brandIds: [], categoryIds: [] });
-    const primaryFetchLimit = Math.min(
-      maxCandidates,
-      Math.max(startOffset + perPage, primaryEnoughCount),
+        ? await this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
+        : { brandIds: [], categoryIds: [] };
+    const hasStructuredQueryIntent = this.hasStructuredExpansionIntent(
+      conceptDetectionTokens,
+      detectedEntities.brandIds,
     );
+    const primaryFetchLimit = hasStructuredQueryIntent
+      ? this.getStructuredExpansionTarget(startOffset, perPage, maxCandidates)
+      : Math.min(
+          maxCandidates,
+          Math.max(startOffset + perPage, primaryEnoughCount),
+        );
     const params: SearchParams<Record<string, any>> = {
       q: normalizedQuery,
       query_by: PRODUCT_QUERY_BY,
@@ -2449,19 +2516,13 @@ export class SearchService implements OnModuleInit {
       ...(fullResponse ? { include_fields: 'id' } : {}),
     };
 
-    const [result, detectedEntities] = await Promise.all([
-      this.typesenseService.search(params),
-      expansionPrepPromise,
-    ]);
+    const result = await this.typesenseService.search(params);
     const hits = Array.isArray(result.hits) ? result.hits : [];
     let orderedProductIds = hits
       .map((hit: any) => Number(hit?.document?.id))
       .filter((id) => Number.isInteger(id) && id > 0);
     const primaryCount = orderedProductIds.length;
     const primaryIsEnough = primaryCount >= primaryEnoughCount;
-    const hasStructuredQueryIntent =
-      conceptDetectionTokens.length > 1 ||
-      detectedEntities.brandIds.length > 0;
 
     const shouldExpand =
       expansionEnabled &&
@@ -2486,10 +2547,12 @@ export class SearchService implements OnModuleInit {
       | undefined;
 
     if (shouldExpand) {
-      const requestedExpansionCount = Math.max(
-        startOffset + perPage,
-        primaryCount + this.getExpansionExtraWhenLow(),
-      );
+      const requestedExpansionCount = hasStructuredQueryIntent
+        ? this.getStructuredExpansionTarget(startOffset, perPage, maxCandidates)
+        : Math.max(
+            startOffset + perPage,
+            primaryCount + this.getExpansionExtraWhenLow(),
+          );
       const expanded = await this.collectExpandedTypesenseIds({
         dto,
         isAdmin,

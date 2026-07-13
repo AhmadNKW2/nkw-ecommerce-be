@@ -12,24 +12,26 @@ import {
 
 export class CreateProductPriceRuleDto {
   @ApiPropertyOptional({
-    example: 3,
-    description: 'Optional vendor filter. Null means any vendor.',
+    example: [3, 5],
+    description: 'Optional vendor filters. Empty or null means any vendor.',
   })
+  @IsArray()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
   @IsOptional()
-  vendor_id?: number | null;
+  vendor_ids?: number[] | null;
 
   @ApiPropertyOptional({
-    example: 12,
-    description: 'Optional brand filter. Null means any brand.',
+    example: [12, 18],
+    description: 'Optional brand filters. Empty or null means any brand.',
   })
+  @IsArray()
   @Type(() => Number)
-  @IsInt()
-  @Min(1)
+  @IsInt({ each: true })
+  @Min(1, { each: true })
   @IsOptional()
-  brand_id?: number | null;
+  brand_ids?: number[] | null;
 
   @ApiPropertyOptional({
     example: [4, 9],
@@ -46,7 +48,7 @@ export class CreateProductPriceRuleDto {
     enum: ['any', 'more_than', 'less_than', 'between'],
     example: 'between',
     description:
-      'Original price condition. between uses min/max, more_than uses min, less_than uses max.',
+      'Product price condition. between uses min/max, more_than uses min, less_than uses max.',
   })
   @IsEnum(['any', 'more_than', 'less_than', 'between'])
   @IsOptional()
@@ -55,36 +57,37 @@ export class CreateProductPriceRuleDto {
   @ApiPropertyOptional({
     enum: ['increase', 'decrease'],
     example: 'increase',
-    description: 'Whether the percentage increases or decreases the original price.',
+    description: 'Whether the percentage increases or decreases the product price.',
   })
   @IsEnum(['increase', 'decrease'])
   @IsOptional()
   adjustment_type?: 'increase' | 'decrease';
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: 0,
     description:
-      'Inclusive minimum original price threshold. Used by between and more_than rules.',
-  })
-  @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  min_vendor_price: number;
-
-  @ApiPropertyOptional({
-    example: 99.9,
-    description:
-      'Inclusive maximum original price threshold. Used by between and less_than rules. Null means no upper bound for between.',
+      'Inclusive minimum product price threshold. Leave empty to apply to all products.',
   })
   @Type(() => Number)
   @IsNumber()
   @Min(0)
   @IsOptional()
-  max_vendor_price?: number | null;
+  min_product_price?: number | null;
+
+  @ApiPropertyOptional({
+    example: 99.9,
+    description:
+      'Inclusive maximum product price threshold. Leave empty to apply to all products.',
+  })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @IsOptional()
+  max_product_price?: number | null;
 
   @ApiProperty({
     example: 10,
-    description: 'Percentage to increase or decrease from the original price.',
+    description: 'Percentage to increase or decrease from the original product price.',
   })
   @Type(() => Number)
   @IsNumber()

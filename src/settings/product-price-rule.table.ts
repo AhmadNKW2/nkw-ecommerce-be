@@ -10,13 +10,13 @@ export function createProductPriceRulesTableDefinition() {
         isPrimary: true,
       },
       {
-        name: 'vendor_id',
-        type: 'int',
+        name: 'vendor_ids',
+        type: 'jsonb',
         isNullable: true,
       },
       {
-        name: 'brand_id',
-        type: 'int',
+        name: 'brand_ids',
+        type: 'jsonb',
         isNullable: true,
       },
       {
@@ -37,13 +37,14 @@ export function createProductPriceRulesTableDefinition() {
         default: `'decrease'`,
       },
       {
-        name: 'min_vendor_price',
+        name: 'min_product_price',
         type: 'decimal',
         precision: 10,
         scale: 2,
+        isNullable: true,
       },
       {
-        name: 'max_vendor_price',
+        name: 'max_product_price',
         type: 'decimal',
         precision: 10,
         scale: 2,
@@ -77,16 +78,8 @@ export function createProductPriceRulesTableDefinition() {
         columnNames: ['is_active'],
       },
       {
-        name: 'idx_product_price_rules_min_vendor_price',
-        columnNames: ['min_vendor_price'],
-      },
-      {
-        name: 'idx_product_price_rules_vendor_id',
-        columnNames: ['vendor_id'],
-      },
-      {
-        name: 'idx_product_price_rules_brand_id',
-        columnNames: ['brand_id'],
+        name: 'idx_product_price_rules_min_product_price',
+        columnNames: ['min_product_price'],
       },
     ],
   });

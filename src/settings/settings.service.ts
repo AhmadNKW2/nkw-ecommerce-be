@@ -243,7 +243,7 @@ export class SettingsService implements OnModuleInit {
     await this.ensureSchemaReady();
 
     return this.productPriceRuleRepository.find({
-      order: { min_vendor_price: 'ASC', id: 'ASC' },
+      order: { min_product_price: 'ASC', id: 'ASC' },
     });
   }
 
@@ -272,10 +272,10 @@ export class SettingsService implements OnModuleInit {
     }
 
     const candidate = this.normalizeProductPriceRulePayload({
-      vendor_id:
-        dto.vendor_id !== undefined ? dto.vendor_id : existingRule.vendor_id,
-      brand_id:
-        dto.brand_id !== undefined ? dto.brand_id : existingRule.brand_id,
+      vendor_ids:
+        dto.vendor_ids !== undefined ? dto.vendor_ids : existingRule.vendor_ids,
+      brand_ids:
+        dto.brand_ids !== undefined ? dto.brand_ids : existingRule.brand_ids,
       category_ids:
         dto.category_ids !== undefined
           ? dto.category_ids
@@ -284,11 +284,14 @@ export class SettingsService implements OnModuleInit {
         dto.price_condition ?? existingRule.price_condition ?? 'between',
       adjustment_type:
         dto.adjustment_type ?? existingRule.adjustment_type ?? 'decrease',
-      min_vendor_price: dto.min_vendor_price ?? existingRule.min_vendor_price,
-      max_vendor_price:
-        dto.max_vendor_price !== undefined
-          ? dto.max_vendor_price
-          : existingRule.max_vendor_price,
+      min_product_price:
+        dto.min_product_price !== undefined
+          ? dto.min_product_price
+          : existingRule.min_product_price,
+      max_product_price:
+        dto.max_product_price !== undefined
+          ? dto.max_product_price
+          : existingRule.max_product_price,
       percentage: dto.percentage ?? existingRule.percentage,
       is_active: dto.is_active ?? existingRule.is_active,
     });
@@ -1072,21 +1075,21 @@ export class SettingsService implements OnModuleInit {
 
       const missingColumns: TableColumn[] = [];
 
-      if (!(await queryRunner.hasColumn('product_price_rules', 'vendor_id'))) {
+      if (!(await queryRunner.hasColumn('product_price_rules', 'vendor_ids'))) {
         missingColumns.push(
           new TableColumn({
-            name: 'vendor_id',
-            type: 'int',
+            name: 'vendor_ids',
+            type: 'jsonb',
             isNullable: true,
           }),
         );
       }
 
-      if (!(await queryRunner.hasColumn('product_price_rules', 'brand_id'))) {
+      if (!(await queryRunner.hasColumn('product_price_rules', 'brand_ids'))) {
         missingColumns.push(
           new TableColumn({
-            name: 'brand_id',
-            type: 'int',
+            name: 'brand_ids',
+            type: 'jsonb',
             isNullable: true,
           }),
         );
@@ -1128,8 +1131,73 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (
+        !(await queryRunner.hasColumn('product_price_rules', 'min_product_price'))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'min_product_price',
+            type: 'decimal',
+            precision: 10,
+            scale: 2,
+            isNullable: true,
+          }),
+        );
+      }
+
+      if (
+        !(await queryRunner.hasColumn('product_price_rules', 'max_product_price'))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'max_product_price',
+            type: 'decimal',
+            precision: 10,
+            scale: 2,
+            isNullable: true,
+          }),
+        );
+      }
+
       if (missingColumns.length > 0) {
         await queryRunner.addColumns('product_price_rules', missingColumns);
+      }
+
+      if (await queryRunner.hasColumn('product_price_rules', 'vendor_id')) {
+        await queryRunner.query(`
+          UPDATE product_price_rules
+          SET vendor_ids = jsonb_build_array(vendor_id)
+          WHERE vendor_id IS NOT NULL
+            AND (vendor_ids IS NULL OR jsonb_array_length(vendor_ids) = 0)
+        `);
+      }
+
+      if (await queryRunner.hasColumn('product_price_rules', 'brand_id')) {
+        await queryRunner.query(`
+          UPDATE product_price_rules
+          SET brand_ids = jsonb_build_array(brand_id)
+          WHERE brand_id IS NOT NULL
+            AND (brand_ids IS NULL OR jsonb_array_length(brand_ids) = 0)
+        `);
+      }
+
+      if (await queryRunner.hasColumn('product_price_rules', 'min_vendor_price')) {
+        await queryRunner.query(`
+          UPDATE product_price_rules
+          SET min_product_price = CASE
+            WHEN min_vendor_price IS NULL OR min_vendor_price = 0 THEN NULL
+            ELSE min_vendor_price
+          END
+          WHERE min_product_price IS NULL
+        `);
+      }
+
+      if (await queryRunner.hasColumn('product_price_rules', 'max_vendor_price')) {
+        await queryRunner.query(`
+          UPDATE product_price_rules
+          SET max_product_price = max_vendor_price
+          WHERE max_product_price IS NULL
+        `);
       }
     } finally {
       await queryRunner.release();
@@ -1249,13 +1317,13 @@ export class SettingsService implements OnModuleInit {
 
     await this.productPriceRuleRepository.save(
       this.productPriceRuleRepository.create({
-        vendor_id: null,
-        brand_id: null,
+        vendor_ids: null,
+        brand_ids: null,
         category_ids: null,
         price_condition: 'between',
         adjustment_type: 'decrease',
-        min_vendor_price: 0,
-        max_vendor_price: null,
+        min_product_price: null,
+        max_product_price: null,
         percentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
         is_active: true,
       }),
@@ -1263,32 +1331,29 @@ export class SettingsService implements OnModuleInit {
   }
 
   private normalizeProductPriceRulePayload(input: {
-    vendor_id?: number | null;
-    brand_id?: number | null;
+    vendor_ids?: number[] | null;
+    brand_ids?: number[] | null;
     category_ids?: number[] | null;
     price_condition?: 'any' | 'more_than' | 'less_than' | 'between';
     adjustment_type?: 'increase' | 'decrease';
-    min_vendor_price: number;
-    max_vendor_price?: number | null;
+    min_product_price?: number | null;
+    max_product_price?: number | null;
     percentage: number;
     is_active?: boolean;
   }) {
     const normalized = normalizeProductPriceRuleShape({
-      min_vendor_price: Number(input.min_vendor_price),
-      max_vendor_price:
-        input.max_vendor_price === undefined || input.max_vendor_price === null
+      min_product_price:
+        input.min_product_price === undefined || input.min_product_price === null
           ? null
-          : Number(input.max_vendor_price),
+          : Number(input.min_product_price),
+      max_product_price:
+        input.max_product_price === undefined || input.max_product_price === null
+          ? null
+          : Number(input.max_product_price),
       percentage: Number(input.percentage),
       is_active: input.is_active ?? true,
-      vendor_id:
-        input.vendor_id === undefined || input.vendor_id === null
-          ? null
-          : Number(input.vendor_id),
-      brand_id:
-        input.brand_id === undefined || input.brand_id === null
-          ? null
-          : Number(input.brand_id),
+      vendor_ids: input.vendor_ids,
+      brand_ids: input.brand_ids,
       category_ids: normalizeCategoryIds(input.category_ids),
       price_condition: input.price_condition ?? 'between',
       adjustment_type: input.adjustment_type ?? 'decrease',

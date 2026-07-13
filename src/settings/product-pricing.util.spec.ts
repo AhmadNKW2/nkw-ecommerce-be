@@ -9,12 +9,12 @@ describe('product-pricing.util', () => {
   const baseRule = (overrides: Record<string, unknown> = {}) =>
     normalizeProductPriceRuleShape({
       id: 1,
-      min_vendor_price: 0,
-      max_vendor_price: null,
+      min_product_price: null,
+      max_product_price: null,
       percentage: 10,
       is_active: true,
-      vendor_id: null,
-      brand_id: null,
+      vendor_ids: null,
+      brand_ids: null,
       category_ids: null,
       price_condition: 'between',
       adjustment_type: 'increase',
@@ -34,7 +34,7 @@ describe('product-pricing.util', () => {
     const genericRule = baseRule({ id: 1, percentage: 5 });
     const vendorRule = baseRule({
       id: 2,
-      vendor_id: 7,
+      vendor_ids: [7],
       percentage: 10,
     });
 
@@ -55,13 +55,13 @@ describe('product-pricing.util', () => {
   it('prefers vendor + brand + category rule over vendor-only rule', () => {
     const vendorRule = baseRule({
       id: 2,
-      vendor_id: 7,
+      vendor_ids: [7],
       percentage: 5,
     });
     const specificRule = baseRule({
       id: 3,
-      vendor_id: 7,
-      brand_id: 12,
+      vendor_ids: [7],
+      brand_ids: [12],
       category_ids: [4],
       percentage: 15,
     });
@@ -80,18 +80,11 @@ describe('product-pricing.util', () => {
     expect(calculateManagedPrice(50, matched!.percentage, matched!.adjustment_type)).toBe(57.5);
   });
 
-  it('rounds managed prices to .00 or .50 endings', () => {
-    expect(roundManagedProductPrice(100.52)).toBe(100.5);
-    expect(roundManagedProductPrice(100.99)).toBe(101);
-    expect(roundManagedProductPrice(100.42)).toBe(100.5);
-    expect(roundManagedProductPrice(100.21)).toBe(100);
-  });
-
   it('supports more_than price condition', () => {
     const rule = baseRule({
       id: 4,
       price_condition: 'more_than',
-      min_vendor_price: 40,
+      min_product_price: 40,
       percentage: 20,
     });
 
@@ -103,5 +96,30 @@ describe('product-pricing.util', () => {
     });
 
     expect(matched?.id).toBe(4);
+  });
+
+  it('matches all products when min and max product prices are empty', () => {
+    const rule = baseRule({
+      id: 5,
+      min_product_price: null,
+      max_product_price: null,
+      percentage: 8,
+    });
+
+    const matched = findBestMatchingProductPriceRule([rule], {
+      vendorId: 99,
+      brandId: 88,
+      categoryIds: [1],
+      originalPrice: 500,
+    });
+
+    expect(matched?.id).toBe(5);
+  });
+
+  it('rounds managed prices to .00 or .50 endings', () => {
+    expect(roundManagedProductPrice(100.52)).toBe(100.5);
+    expect(roundManagedProductPrice(100.99)).toBe(101);
+    expect(roundManagedProductPrice(100.42)).toBe(100.5);
+    expect(roundManagedProductPrice(100.21)).toBe(100);
   });
 });

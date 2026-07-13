@@ -10,12 +10,12 @@ export type ProductPriceAdjustmentType = 'increase' | 'decrease';
 export type ProductPriceRuleShape = Pick<
   ProductPriceRule,
   | 'id'
-  | 'min_vendor_price'
-  | 'max_vendor_price'
+  | 'min_product_price'
+  | 'max_product_price'
   | 'percentage'
   | 'is_active'
-  | 'vendor_id'
-  | 'brand_id'
+  | 'vendor_ids'
+  | 'brand_ids'
   | 'category_ids'
   | 'price_condition'
   | 'adjustment_type'
@@ -33,11 +33,11 @@ export type AppliedProductPriceRule = {
   percentage: number;
   adjustment_type: ProductPriceAdjustmentType;
   price_condition: ProductPriceCondition;
-  vendor_id: number | null;
-  brand_id: number | null;
+  vendor_ids: number[] | null;
+  brand_ids: number[] | null;
   category_ids: number[] | null;
-  min_vendor_price: number;
-  max_vendor_price: number | null;
+  min_product_price: number | null;
+  max_product_price: number | null;
   specificity_score: number;
 };
 
@@ -49,44 +49,93 @@ export function roundManagedProductPrice(value: number): number {
   return Math.max(0, Number((Math.round(value * 2) / 2).toFixed(2)));
 }
 
+export function normalizeIdList(
+  ids: number[] | null | undefined,
+): number[] | null {
+  if (!ids || ids.length === 0) {
+    return null;
+  }
+
+  const normalized = Array.from(
+    new Set(
+      ids
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0),
+    ),
+  );
+
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function normalizeCategoryIds(
+  categoryIds: number[] | null | undefined,
+): number[] | null {
+  return normalizeIdList(categoryIds);
+}
+
+export function normalizeVendorIds(
+  vendorIds: number[] | null | undefined,
+): number[] | null {
+  return normalizeIdList(vendorIds);
+}
+
+export function normalizeBrandIds(
+  brandIds: number[] | null | undefined,
+): number[] | null {
+  return normalizeIdList(brandIds);
+}
+
+function normalizeOptionalProductPrice(
+  value: number | null | undefined,
+): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : null;
+}
+
 export function assertProductPriceRuleValues(params: {
-  min_vendor_price: number;
-  max_vendor_price?: number | null;
+  min_product_price?: number | null;
+  max_product_price?: number | null;
   percentage: number;
   price_condition?: ProductPriceCondition;
   adjustment_type?: ProductPriceAdjustmentType;
 }) {
   const priceCondition = params.price_condition ?? 'between';
+  const minProductPrice = normalizeOptionalProductPrice(params.min_product_price);
+  const maxProductPrice = normalizeOptionalProductPrice(params.max_product_price);
 
-  if (!Number.isFinite(params.min_vendor_price) || params.min_vendor_price < 0) {
+  if (minProductPrice !== null && minProductPrice < 0) {
     throw new BadRequestException(
-      'min_vendor_price must be a valid number greater than or equal to 0.',
+      'min_product_price must be a valid number greater than or equal to 0.',
+    );
+  }
+
+  if (maxProductPrice !== null && maxProductPrice < 0) {
+    throw new BadRequestException(
+      'max_product_price must be a valid number greater than or equal to 0.',
     );
   }
 
   if (
-    params.max_vendor_price !== null &&
-    params.max_vendor_price !== undefined &&
-    (!Number.isFinite(params.max_vendor_price) ||
-      params.max_vendor_price < params.min_vendor_price)
+    minProductPrice !== null &&
+    maxProductPrice !== null &&
+    maxProductPrice < minProductPrice
   ) {
     throw new BadRequestException(
-      'max_vendor_price must be greater than or equal to min_vendor_price.',
-    );
-  }
-
-  if (priceCondition === 'more_than' && params.min_vendor_price < 0) {
-    throw new BadRequestException(
-      'more_than rules require a valid minimum original price threshold.',
+      'max_product_price must be greater than or equal to min_product_price.',
     );
   }
 
   if (
     priceCondition === 'less_than' &&
-    (params.max_vendor_price === null || params.max_vendor_price === undefined)
+    maxProductPrice === null &&
+    minProductPrice === null
   ) {
     throw new BadRequestException(
-      'less_than rules require a maximum original price threshold.',
+      'less_than rules require a maximum product price threshold.',
     );
   }
 
@@ -102,49 +151,64 @@ export function assertProductPriceRuleValues(params: {
 
 export function normalizeProductPriceRuleShape(
   rule: Partial<ProductPriceRuleShape> & {
-    min_vendor_price: number;
     percentage: number;
   },
 ): ProductPriceRuleShape {
   return {
     id: rule.id ?? 0,
-    min_vendor_price: Number(rule.min_vendor_price),
-    max_vendor_price:
-      rule.max_vendor_price === undefined || rule.max_vendor_price === null
-        ? null
-        : Number(rule.max_vendor_price),
+    min_product_price: normalizeOptionalProductPrice(rule.min_product_price),
+    max_product_price: normalizeOptionalProductPrice(rule.max_product_price),
     percentage: Number(rule.percentage),
     is_active: rule.is_active ?? true,
-    vendor_id:
-      rule.vendor_id === undefined || rule.vendor_id === null
-        ? null
-        : Number(rule.vendor_id),
-    brand_id:
-      rule.brand_id === undefined || rule.brand_id === null
-        ? null
-        : Number(rule.brand_id),
+    vendor_ids: normalizeVendorIds(rule.vendor_ids),
+    brand_ids: normalizeBrandIds(rule.brand_ids),
     category_ids: normalizeCategoryIds(rule.category_ids),
     price_condition: rule.price_condition ?? 'between',
     adjustment_type: rule.adjustment_type ?? 'decrease',
   };
 }
 
-export function normalizeCategoryIds(
-  categoryIds: number[] | null | undefined,
-): number[] | null {
-  if (!categoryIds || categoryIds.length === 0) {
-    return null;
+function doIdListsOverlap(
+  left: number[] | null,
+  right: number[] | null,
+): boolean {
+  const leftIds = left ?? [];
+  const rightIds = right ?? [];
+
+  if (leftIds.length === 0 || rightIds.length === 0) {
+    return true;
   }
 
-  const normalized = Array.from(
-    new Set(
-      categoryIds
-        .map((value) => Number(value))
-        .filter((value) => Number.isFinite(value) && value > 0),
-    ),
-  );
+  return leftIds.some((id) => rightIds.includes(id));
+}
 
-  return normalized.length > 0 ? normalized : null;
+function doesProductPriceMatch(
+  rule: ProductPriceRuleShape,
+  originalPrice: number,
+): boolean {
+  const priceCondition = rule.price_condition ?? 'between';
+  const minProductPrice = rule.min_product_price;
+  const maxProductPrice = rule.max_product_price;
+
+  if (
+    priceCondition === 'any' ||
+    (minProductPrice === null && maxProductPrice === null)
+  ) {
+    return true;
+  }
+
+  switch (priceCondition) {
+    case 'more_than':
+      return minProductPrice !== null && originalPrice > minProductPrice;
+    case 'less_than':
+      return maxProductPrice !== null && originalPrice < maxProductPrice;
+    case 'between':
+    default: {
+      const minBound = minProductPrice ?? Number.NEGATIVE_INFINITY;
+      const maxBound = maxProductPrice ?? Number.POSITIVE_INFINITY;
+      return originalPrice >= minBound && originalPrice <= maxBound;
+    }
+  }
 }
 
 export function doesProductPriceRuleMatch(
@@ -155,11 +219,21 @@ export function doesProductPriceRuleMatch(
     return false;
   }
 
-  if (rule.vendor_id !== null && rule.vendor_id !== context.vendorId) {
+  const ruleVendorIds = normalizeVendorIds(rule.vendor_ids);
+  if (
+    ruleVendorIds &&
+    ruleVendorIds.length > 0 &&
+    (context.vendorId === null || !ruleVendorIds.includes(context.vendorId))
+  ) {
     return false;
   }
 
-  if (rule.brand_id !== null && rule.brand_id !== context.brandId) {
+  const ruleBrandIds = normalizeBrandIds(rule.brand_ids);
+  if (
+    ruleBrandIds &&
+    ruleBrandIds.length > 0 &&
+    (context.brandId === null || !ruleBrandIds.includes(context.brandId))
+  ) {
     return false;
   }
 
@@ -174,28 +248,7 @@ export function doesProductPriceRuleMatch(
     }
   }
 
-  const originalPrice = context.originalPrice;
-  const priceCondition = rule.price_condition ?? 'between';
-
-  switch (priceCondition) {
-    case 'any':
-      return true;
-    case 'more_than':
-      return originalPrice > rule.min_vendor_price;
-    case 'less_than':
-      return (
-        rule.max_vendor_price !== null &&
-        originalPrice < rule.max_vendor_price
-      );
-    case 'between':
-    default: {
-      const maxVendorPrice = rule.max_vendor_price ?? Number.POSITIVE_INFINITY;
-      return (
-        originalPrice >= rule.min_vendor_price &&
-        originalPrice <= maxVendorPrice
-      );
-    }
-  }
+  return doesProductPriceMatch(rule, context.originalPrice);
 }
 
 export function getProductPriceRuleSpecificityScore(
@@ -203,12 +256,14 @@ export function getProductPriceRuleSpecificityScore(
 ): number {
   let score = 0;
 
-  if (rule.vendor_id !== null) {
-    score += 1_000_000;
+  const vendorIds = normalizeVendorIds(rule.vendor_ids);
+  if (vendorIds && vendorIds.length > 0) {
+    score += 1_000_000 * vendorIds.length;
   }
 
-  if (rule.brand_id !== null) {
-    score += 100_000;
+  const brandIds = normalizeBrandIds(rule.brand_ids);
+  if (brandIds && brandIds.length > 0) {
+    score += 100_000 * brandIds.length;
   }
 
   const categoryIds = normalizeCategoryIds(rule.category_ids);
@@ -220,8 +275,8 @@ export function getProductPriceRuleSpecificityScore(
 
   switch (priceCondition) {
     case 'between': {
-      const min = rule.min_vendor_price ?? 0;
-      const max = rule.max_vendor_price ?? Number.POSITIVE_INFINITY;
+      const min = rule.min_product_price ?? Number.NEGATIVE_INFINITY;
+      const max = rule.max_product_price ?? Number.POSITIVE_INFINITY;
       const rangeWidth = max - min;
 
       if (Number.isFinite(rangeWidth) && rangeWidth > 0) {
@@ -284,11 +339,11 @@ export function toAppliedProductPriceRule(
     percentage: rule.percentage,
     adjustment_type: rule.adjustment_type ?? 'decrease',
     price_condition: rule.price_condition ?? 'between',
-    vendor_id: rule.vendor_id ?? null,
-    brand_id: rule.brand_id ?? null,
+    vendor_ids: normalizeVendorIds(rule.vendor_ids),
+    brand_ids: normalizeBrandIds(rule.brand_ids),
     category_ids: normalizeCategoryIds(rule.category_ids),
-    min_vendor_price: rule.min_vendor_price,
-    max_vendor_price: rule.max_vendor_price ?? null,
+    min_product_price: rule.min_product_price ?? null,
+    max_product_price: rule.max_product_price ?? null,
     specificity_score: getProductPriceRuleSpecificityScore(rule),
   };
 }
@@ -299,8 +354,8 @@ export function calculateManagedPrice(
   adjustmentType: ProductPriceAdjustmentType = 'decrease',
 ) {
   assertProductPriceRuleValues({
-    min_vendor_price: 0,
-    max_vendor_price: null,
+    min_product_price: null,
+    max_product_price: null,
     percentage,
     adjustment_type: adjustmentType,
   });
@@ -337,39 +392,36 @@ export function ensureSalePriceBelowPrice(
 }
 
 export function doProductPriceRulesOverlap(
-  left: Pick<ProductPriceRuleShape, 'min_vendor_price' | 'max_vendor_price'>,
-  right: Pick<ProductPriceRuleShape, 'min_vendor_price' | 'max_vendor_price'>,
+  left: Pick<ProductPriceRuleShape, 'min_product_price' | 'max_product_price'>,
+  right: Pick<ProductPriceRuleShape, 'min_product_price' | 'max_product_price'>,
 ) {
-  const leftMax = left.max_vendor_price ?? Number.POSITIVE_INFINITY;
-  const rightMax = right.max_vendor_price ?? Number.POSITIVE_INFINITY;
+  const leftMin = left.min_product_price ?? Number.NEGATIVE_INFINITY;
+  const leftMax = left.max_product_price ?? Number.POSITIVE_INFINITY;
+  const rightMin = right.min_product_price ?? Number.NEGATIVE_INFINITY;
+  const rightMax = right.max_product_price ?? Number.POSITIVE_INFINITY;
 
-  return left.min_vendor_price <= rightMax && right.min_vendor_price <= leftMax;
+  return leftMin <= rightMax && rightMin <= leftMax;
 }
 
 export function doScopedProductPriceRulesConflict(
   left: ProductPriceRuleShape,
   right: ProductPriceRuleShape,
 ) {
-  if (left.vendor_id !== right.vendor_id) {
+  if (!doIdListsOverlap(normalizeVendorIds(left.vendor_ids), normalizeVendorIds(right.vendor_ids))) {
     return false;
   }
 
-  if (left.brand_id !== right.brand_id) {
+  if (!doIdListsOverlap(normalizeBrandIds(left.brand_ids), normalizeBrandIds(right.brand_ids))) {
     return false;
   }
 
-  const leftCategoryIds = normalizeCategoryIds(left.category_ids) ?? [];
-  const rightCategoryIds = normalizeCategoryIds(right.category_ids) ?? [];
-
-  if (leftCategoryIds.length > 0 || rightCategoryIds.length > 0) {
-    const sharesCategory =
-      leftCategoryIds.length === 0 ||
-      rightCategoryIds.length === 0 ||
-      leftCategoryIds.some((categoryId) => rightCategoryIds.includes(categoryId));
-
-    if (!sharesCategory) {
-      return false;
-    }
+  if (
+    !doIdListsOverlap(
+      normalizeCategoryIds(left.category_ids),
+      normalizeCategoryIds(right.category_ids),
+    )
+  ) {
+    return false;
   }
 
   if ((left.price_condition ?? 'between') !== (right.price_condition ?? 'between')) {
