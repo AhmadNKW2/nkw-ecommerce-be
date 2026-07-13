@@ -1781,6 +1781,7 @@ export class SearchService implements OnModuleInit {
       query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
       text_match_type: 'max_weight',
       prioritize_token_position: true,
+      drop_tokens_threshold: 0,
       ...(params.baseFilterBy ? { filter_by: params.baseFilterBy } : {}),
       sort_by: '_text_match:desc,created_at_ts:desc',
       include_fields: 'id,category_ids',
@@ -1947,9 +1948,12 @@ export class SearchService implements OnModuleInit {
       ? await this.getBrandTokensForIds(brandIdsFromQueryOnly)
       : new Set<string>();
     const searchLocale = normalizeSearchLocale(params.dto.locale, tokens);
+    const expansionTokens = hasBrandInQuery
+      ? tokens.filter((token) => !brandTokensFromQuery.has(token))
+      : tokens;
     const segmented = await this.termConceptLexicon.segmentQueryWithVariants(
       normalizedQ,
-      tokens,
+      expansionTokens,
       searchLocale,
     );
     const variantLevels = buildVariantLevelQueries(
