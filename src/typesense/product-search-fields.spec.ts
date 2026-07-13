@@ -1,8 +1,11 @@
 import {
   AUTOCOMPLETE_SEARCH_QUERY_BY,
   AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS,
+  PRODUCT_NAME_SEARCH_QUERY_BY,
+  PRODUCT_NAME_SEARCH_QUERY_BY_WEIGHTS,
   PRODUCT_SEARCH_QUERY_BY,
   PRODUCT_SEARCH_QUERY_BY_WEIGHTS,
+  resolveProductSearchFields,
 } from './product-search-fields';
 
 describe('product-search-fields', () => {
@@ -31,5 +34,14 @@ describe('product-search-fields', () => {
     expect(weightOf('short_description_ar_norm')).toBeGreaterThan(
       weightOf('short_description_ar'),
     );
+  });
+
+  it('limits strict expansion buckets to product name fields only', () => {
+    const fields = PRODUCT_NAME_SEARCH_QUERY_BY.split(',');
+    const weights = PRODUCT_NAME_SEARCH_QUERY_BY_WEIGHTS.split(',');
+    expect(fields).toEqual(['name_en', 'name_ar_norm', 'name_ar']);
+    expect(fields.length).toBe(weights.length);
+    expect(resolveProductSearchFields('name').query_by).toBe(PRODUCT_NAME_SEARCH_QUERY_BY);
+    expect(resolveProductSearchFields('full').query_by).toBe(PRODUCT_SEARCH_QUERY_BY);
   });
 });

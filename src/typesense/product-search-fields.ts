@@ -13,6 +13,29 @@ export const PRODUCT_SEARCH_QUERY_BY =
 export const PRODUCT_SEARCH_QUERY_BY_WEIGHTS =
   '5,5,2,4,4,2,3,3,2,3,3,2,1,1,1,4,2';
 
+/** Expansion bucket queries (strict levels) — product title only. */
+export const PRODUCT_NAME_SEARCH_QUERY_BY = 'name_en,name_ar_norm,name_ar';
+
+export const PRODUCT_NAME_SEARCH_QUERY_BY_WEIGHTS = '5,5,2';
+
+export type ProductSearchScope = 'name' | 'full';
+
+export function resolveProductSearchFields(
+  scope: ProductSearchScope = 'full',
+): { query_by: string; query_by_weights: string } {
+  if (scope === 'name') {
+    return {
+      query_by: PRODUCT_NAME_SEARCH_QUERY_BY,
+      query_by_weights: PRODUCT_NAME_SEARCH_QUERY_BY_WEIGHTS,
+    };
+  }
+
+  return {
+    query_by: PRODUCT_SEARCH_QUERY_BY,
+    query_by_weights: PRODUCT_SEARCH_QUERY_BY_WEIGHTS,
+  };
+}
+
 export const AUTOCOMPLETE_SEARCH_QUERY_BY =
   'name_en,name_ar_norm,name_ar,brand_name_en,brand_name_ar_norm,brand_name_ar,category_names_en,category_names_ar_norm,category_names_ar,sku,slug';
 

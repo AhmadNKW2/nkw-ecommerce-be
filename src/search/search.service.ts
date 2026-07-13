@@ -37,6 +37,8 @@ import {
   PRODUCT_ID_LOOKUP_QUERY_BY,
   PRODUCT_SEARCH_QUERY_BY,
   PRODUCT_SEARCH_QUERY_BY_WEIGHTS,
+  type ProductSearchScope,
+  resolveProductSearchFields,
 } from '../typesense/product-search-fields';
 import { normalizeSearchQuery } from '../typesense/utils/text-normalize';
 import { parsePriceFromQuery } from './utils/parse-price-from-query';
@@ -631,12 +633,20 @@ export class SearchService implements OnModuleInit {
     return deduped;
   }
 
+  private resolveExpansionLevelSearchScope(
+    levelIndex: number,
+    totalLevels: number,
+  ): ProductSearchScope {
+    return levelIndex === totalLevels - 1 ? 'full' : 'name';
+  }
+
   private async runConceptExpansionQueries(
     queries: string[],
     params: {
       baseFilterBy?: string;
       perQueryLimit: number;
       maxCandidates: number;
+      searchScope?: ProductSearchScope;
     },
     shouldStop?: () => boolean,
   ): Promise<
@@ -665,6 +675,7 @@ export class SearchService implements OnModuleInit {
             baseFilterBy: params.baseFilterBy,
             perPage,
             typoTokens: this.tokenizeQueryForExpansion(conceptQuery),
+            searchScope: params.searchScope ?? 'name',
           }),
         ),
       );
@@ -1982,13 +1993,15 @@ export class SearchService implements OnModuleInit {
       perPage: number;
       typoTokens: string[];
       includeFields?: string;
+      searchScope?: ProductSearchScope;
     },
   ): SearchParams<Record<string, any>> {
+    const searchFields = resolveProductSearchFields(params.searchScope ?? 'name');
     // Bucket queries are intentional spec layers — disable typos so 5060 does not match 5050.
     return {
       q: normalizeSearchQuery(conceptQuery || '*') || '*',
-      query_by: PRODUCT_QUERY_BY,
-      query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+      query_by: searchFields.query_by,
+      query_by_weights: searchFields.query_by_weights,
       text_match_type: 'max_weight',
       prioritize_token_position: true,
       drop_tokens_threshold: 0,
@@ -2257,12 +2270,18 @@ export class SearchService implements OnModuleInit {
             tier: ExpansionTierKey;
             query: string;
             filterBy?: string;
+            searchScope: ProductSearchScope;
           }
         | { role: 'keyword'; query: string; filterBy?: string }
         | { role: 'primary'; filterBy?: string };
 
       const brandSearchPlans: BrandSearchPlan[] = [];
-      for (const queries of levelQueries) {
+      for (let levelIndex = 0; levelIndex < levelQueries.length; levelIndex += 1) {
+        const queries = levelQueries[levelIndex];
+        const searchScope = this.resolveExpansionLevelSearchScope(
+          levelIndex,
+          levelQueries.length,
+        );
         const variantQueries = this.dedupeConceptExpansionQueries(queries);
         for (const tier of ['same_brand_spec', 'cross_brand_spec'] as const) {
           if (!enabledLevels.has(tier)) {
@@ -2275,6 +2294,7 @@ export class SearchService implements OnModuleInit {
               query,
               filterBy:
                 tier === 'same_brand_spec' ? sameBrandFilterBy : crossBrandFilterBy,
+              searchScope,
             });
           }
         }
@@ -2347,6 +2367,12 @@ export class SearchService implements OnModuleInit {
                 plan.role === 'bucket'
                   ? BUCKET_SEARCH_CARD_INCLUDE_FIELDS
                   : 'id,category_ids',
+              searchScope:
+                plan.role === 'keyword'
+                  ? 'full'
+                  : plan.role === 'bucket'
+                    ? plan.searchScope
+                    : 'name',
             });
           }),
         );
@@ -2412,14 +2438,19 @@ export class SearchService implements OnModuleInit {
     }
 
     if (!hasBrandInQuery && enabledLevels.has('specification') && hasExpansionQueries) {
-      for (const queries of levelQueries) {
+      for (let levelIndex = 0; levelIndex < levelQueries.length; levelIndex += 1) {
         if (uniqueIds.size >= maxCandidates) break;
+        const queries = levelQueries[levelIndex];
         const batchResults = await this.runConceptExpansionQueries(
           queries,
           {
             baseFilterBy: params.baseFilterBy,
             perQueryLimit: Math.min(80, maxCandidates - uniqueIds.size),
             maxCandidates,
+            searchScope: this.resolveExpansionLevelSearchScope(
+              levelIndex,
+              levelQueries.length,
+            ),
           },
           () => uniqueIds.size >= maxCandidates,
         );
