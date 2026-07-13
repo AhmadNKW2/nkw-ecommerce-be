@@ -250,7 +250,13 @@ export class TypesenseService implements OnModuleInit {
 
   async multiSearch(
     searches: Array<SearchParams<Record<string, any>>>,
-  ): Promise<{ results: Array<{ hits?: Array<{ document?: Record<string, any> }> }> }> {
+  ): Promise<{
+    results: Array<{
+      hits?: Array<{ document?: Record<string, any> }>;
+      found?: number;
+      search_time_ms?: number;
+    }>;
+  }> {
     if (!this.isEnabled()) {
       throw new Error('Typesense is disabled');
     }
