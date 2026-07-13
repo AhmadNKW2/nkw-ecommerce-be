@@ -95,22 +95,22 @@ describe('spec-expansion.utils', () => {
   });
 
   describe('buildVariantLevelQueries', () => {
-    it('builds progressive levels from full query down to singles', () => {
+    it('builds concept-anchored levels: full → concept+each spec → concept alone', () => {
       const levels = buildVariantLevelQueries([
         { text: 'laptop', orderedVariants: ['laptop', 'notebook'] },
-        { text: '5070', orderedVariants: ['5070'] },
+        { text: '5060', orderedVariants: ['5060'] },
         { text: 'i7', orderedVariants: ['i7'] },
       ]);
 
-      expect(levels[0].queries).toEqual(['laptop 5070 i7', 'notebook 5070 i7']);
-      expect(levels[1].queries).toEqual([
-        'laptop 5070',
-        'notebook 5070',
-        'laptop i7',
-        'notebook i7',
-        '5070 i7',
-      ]);
-      expect(levels[2].queries).toEqual(['laptop', 'notebook', '5070', 'i7']);
+      expect(levels).toHaveLength(4);
+      expect(levels[0].segmentTexts).toEqual(['laptop', '5060', 'i7']);
+      expect(levels[0].queries).toEqual(['laptop 5060 i7', 'notebook 5060 i7']);
+      expect(levels[1].segmentTexts).toEqual(['laptop', '5060']);
+      expect(levels[1].queries).toEqual(['laptop 5060', 'notebook 5060']);
+      expect(levels[2].segmentTexts).toEqual(['laptop', 'i7']);
+      expect(levels[2].queries).toEqual(['laptop i7', 'notebook i7']);
+      expect(levels[3].segmentTexts).toEqual(['laptop']);
+      expect(levels[3].queries).toEqual(['laptop', 'notebook']);
     });
 
     it('keeps each concept group independent for one-token multi-group matches (قبضة)', () => {
@@ -120,9 +120,12 @@ describe('spec-expansion.utils', () => {
       ]);
 
       expect(levels[0].queries).toContain('قبضة قبضة');
-      expect(levels[1].queries).toEqual(
-        expect.arrayContaining(['قبضة', 'يد تحكم', 'controller', 'مقبض', 'grip']),
-      );
+      expect(levels[levels.length - 1].segmentTexts).toEqual(['قبضة']);
+      expect(levels[levels.length - 1].queries).toEqual([
+        'قبضة',
+        'يد تحكم',
+        'controller',
+      ]);
     });
   });
 

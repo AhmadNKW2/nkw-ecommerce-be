@@ -6,7 +6,7 @@ const ARABIC_SCRIPT =
 export type SearchLocale = 'ar' | 'en';
 
 /** Bump when concept expansion query ordering changes (visible on GET /health). */
-export const SEARCH_EXPANSION_VERSION = '2026-07-13-per-level-brand-buckets';
+export const SEARCH_EXPANSION_VERSION = '2026-07-13-concept-anchored-levels';
 
 export type ConceptSynonymSource = {
   terms_en?: string[] | null;
@@ -134,42 +134,65 @@ export function buildVariantLevelQueries(
     return [];
   }
 
+  const levelSegmentGroups = buildConceptAnchoredBucketLevels(cleanedSegments);
   const levels: VariantQueryLevel[] = [];
   const seenQueries = new Set<string>();
 
-  for (let size = cleanedSegments.length; size >= 1; size -= 1) {
+  levelSegmentGroups.forEach((selectedSegments) => {
     const levelQueries: string[] = [];
-    const levelSegmentTexts: string[] = [];
+    const combos = buildMultiConceptVariantCombinations(
+      selectedSegments.map((segment) => ({
+        orderedVariants: segment.orderedVariants,
+      })),
+      maxConceptCombos,
+    );
 
-    combinationsOfIndices(cleanedSegments.length, size).forEach((indexCombo) => {
-      const selectedSegments = indexCombo.map((index) => cleanedSegments[index]);
-      const combos = buildMultiConceptVariantCombinations(
-        selectedSegments.map((segment) => ({
-          orderedVariants: segment.orderedVariants,
-        })),
-        maxConceptCombos,
-      );
-
-      selectedSegments.forEach((segment) => levelSegmentTexts.push(segment.text));
-      combos.forEach((combo) => {
-        const query = combo.join(' ').trim();
-        const key = normalizeConceptTermKey(query);
-        if (!key || seenQueries.has(key)) {
-          return;
-        }
-        seenQueries.add(key);
-        levelQueries.push(query);
-      });
+    combos.forEach((combo) => {
+      const query = combo.join(' ').trim();
+      const key = normalizeConceptTermKey(query);
+      if (!key || seenQueries.has(key)) {
+        return;
+      }
+      seenQueries.add(key);
+      levelQueries.push(query);
     });
 
     if (levelQueries.length > 0) {
       levels.push({
-        segmentTexts: Array.from(new Set(levelSegmentTexts)),
+        segmentTexts: selectedSegments.map((segment) => segment.text),
         queries: levelQueries,
       });
     }
+  });
+
+  return levels;
+}
+
+/**
+ * Bucket levels anchored on the first segment (concept / primary word):
+ * 1) all segments
+ * 2) concept + each other segment, one level each (e.g. laptop+5060, then laptop+i7)
+ * 3) concept alone
+ * Skips spec-only subsets (e.g. 5060+i7 without laptop) and bare spec singles.
+ */
+export function buildConceptAnchoredBucketLevels(
+  segments: QueryVariantSegmentInput[],
+): QueryVariantSegmentInput[][] {
+  if (segments.length === 0) {
+    return [];
+  }
+  if (segments.length === 1) {
+    return [[segments[0]]];
+  }
+  if (segments.length === 2) {
+    return [[segments[0], segments[1]], [segments[0]]];
   }
 
+  const levels: QueryVariantSegmentInput[][] = [[...segments]];
+  for (let index = 1; index < segments.length; index += 1) {
+    levels.push([segments[0], segments[index]]);
+  }
+  levels.push([segments[0]]);
   return levels;
 }
 
