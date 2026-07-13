@@ -118,6 +118,9 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   reference_link: string | null;
 
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  reference_links: string[];
+
   @Column({ type: 'varchar', length: 300, nullable: true })
   reference_slug: string | null;
 

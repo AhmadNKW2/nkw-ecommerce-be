@@ -41,6 +41,7 @@ import { FilterProductDto, AssignProductsDto } from './dto/filter-product.dto';
 import { ProductNamesQueryDto } from './dto/product-names-query.dto';
 import { SyncImportedPricingDto } from './dto/sync-imported-pricing.dto';
 import { SyncLinkedProductsDto } from './dto/sync-linked-products.dto';
+import { MergeDuplicateReferenceSlugsDto } from './dto/merge-duplicate-reference-slugs.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { RestoreProductDto } from './dto/restore-product.dto';
@@ -530,14 +531,20 @@ export class ProductsController {
 
   @Get('reference-link')
   @UseGuards(OptionalJwtAuthGuard)
-  @ApiOperation({ summary: 'Get a product by reference link' })
+  @ApiOperation({ summary: 'Get a product by reference link and/or reference slug' })
   @ApiQuery({
     name: 'reference_link',
-    required: true,
+    required: false,
     example: 'https://example.com/products/lg-ultragear-39gx90sa',
+  })
+  @ApiQuery({
+    name: 'reference_slug',
+    required: false,
+    example: 'lg-ultragear-39gx90sa',
   })
   findOneByReferenceLink(
     @Query('reference_link') referenceLink: string,
+    @Query('reference_slug') referenceSlug: string,
     @Req() req: any,
   ) {
     const isAdmin =
@@ -545,7 +552,23 @@ export class ProductsController {
       req.user?.role === UserRole.CATALOG_MANAGER ||
       req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
       req.user?.role === 'products_api';
-    return this.productsService.findOneByReferenceLink(referenceLink, isAdmin);
+    return this.productsService.findOneByReferenceLink(
+      referenceLink,
+      isAdmin,
+      referenceSlug,
+    );
+  }
+
+  @Post('merge-duplicate-reference-slugs')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({
+    summary:
+      'Merge products that share the same vendor and reference_slug, keeping the lowest product ID',
+  })
+  @ApiBody({ type: MergeDuplicateReferenceSlugsDto })
+  mergeDuplicateReferenceSlugs(@Body() dto: MergeDuplicateReferenceSlugsDto) {
+    return this.productsService.mergeDuplicateReferenceSlugs(dto);
   }
 
   @Get('slug-redirect/:slug')

@@ -171,6 +171,26 @@ async function ensureProductsColumns(client) {
     'reference_slug',
     'varchar(255) NULL',
   );
+  await addColumnIfMissing(
+    client,
+    'products',
+    'reference_links',
+    "jsonb NOT NULL DEFAULT '[]'::jsonb",
+  );
+
+  const backfillReferenceLinks = await client.query(`
+    UPDATE products
+    SET reference_links = jsonb_build_array(btrim(reference_link))
+    WHERE reference_link IS NOT NULL
+      AND btrim(reference_link) <> ''
+      AND (
+        reference_links IS NULL
+        OR reference_links = '[]'::jsonb
+      )
+  `);
+  if (backfillReferenceLinks.rowCount > 0) {
+    console.log(`  backfilled reference_links for ${backfillReferenceLinks.rowCount} products`);
+  }
 }
 
 async function ensureOrdersColumns(client) {

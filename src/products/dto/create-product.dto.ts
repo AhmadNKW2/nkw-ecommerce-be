@@ -120,6 +120,20 @@ export class CreateProductDto {
   reference_link?: string;
 
   @ApiPropertyOptional({
+    type: [String],
+    example: [
+      'https://example.com/product/123',
+      'https://example.com/category/123/product/123',
+    ],
+    description:
+      'All known supplier/reference URLs for this product. The first entry is also stored in reference_link.',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  reference_links?: string[];
+
+  @ApiPropertyOptional({
     example: 'wireless-headphones-pro',
     description: 'Optional slug from the source/reference product URL',
   })

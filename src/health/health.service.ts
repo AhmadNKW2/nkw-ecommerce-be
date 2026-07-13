@@ -1,6 +1,11 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
+import {
+  CACHE_BACKEND_REDIS,
+  resolveCacheBackend,
+} from '../common/cache/app-cache.module';
 import { SEARCH_EXPANSION_VERSION } from '../search/utils/spec-expansion.utils';
 import { TypesenseService } from '../typesense/typesense.service';
 
@@ -9,6 +14,7 @@ export class HealthService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly typesenseService: TypesenseService,
+    private readonly configService: ConfigService,
   ) {}
 
   async check() {
@@ -31,6 +37,12 @@ export class HealthService {
             process.env.RAILWAY_GIT_COMMIT_SHA ??
             process.env.GIT_COMMIT_SHA ??
             undefined,
+        },
+        cache: {
+          backend: resolveCacheBackend(this.configService),
+          redis_configured: Boolean(this.configService.get<string>('REDIS_URL')?.trim()),
+          shared_across_instances:
+            resolveCacheBackend(this.configService) === CACHE_BACKEND_REDIS,
         },
         db: {
           status: 'ok',

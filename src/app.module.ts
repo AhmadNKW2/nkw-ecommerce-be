@@ -1,10 +1,4 @@
-import {
-  Module,
-  NestModule,
-  MiddlewareConsumer,
-  RequestMethod,
-} from '@nestjs/common';
-import { CacheModule } from '@nestjs/cache-manager';
+import { Module, NestModule, MiddlewareConsumer, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -36,6 +30,7 @@ import { SettingsModule } from './settings/settings.module';
 import { TypesenseModule } from './typesense/typesense.module';
 import { AdminNotificationsModule } from './admin-notifications/admin-notifications.module';
 import { TermsModule } from './terms/terms.module';
+import { AppCacheModule } from './common/cache/app-cache.module';
 
 @Module({
   imports: [
@@ -43,11 +38,7 @@ import { TermsModule } from './terms/terms.module';
       isGlobal: true,
     }),
     ScheduleModule.forRoot(),
-    CacheModule.register({
-      isGlobal: true,
-      ttl: Number(process.env.CACHE_TTL ?? 60),
-      max: Number(process.env.CACHE_MAX ?? 500),
-    }),
+    AppCacheModule,
     CommonModule,
     HealthModule,
     TypeOrmModule.forRoot({

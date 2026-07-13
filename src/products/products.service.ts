@@ -17,6 +17,7 @@ import {
   getSingleVendorId,
 } from './dto/filter-product.dto';
 import { ProductNamesQueryDto } from './dto/product-names-query.dto';
+import { MergeDuplicateReferenceSlugsDto } from './dto/merge-duplicate-reference-slugs.dto';
 import {
   Category,
   CategoryStatus,
@@ -572,6 +573,105 @@ export class ProductsService {
     return normalizedReferenceLink ? normalizedReferenceLink : null;
   }
 
+  private normalizeReferenceLinks(
+    links?: Array<string | null | undefined> | null,
+    legacyLink?: string | null,
+  ): string[] {
+    const orderedKeys: string[] = [];
+    const linksByKey = new Map<string, string>();
+
+    for (const candidate of [...(links ?? []), legacyLink]) {
+      const normalizedLink = this.normalizeReferenceLink(candidate);
+      if (!normalizedLink) {
+        continue;
+      }
+
+      const key = normalizedLink.toLowerCase();
+      if (!linksByKey.has(key)) {
+        orderedKeys.push(key);
+        linksByKey.set(key, normalizedLink);
+      }
+    }
+
+    return orderedKeys.map((key) => linksByKey.get(key) ?? key);
+  }
+
+  private resolveReferenceLinksForProduct(
+    product: Pick<Product, 'reference_link' | 'reference_links'>,
+  ): string[] {
+    return this.normalizeReferenceLinks(
+      product.reference_links,
+      product.reference_link,
+    );
+  }
+
+  private async findProductIdByReference(params: {
+    referenceLink?: string | null;
+    referenceSlug?: string | null;
+  }): Promise<number | null> {
+    const normalizedReferenceLink = this.normalizeReferenceLink(
+      params.referenceLink,
+    );
+    const normalizedReferenceSlug = this.normalizeReferenceSlug(
+      params.referenceSlug,
+    );
+
+    if (!normalizedReferenceLink && !normalizedReferenceSlug) {
+      return null;
+    }
+
+    const query = this.productsRepository
+      .createQueryBuilder('product')
+      .select(['product.id']);
+
+    const conditions: string[] = [];
+    const queryParams: Record<string, string> = {};
+
+    if (normalizedReferenceLink) {
+      conditions.push(
+        `(
+          btrim(product.reference_link) = :referenceLink
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(COALESCE(product.reference_links, '[]'::jsonb)) AS reference_links(value)
+            WHERE btrim(reference_links.value) = :referenceLink
+          )
+        )`,
+      );
+      queryParams.referenceLink = normalizedReferenceLink;
+    }
+
+    if (normalizedReferenceSlug) {
+      conditions.push('btrim(product.reference_slug) = :referenceSlug');
+      queryParams.referenceSlug = normalizedReferenceSlug;
+    }
+
+    query.where(conditions.join(' AND '), queryParams);
+
+    const product = await query.getOne();
+    return product?.id ?? null;
+  }
+
+  private async findProductIdByReferenceLink(
+    referenceLink: string,
+  ): Promise<number | null> {
+    return this.findProductIdByReference({ referenceLink });
+  }
+
+  private async ensureReferenceLinksAreUnique(
+    referenceLinks: string[],
+    excludeProductId?: number,
+  ): Promise<string[]> {
+    const normalizedReferenceLinks =
+      this.normalizeReferenceLinks(referenceLinks);
+
+    for (const referenceLink of normalizedReferenceLinks) {
+      await this.ensureReferenceLinkIsUnique(referenceLink, excludeProductId);
+    }
+
+    return normalizedReferenceLinks;
+  }
+
   private normalizeReferenceSlug(referenceSlug?: string | null): string | null {
     const normalizedReferenceSlug = referenceSlug?.trim();
     return normalizedReferenceSlug ? normalizedReferenceSlug : null;
@@ -591,9 +691,17 @@ export class ProductsService {
     const existingProductQuery = this.productsRepository
       .createQueryBuilder('product')
       .select(['product.id'])
-      .where('btrim(product.reference_link) = :referenceLink', {
-        referenceLink: normalizedReferenceLink,
-      });
+      .where(
+        `(
+          btrim(product.reference_link) = :referenceLink
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(COALESCE(product.reference_links, '[]'::jsonb)) AS reference_links(value)
+            WHERE btrim(reference_links.value) = :referenceLink
+          )
+        )`,
+        { referenceLink: normalizedReferenceLink },
+      );
 
     if (excludeProductId !== undefined) {
       existingProductQuery.andWhere('product.id != :excludeProductId', {
@@ -1643,9 +1751,10 @@ export class ProductsService {
         legacyName: dto.original_vendor_category_name ?? null,
       });
       const primaryOriginalVendorCategory = originalVendorCategories[0] ?? null;
-      const normalizedReferenceLink = await this.ensureReferenceLinkIsUnique(
-        dto.reference_link,
+      const normalizedReferenceLinks = await this.ensureReferenceLinksAreUnique(
+        this.normalizeReferenceLinks(dto.reference_links, dto.reference_link),
       );
+      const normalizedReferenceLink = normalizedReferenceLinks[0] ?? null;
       const lowStockThreshold = await this.getLowStockThreshold();
       const originalVendorPriceForRule =
         dto.original_vendor_price ??
@@ -1679,6 +1788,7 @@ export class ProductsService {
         long_description_en: dto.long_description_en,
         long_description_ar: dto.long_description_ar,
         reference_link: normalizedReferenceLink,
+        reference_links: normalizedReferenceLinks,
         reference_slug: this.normalizeReferenceSlug(dto.reference_slug),
         category_id: dto.category_ids?.[0],
         vendor_id: dto.vendor_id,
@@ -2727,29 +2837,40 @@ export class ProductsService {
   }
 
   async findOneByReferenceLink(
-    referenceLink: string,
+    referenceLink: string | undefined,
     isAdmin = false,
+    referenceSlug?: string,
   ): Promise<any> {
-    const normalizedReferenceLink = referenceLink?.trim();
+    const normalizedReferenceLink = referenceLink?.trim() || undefined;
+    const normalizedReferenceSlug = referenceSlug?.trim() || undefined;
 
-    if (!normalizedReferenceLink) {
-      throw new BadRequestException('reference_link query parameter is required');
-    }
-
-    const product = await this.productsRepository.findOne({
-      where: { reference_link: normalizedReferenceLink },
-      select: {
-        id: true
-      },
-    });
-
-    if (!product) {
-      throw new NotFoundException(
-        `Product with reference link ${normalizedReferenceLink} not found`,
+    if (!normalizedReferenceLink && !normalizedReferenceSlug) {
+      throw new BadRequestException(
+        'At least one of reference_link or reference_slug query parameter is required',
       );
     }
 
-    return this.findOne(product.id, isAdmin);
+    const productId = await this.findProductIdByReference({
+      referenceLink: normalizedReferenceLink,
+      referenceSlug: normalizedReferenceSlug,
+    });
+
+    if (!productId) {
+      const searchParts = [
+        normalizedReferenceLink
+          ? `reference link ${normalizedReferenceLink}`
+          : null,
+        normalizedReferenceSlug
+          ? `reference slug ${normalizedReferenceSlug}`
+          : null,
+      ].filter(Boolean);
+
+      throw new NotFoundException(
+        `Product with ${searchParts.join(' and ')} not found`,
+      );
+    }
+
+    return this.findOne(productId, isAdmin);
   }
 
   /**
@@ -2823,8 +2944,15 @@ export class ProductsService {
         }
       : null;
 
+    const referenceLinks = this.resolveReferenceLinksForProduct({
+      reference_link: rest.reference_link ?? null,
+      reference_links: rest.reference_links ?? [],
+    });
+
     return {
       ...rest,
+      reference_link: referenceLinks[0] ?? null,
+      reference_links: referenceLinks,
       original_vendor_categories: originalVendorCategories,
       original_vendor_categories_ids: this.normalizeOriginalVendorCategoryIds(
         originalVendorCategories,
@@ -2965,7 +3093,6 @@ export class ProductsService {
         'short_description_ar',
         'long_description_en',
         'long_description_ar',
-        'reference_link',
         'vendor_id',
         'brand_id',
         'status',
@@ -3014,11 +3141,29 @@ export class ProductsService {
         }
       });
 
-      if (dto.reference_link !== undefined) {
-        basicInfoChanges.reference_link = await this.ensureReferenceLinkIsUnique(
-          dto.reference_link,
+      if (dto.reference_links !== undefined || dto.reference_link !== undefined) {
+        const existingReferenceState = await queryRunner.manager.findOne(Product, {
+          where: { id },
+          select: {
+            id: true,
+            reference_link: true,
+            reference_links: true,
+          },
+        });
+        const nextReferenceLinks = await this.ensureReferenceLinksAreUnique(
+          this.normalizeReferenceLinks(
+            dto.reference_links !== undefined
+              ? dto.reference_links
+              : existingReferenceState?.reference_links,
+            dto.reference_link !== undefined
+              ? dto.reference_link
+              : existingReferenceState?.reference_link,
+          ),
           id,
         );
+
+        basicInfoChanges.reference_links = nextReferenceLinks;
+        basicInfoChanges.reference_link = nextReferenceLinks[0] ?? null;
       }
 
       if (dto.reference_slug !== undefined) {
@@ -3420,14 +3565,18 @@ export class ProductsService {
    * Permanently delete a product (only if archived or in review)
    * This is irreversible
    */
-  async permanentDelete(id: number): Promise<{ message: string }> {
+  async permanentDelete(
+    id: number,
+    options: { allowAnyStatus?: boolean } = {},
+  ): Promise<{ message: string }> {
     const product = await this.productsRepository.findOne({
       where: { id },
     });
 
     if (
       !product ||
-      (product.status !== ProductStatus.ARCHIVED &&
+      (!options.allowAnyStatus &&
+        product.status !== ProductStatus.ARCHIVED &&
         product.status !== ProductStatus.REVIEW)
     ) {
       throw new NotFoundException(
@@ -3442,6 +3591,178 @@ export class ProductsService {
     await this.deleteProductFromTypesense(id);
 
     return { message: `Product "${product.name_en}" permanently deleted` };
+  }
+
+  async mergeDuplicateReferenceSlugs(
+    dto: MergeDuplicateReferenceSlugsDto = {},
+  ): Promise<{
+    dry_run: boolean;
+    groups_found: number;
+    groups_merged: number;
+    products_deleted: number;
+    groups: Array<{
+      vendor_id: number;
+      reference_slug: string;
+      keeper_product_id: number;
+      deleted_product_ids: number[];
+      merged_reference_links: string[];
+      merged_original_vendor_categories: OriginalVendorCategoryReference[];
+    }>;
+    skipped_groups: Array<{
+      vendor_id: number | null;
+      reference_slug: string;
+      reason: string;
+      product_ids: number[];
+    }>;
+  }> {
+    const dryRun = dto.dry_run ?? false;
+    const groupsQuery = this.productsRepository
+      .createQueryBuilder('product')
+      .select('product.vendor_id', 'vendor_id')
+      .addSelect('product.reference_slug', 'reference_slug')
+      .addSelect('array_agg(product.id ORDER BY product.id)', 'product_ids')
+      .addSelect('COUNT(*)::int', 'count')
+      .where('product.deleted_at IS NULL')
+      .andWhere('product.reference_slug IS NOT NULL')
+      .andWhere("btrim(product.reference_slug) <> ''")
+      .andWhere('product.vendor_id IS NOT NULL')
+      .groupBy('product.vendor_id')
+      .addGroupBy('product.reference_slug')
+      .having('COUNT(*) > 1')
+      .orderBy('count', 'DESC')
+      .addOrderBy('product.reference_slug', 'ASC');
+
+    if (dto.vendor_id !== undefined) {
+      groupsQuery.andWhere('product.vendor_id = :vendorId', {
+        vendorId: dto.vendor_id,
+      });
+    }
+
+    const duplicateGroups = await groupsQuery.getRawMany<{
+      vendor_id: string;
+      reference_slug: string;
+      product_ids: number[];
+      count: string;
+    }>();
+
+    const groups: Array<{
+      vendor_id: number;
+      reference_slug: string;
+      keeper_product_id: number;
+      deleted_product_ids: number[];
+      merged_reference_links: string[];
+      merged_original_vendor_categories: OriginalVendorCategoryReference[];
+    }> = [];
+    const skippedGroups: Array<{
+      vendor_id: number | null;
+      reference_slug: string;
+      reason: string;
+      product_ids: number[];
+    }> = [];
+    let groupsMerged = 0;
+    let productsDeleted = 0;
+
+    for (const group of duplicateGroups) {
+      const rawProductIds = group.product_ids as unknown;
+      const productIds = (
+        Array.isArray(rawProductIds)
+          ? rawProductIds
+          : String(rawProductIds ?? '')
+              .replace(/^\{|\}$/g, '')
+              .split(',')
+      )
+        .map((productId) => Number(productId))
+        .filter((productId) => Number.isInteger(productId) && productId > 0)
+        .sort((a, b) => a - b);
+
+      if (productIds.length < 2) {
+        continue;
+      }
+
+      const keeperProductId = productIds[0];
+      const duplicateProductIds = productIds.slice(1);
+      const products = await this.productsRepository.find({
+        where: { id: In(productIds) },
+        select: {
+          id: true,
+          vendor_id: true,
+          reference_slug: true,
+          reference_link: true,
+          reference_links: true,
+          original_vendor_categories: true,
+          original_vendor_category_id: true,
+          original_vendor_category_name: true,
+        },
+      });
+
+      if (products.length !== productIds.length) {
+        skippedGroups.push({
+          vendor_id: Number(group.vendor_id) || null,
+          reference_slug: group.reference_slug,
+          reason: 'One or more products in the group could not be loaded',
+          product_ids: productIds,
+        });
+        continue;
+      }
+
+      const mergedReferenceLinks = this.normalizeReferenceLinks(
+        products.flatMap((product) =>
+          this.resolveReferenceLinksForProduct(product),
+        ),
+      );
+      const mergedOriginalVendorCategories = this.normalizeOriginalVendorCategories(
+        {
+          categories: products.flatMap(
+            (product) => product.original_vendor_categories ?? [],
+          ),
+        },
+      );
+      const primaryOriginalVendorCategory =
+        mergedOriginalVendorCategories[0] ?? null;
+
+      const groupSummary = {
+        vendor_id: Number(group.vendor_id),
+        reference_slug: group.reference_slug,
+        keeper_product_id: keeperProductId,
+        deleted_product_ids: duplicateProductIds,
+        merged_reference_links: mergedReferenceLinks,
+        merged_original_vendor_categories: mergedOriginalVendorCategories,
+      };
+
+      groups.push(groupSummary);
+
+      if (dryRun) {
+        continue;
+      }
+
+      await this.productsRepository.update(keeperProductId, {
+        reference_links: mergedReferenceLinks,
+        reference_link: mergedReferenceLinks[0] ?? null,
+        original_vendor_categories: mergedOriginalVendorCategories,
+        original_vendor_category_id: primaryOriginalVendorCategory?.id ?? null,
+        original_vendor_category_name:
+          primaryOriginalVendorCategory?.name ?? null,
+      });
+
+      for (const duplicateProductId of duplicateProductIds) {
+        await this.permanentDelete(duplicateProductId, {
+          allowAnyStatus: true,
+        });
+        productsDeleted += 1;
+      }
+
+      groupsMerged += 1;
+      await this.syncProductToTypesense(keeperProductId);
+    }
+
+    return {
+      dry_run: dryRun,
+      groups_found: groups.length,
+      groups_merged: dryRun ? 0 : groupsMerged,
+      products_deleted: dryRun ? 0 : productsDeleted,
+      groups,
+      skipped_groups: skippedGroups,
+    };
   }
 
   async permanentDeleteReviewProducts(

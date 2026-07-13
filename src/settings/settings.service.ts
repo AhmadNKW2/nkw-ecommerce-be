@@ -531,6 +531,7 @@ export class SettingsService implements OnModuleInit {
     await this.ensureProductVendorPriceColumnsExist();
     await this.ensureProductMeasurementUnitColumnsExist();
     await this.ensureProductReferenceSlugColumnExists();
+    await this.ensureProductReferenceLinksColumnExists();
   }
 
   private async ensureSeoSettingsTableExists(): Promise<void> {
@@ -1275,6 +1276,39 @@ export class SettingsService implements OnModuleInit {
           isNullable: true,
         }),
       );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureProductReferenceLinksColumnExists(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasColumn('products', 'reference_links'))) {
+        await queryRunner.addColumn(
+          'products',
+          new TableColumn({
+            name: 'reference_links',
+            type: 'jsonb',
+            isNullable: false,
+            default: "'[]'",
+          }),
+        );
+      }
+
+      await queryRunner.query(`
+        UPDATE products
+        SET reference_links = jsonb_build_array(btrim(reference_link))
+        WHERE reference_link IS NOT NULL
+          AND btrim(reference_link) <> ''
+          AND (
+            reference_links IS NULL
+            OR reference_links = '[]'::jsonb
+          )
+      `);
     } finally {
       await queryRunner.release();
     }
