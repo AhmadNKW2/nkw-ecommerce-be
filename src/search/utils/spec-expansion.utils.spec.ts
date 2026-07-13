@@ -146,6 +146,30 @@ describe('spec-expansion.utils', () => {
         'ram لابتوب',
       ]);
     });
+
+    it('expands each single-segment concept independently instead of cartesian pairs', () => {
+      expect(
+        buildLayeredConceptExpansionQueries({
+          exactQuery: 'قبضة',
+          fullPhraseConcepts: [],
+          combinedConcepts: [],
+          tokenConceptLayers: [
+            [{ orderedVariants: ['قبضة', 'يد تحكم', 'controller'] }],
+            [{ orderedVariants: ['قبضة', 'مقبض', 'grip'] }],
+          ],
+          fallbackWordsAppearanceOrder: [],
+          fallbackWordsProgressiveOrder: [],
+        }),
+      ).toEqual([
+        'قبضة',
+        'قبضة',
+        'يد تحكم',
+        'controller',
+        'قبضة',
+        'مقبض',
+        'grip',
+      ]);
+    });
   });
 
   describe('buildConceptSynonymThenProgressiveQueries', () => {

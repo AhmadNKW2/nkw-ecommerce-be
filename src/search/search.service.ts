@@ -534,10 +534,17 @@ export class SearchService implements OnModuleInit {
           )
         : [];
 
-    const useCombinedConceptLayer = params.matchedConcepts.length >= 2;
+    const singleSegmentMultiConcept =
+      conceptSegmentTokens.length === 1 && fullPhraseConcepts.length >= 2;
+    const useCombinedConceptLayer =
+      params.matchedConcepts.length >= 2 && !singleSegmentMultiConcept;
     const tokenConceptLayers: Array<Array<{ orderedVariants: string[] }>> = [];
 
-    if (!useCombinedConceptLayer) {
+    if (singleSegmentMultiConcept) {
+      fullPhraseConcepts.forEach((concept) => {
+        tokenConceptLayers.push([concept]);
+      });
+    } else if (!useCombinedConceptLayer) {
       for (const token of conceptSegmentTokens) {
         const layer = await this.termConceptLexicon.resolveAllConceptGroupsMatchingSegment(
           token,
@@ -557,7 +564,7 @@ export class SearchService implements OnModuleInit {
     if (hasConceptExpansion) {
       const conceptLayers = buildLayeredConceptExpansionLayers({
         exactQuery: params.normalizedQuery,
-        fullPhraseConcepts,
+        fullPhraseConcepts: singleSegmentMultiConcept ? [] : fullPhraseConcepts,
         combinedConcepts: useCombinedConceptLayer ? params.matchedConcepts : [],
         tokenConceptLayers,
         fallbackWordsAppearanceOrder: params.fallbackWordsAppearanceOrder,
@@ -637,6 +644,47 @@ export class SearchService implements OnModuleInit {
     return Math.min(20, configured);
   }
 
+  private async getReferenceProductIdsFromMatchedConcepts(
+    matchedConcepts: MatchedConceptInQuery[],
+  ): Promise<number[]> {
+    if (matchedConcepts.length === 0) {
+      return [];
+    }
+
+    const groupIds = [...new Set(matchedConcepts.map((concept) => concept.groupId))];
+    const groups = await this.termGroupsRepository.find({
+      where: { id: In(groupIds) },
+    });
+
+    return [
+      ...new Set(
+        groups
+          .flatMap((group) => group.reference_product_ids ?? [])
+          .filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    ];
+  }
+
+  private dedupeConceptExpansionQueries(queries: string[]): string[] {
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+
+    queries.forEach((query) => {
+      const trimmed = query.trim();
+      if (!trimmed) {
+        return;
+      }
+      const key = normalizeConceptTermKey(trimmed);
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      deduped.push(trimmed);
+    });
+
+    return deduped;
+  }
+
   private async runConceptExpansionQueries(
     queries: string[],
     params: {
@@ -645,6 +693,7 @@ export class SearchService implements OnModuleInit {
       maxCandidates: number;
       requestedLimit: number;
     },
+    shouldStop?: () => boolean,
   ): Promise<
     Array<{
       query: string;
@@ -656,9 +705,14 @@ export class SearchService implements OnModuleInit {
       query: string;
       hits: Array<{ id: number; categoryIds: number[] }>;
     }> = [];
+    const uniqueQueries = this.dedupeConceptExpansionQueries(queries);
 
-    for (let index = 0; index < queries.length; index += concurrency) {
-      const chunk = queries.slice(index, index + concurrency);
+    for (let index = 0; index < uniqueQueries.length; index += concurrency) {
+      if (shouldStop?.()) {
+        break;
+      }
+
+      const chunk = uniqueQueries.slice(index, index + concurrency);
       const chunkResults = await Promise.all(
         chunk.map(async (conceptQuery) => {
           const hits = await this.searchTypesenseProductHits({
@@ -2189,6 +2243,10 @@ export class SearchService implements OnModuleInit {
       matchedConcepts.length > 0
         ? await this.resolveCategoryIdsFromMatchedConcepts(matchedConcepts)
         : [];
+    const referenceProductIds =
+      matchedConcepts.length > 0
+        ? await this.getReferenceProductIdsFromMatchedConcepts(matchedConcepts)
+        : [];
     const conceptProductCategoryIds = new Map<number, number[]>();
     const conceptQueryDebug: Array<{
       query: string;
@@ -2200,6 +2258,18 @@ export class SearchService implements OnModuleInit {
     // Concept-driven ordering: query expansion defines intent; categories are
     // not used to filter these searches — only optional post-collection refinement.
     if (conceptDriven && conceptLayers.length > 0) {
+      if (referenceProductIds.length > 0) {
+        const beforeSize = uniqueIds.size;
+        addIds('concept', referenceProductIds);
+        if (params.debug) {
+          conceptQueryDebug.push({
+            query: '[reference_product_ids]',
+            added: uniqueIds.size - beforeSize,
+            categoryFiltered: categoryIdsFromFilters.length > 0,
+          });
+        }
+      }
+
       for (const conceptLayer of conceptLayers) {
         const batchResults = await this.runConceptExpansionQueries(
           conceptLayer.queries,
@@ -2209,6 +2279,7 @@ export class SearchService implements OnModuleInit {
             maxCandidates,
             requestedLimit: params.requestedLimit,
           },
+          () => uniqueIds.size >= params.requestedLimit,
         );
 
         for (const { query: conceptQuery, hits } of batchResults) {
@@ -2486,12 +2557,12 @@ export class SearchService implements OnModuleInit {
     const maxCandidates = this.getMaxExpansionCandidates();
     const expansionEnabled = this.isProgressiveExpansionEnabled();
     const primaryEnoughCount = this.getPrimaryEnoughCount();
+    const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
+    const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const primaryFetchLimit = Math.min(
       maxCandidates,
       Math.max(startOffset + perPage, primaryEnoughCount),
     );
-    const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
-    const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const params: SearchParams<Record<string, any>> = {
       q: normalizedQuery,
       query_by: PRODUCT_QUERY_BY,
@@ -2516,28 +2587,9 @@ export class SearchService implements OnModuleInit {
     const primaryCount = orderedProductIds.length;
     const primaryIsEnough = primaryCount >= primaryEnoughCount;
 
-    // Concept-driven queries must always let the concept layer define ordering,
-    // even when the loose primary search alone already returns "enough" hits.
-    // Otherwise the primary_enough threshold would skip the concept layer and
-    // fall back to raw text-match order (the reported كرت ذاكرة bug).
-    const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
-    const conceptDetectionLocale = normalizeSearchLocale(
-      (dto as any).locale,
-      conceptDetectionTokens,
-    );
-    const queryConcepts =
-      expansionEnabled && normalizedQuery && normalizedQuery !== '*'
-        ? await this.termConceptLexicon.resolveAllConceptsInQuery(
-            normalizedQuery,
-            conceptDetectionTokens,
-            conceptDetectionLocale,
-          )
-        : [];
-    const hasQueryConcepts = queryConcepts.length > 0;
-
     const shouldExpand =
       expansionEnabled &&
-      (!primaryIsEnough || hasQueryConcepts) &&
+      !primaryIsEnough &&
       perPage > 0 &&
       startOffset + perPage <= maxCandidates;
     let expansionMeta:
