@@ -2930,6 +2930,19 @@ export class SearchService implements OnModuleInit {
           documentsById: {},
           enrichedFacets: [],
         };
+        // Persist IDs as soon as ranking is known so page 2+ can reuse the
+        // ordered list while this request still hydrates cards/facets.
+        if (
+          !debugSearchEnabled &&
+          expansionCacheKey &&
+          orderedProductIds.length > 0
+        ) {
+          await this.cacheManager.set(
+            expansionCacheKey,
+            cachedBrandBucketBundle,
+            this.getExpansionOrderedIdsCacheTtlMs(),
+          );
+        }
         expansionMeta = {
           tiers: expanded.idsByTier,
           primaryFoundCount: expanded.primaryFoundCount,
