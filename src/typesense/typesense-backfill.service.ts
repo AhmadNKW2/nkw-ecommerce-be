@@ -96,6 +96,9 @@ export class TypesenseBackfillService {
               category: true,
             },
             specifications: true,
+            productMedia: {
+              media: true,
+            },
             brand: true,
             category: true,
           },

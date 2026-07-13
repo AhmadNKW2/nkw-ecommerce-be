@@ -54,6 +54,29 @@ function mapArabicHtmlPair(html: string | null | undefined): {
   };
 }
 
+function getPrimaryImageUrl(product: Product): string {
+  const productMedia = Array.isArray((product as any).productMedia)
+    ? [...(product as any).productMedia]
+    : [];
+
+  const imageMedia = productMedia
+    .filter((entry: any) => {
+      const url = entry?.media?.url;
+      const type = entry?.media?.type;
+      return typeof url === 'string' && url.trim() && type !== 'video' && type !== 'document';
+    })
+    .sort((left: any, right: any) => {
+      const primaryDelta =
+        Number(Boolean(right?.is_primary)) - Number(Boolean(left?.is_primary));
+      if (primaryDelta !== 0) return primaryDelta;
+      const sortDelta = Number(left?.sort_order ?? 0) - Number(right?.sort_order ?? 0);
+      if (sortDelta !== 0) return sortDelta;
+      return Number(left?.media?.id ?? 0) - Number(right?.media?.id ?? 0);
+    });
+
+  return imageMedia[0]?.media?.url?.trim() ?? '';
+}
+
 export function mapProductToTypesenseDoc(
   product: Product,
   options: TypesenseProductMapperOptions = {},
@@ -134,6 +157,7 @@ export function mapProductToTypesenseDoc(
     long_description_ar_norm: longDescriptionAr.search,
     sku: product.sku ?? '',
     slug: product.slug ?? '',
+    primary_image_url: getPrimaryImageUrl(product),
     status: product.status ?? '',
     visible: Boolean(product.visible),
     brand_id: product.brand_id ?? null,

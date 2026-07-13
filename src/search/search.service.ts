@@ -77,6 +77,25 @@ type ExpansionTierKey =
   | 'specification'
   | 'keyword';
 
+type CachedBrandBucketExpansion = {
+  orderedIds: number[];
+  documentsById: Record<string, Record<string, any>>;
+  enrichedFacets: Array<{
+    field_name: string;
+    counts: Array<{
+      value: string;
+      count: number;
+      label?: string;
+      slug?: string;
+      group_key?: string;
+      group_label?: string;
+    }>;
+  }>;
+};
+
+const BUCKET_SEARCH_CARD_INCLUDE_FIELDS =
+  'id,name_en,name_ar,slug,price,sale_price,is_out_of_stock,primary_image_url,category_ids';
+
 @Injectable()
 export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
@@ -190,6 +209,11 @@ export class SearchService implements OnModuleInit {
         ? salePrice
         : undefined;
     const isOutOfStock = Boolean(document.is_out_of_stock);
+    const indexedImageUrl =
+      typeof document.primary_image_url === 'string'
+        ? document.primary_image_url.trim()
+        : '';
+    const resolvedImageUrl = imageUrl ?? indexedImageUrl;
 
     // Display Arabic from name_ar only — never use *_norm fields in responses.
     return {
@@ -206,7 +230,7 @@ export class SearchService implements OnModuleInit {
       sale_price: normalizedSalePrice,
       is_available: !isOutOfStock,
       stock: isOutOfStock ? 0 : 1,
-      images: imageUrl ? [imageUrl] : [],
+      images: resolvedImageUrl ? [resolvedImageUrl] : [],
     };
   }
 
@@ -1697,6 +1721,69 @@ export class SearchService implements OnModuleInit {
     return enrichedFacets;
   }
 
+  private async buildSearchCardsFromCachedDocuments(
+    productIds: number[],
+    documentsById: Record<string, Record<string, any>>,
+    isAdmin: boolean,
+  ): Promise<any[]> {
+    if (productIds.length === 0) {
+      return [];
+    }
+
+    const cards: any[] = [];
+    const missingIds: number[] = [];
+
+    productIds.forEach((productId) => {
+      const document = documentsById[String(productId)];
+      if (!document) {
+        missingIds.push(productId);
+        return;
+      }
+
+      cards.push(this.mapTypesenseDocumentToSearchCard(document));
+    });
+
+    if (missingIds.length === 0) {
+      return cards;
+    }
+
+    const fallbackCards = await this.buildSearchCardsFromTypesenseIds(
+      missingIds,
+      isAdmin,
+    );
+    const cardsById = new Map<string, any>(
+      [...cards, ...fallbackCards].map((card) => [String(card.id), card]),
+    );
+    return productIds
+      .map((id) => cardsById.get(String(id)))
+      .filter((card): card is NonNullable<typeof card> => Boolean(card));
+  }
+
+  private async computeExpandedSearchFacets(
+    orderedProductIds: number[],
+    dto: SearchQueryDto,
+  ): Promise<CachedBrandBucketExpansion['enrichedFacets']> {
+    if (orderedProductIds.length === 0) {
+      return [];
+    }
+
+    const facetPoolIds = orderedProductIds.slice(0, this.typesenseIdPageSize);
+    const facetsFromExpandedPool = await this.typesenseService.search({
+      q: '*',
+      query_by: PRODUCT_CARD_QUERY_BY,
+      filter_by: `id:=[${facetPoolIds.join(',')}]`,
+      facet_by: this.getTypesenseFacetFields(),
+      max_facet_values: 100,
+      page: 1,
+      per_page: 1,
+    });
+
+    return this.enrichSearchFacets(
+      this.mapTypesenseFacetCounts(facetsFromExpandedPool.facet_counts),
+      dto,
+    );
+  }
+
   private async buildSearchCardsFromTypesenseIds(
     productIds: number[],
     isAdmin: boolean,
@@ -1709,16 +1796,14 @@ export class SearchService implements OnModuleInit {
       isAdmin ? '' : ' && is_out_of_stock:=false'
     }`;
 
-    const [result, imageUrlsByProductId] = await Promise.all([
-      this.typesenseService.search({
-        q: '*',
-        query_by: PRODUCT_CARD_QUERY_BY,
-        filter_by: filterBy,
-        per_page: productIds.length,
-        page: 1,
-      }),
-      this.productsService.findPrimaryImageUrlsByProductIds(productIds),
-    ]);
+    const result = await this.typesenseService.search({
+      q: '*',
+      query_by: PRODUCT_CARD_QUERY_BY,
+      filter_by: filterBy,
+      include_fields: BUCKET_SEARCH_CARD_INCLUDE_FIELDS,
+      per_page: productIds.length,
+      page: 1,
+    });
 
     const hits = Array.isArray(result.hits) ? result.hits : [];
     const cardsById = new Map<string, any>();
@@ -1731,10 +1816,7 @@ export class SearchService implements OnModuleInit {
 
       cardsById.set(
         String(productId),
-        this.mapTypesenseDocumentToSearchCard(
-          hit.document,
-          imageUrlsByProductId.get(productId),
-        ),
+        this.mapTypesenseDocumentToSearchCard(hit.document),
       );
     });
 
@@ -1817,6 +1899,7 @@ export class SearchService implements OnModuleInit {
       baseFilterBy?: string;
       perPage: number;
       typoTokens: string[];
+      includeFields?: string;
     },
   ): SearchParams<Record<string, any>> {
     // Bucket queries are intentional spec layers — disable typos so 5060 does not match 5050.
@@ -1829,7 +1912,7 @@ export class SearchService implements OnModuleInit {
       drop_tokens_threshold: 0,
       ...(params.baseFilterBy ? { filter_by: params.baseFilterBy } : {}),
       sort_by: '_text_match:desc,created_at_ts:desc',
-      include_fields: 'id,category_ids',
+      include_fields: params.includeFields ?? 'id,category_ids',
       page: 1,
       per_page: params.perPage,
       num_typos: 0,
@@ -1838,7 +1921,11 @@ export class SearchService implements OnModuleInit {
 
   private mapTypesenseProductHits(result: {
     hits?: Array<{ document?: Record<string, any> }>;
-  }): Array<{ id: number; categoryIds: number[] }> {
+  }): Array<{
+    id: number;
+    categoryIds: number[];
+    document?: Record<string, any>;
+  }> {
     const hits = Array.isArray(result.hits) ? result.hits : [];
     return hits
       .map((hit: any) => {
@@ -1854,9 +1941,17 @@ export class SearchService implements OnModuleInit {
               .filter((value) => Number.isInteger(value) && value > 0)
           : [];
 
-        return { id, categoryIds };
+        return {
+          id,
+          categoryIds,
+          document: hit?.document as Record<string, any> | undefined,
+        };
       })
-      .filter((hit): hit is { id: number; categoryIds: number[] } => hit != null);
+      .filter((hit) => hit != null) as Array<{
+        id: number;
+        categoryIds: number[];
+        document?: Record<string, any>;
+      }>;
   }
 
   private async searchTypesenseProductHits(params: {
@@ -1938,6 +2033,7 @@ export class SearchService implements OnModuleInit {
   }): Promise<{
     idsByTier: Record<ExpansionTierKey, number[]>;
     orderedIds: number[];
+    documentsById: Record<string, Record<string, any>>;
     primaryFoundCount: number;
     detectedBrandIds: number[];
     detectedCategoryIds: number[];
@@ -1970,6 +2066,7 @@ export class SearchService implements OnModuleInit {
     const tierNotes: Partial<Record<ExpansionTierKey, string>> = {};
     const uniqueIds = new Set<number>();
     const layeredOrderedIds: number[] = [];
+    const documentsById = new Map<number, Record<string, any>>();
     const conceptQueryDebug: Array<{
       query: string;
       added: number;
@@ -2071,25 +2168,33 @@ export class SearchService implements OnModuleInit {
         filterBy?: string;
       }> = [];
       for (const queries of levelQueries) {
-        const uniqueLevelQueries = this.dedupeConceptExpansionQueries(queries);
+        const canonicalQuery = this.dedupeConceptExpansionQueries(queries)[0];
+        if (!canonicalQuery) {
+          continue;
+        }
         for (const tier of ['same_brand_spec', 'cross_brand_spec'] as const) {
           if (!enabledLevels.has(tier)) {
             continue;
           }
-          for (const query of uniqueLevelQueries) {
-            bucketPlans.push({
-              tier,
-              query,
-              filterBy:
-                tier === 'same_brand_spec' ? sameBrandFilterBy : crossBrandFilterBy,
-            });
-          }
+          bucketPlans.push({
+            tier,
+            query: canonicalQuery,
+            filterBy:
+              tier === 'same_brand_spec' ? sameBrandFilterBy : crossBrandFilterBy,
+          });
         }
       }
 
       const perQueryLimit = Math.min(60, maxCandidates);
       const batchSize = this.getConceptExpansionMultiSearchBatchSize();
-      const hitsByPlanIndex = new Map<number, number[]>();
+      const hitsByPlanIndex = new Map<
+        number,
+        Array<{
+          id: number;
+          categoryIds: number[];
+          document?: Record<string, any>;
+        }>
+      >();
       for (let index = 0; index < bucketPlans.length; index += batchSize) {
         const chunk = bucketPlans.slice(index, index + batchSize);
         const multiResult = await this.typesenseService.multiSearch(
@@ -2098,6 +2203,7 @@ export class SearchService implements OnModuleInit {
               baseFilterBy: plan.filterBy,
               perPage: perQueryLimit,
               typoTokens: this.tokenizeQueryForExpansion(plan.query),
+              includeFields: BUCKET_SEARCH_CARD_INCLUDE_FIELDS,
             }),
           ),
         );
@@ -2105,14 +2211,23 @@ export class SearchService implements OnModuleInit {
           const searchResult = multiResult.results?.[chunkIndex] ?? { hits: [] };
           hitsByPlanIndex.set(
             index + chunkIndex,
-            this.mapTypesenseProductHits(searchResult).map((hit) => hit.id),
+            this.mapTypesenseProductHits(searchResult),
           );
         });
       }
 
       bucketPlans.forEach((plan, planIndex) => {
         const beforeSize = uniqueIds.size;
-        addBucketIds(plan.tier, hitsByPlanIndex.get(planIndex) ?? []);
+        const hits = hitsByPlanIndex.get(planIndex) ?? [];
+        hits.forEach((hit) => {
+          if (hit.document && !documentsById.has(hit.id)) {
+            documentsById.set(hit.id, hit.document);
+          }
+        });
+        addBucketIds(
+          plan.tier,
+          hits.map((hit) => hit.id),
+        );
         if (params.debug) {
           conceptQueryDebug.push({
             query: `${plan.query} [${plan.tier}]`,
@@ -2289,6 +2404,7 @@ export class SearchService implements OnModuleInit {
     return {
       idsByTier,
       orderedIds,
+      documentsById: Object.fromEntries(documentsById),
       primaryFoundCount,
       detectedBrandIds: effectiveBrandIds,
       detectedCategoryIds: effectiveCategoryIds,
@@ -2359,6 +2475,8 @@ export class SearchService implements OnModuleInit {
         }
       | undefined;
 
+    let cachedBrandBucketBundle: CachedBrandBucketExpansion | null = null;
+
     if (useBrandBucketFastPath) {
       shouldExpand = true;
       const expansionCacheKey = await this.buildExpansionCacheKey(
@@ -2366,13 +2484,22 @@ export class SearchService implements OnModuleInit {
         isAdmin,
         filterBy,
       );
-      const cachedExpansion =
+      const cachedBundle =
         !debugSearchEnabled
-          ? await this.cacheManager.get<{ orderedIds: number[] }>(expansionCacheKey)
+          ? await this.cacheManager.get<CachedBrandBucketExpansion>(expansionCacheKey)
           : null;
+      const hasCachedBundle =
+        Boolean(cachedBundle?.orderedIds?.length) &&
+        Boolean(cachedBundle?.documentsById) &&
+        Object.keys(cachedBundle?.documentsById ?? {}).length > 0;
 
-      if (cachedExpansion?.orderedIds?.length) {
-        orderedProductIds = cachedExpansion.orderedIds;
+      if (hasCachedBundle && cachedBundle) {
+        cachedBrandBucketBundle = cachedBundle;
+        orderedProductIds = cachedBundle.orderedIds;
+        if (!cachedBrandBucketBundle.enrichedFacets?.length) {
+          cachedBrandBucketBundle.enrichedFacets =
+            await this.computeExpandedSearchFacets(orderedProductIds, dto);
+        }
       } else {
         const expanded = await this.collectExpandedTypesenseIds({
           dto,
@@ -2383,6 +2510,15 @@ export class SearchService implements OnModuleInit {
           debug: debugSearchEnabled,
         });
         orderedProductIds = expanded.orderedIds;
+        const enrichedFacets = await this.computeExpandedSearchFacets(
+          orderedProductIds,
+          dto,
+        );
+        cachedBrandBucketBundle = {
+          orderedIds: orderedProductIds,
+          documentsById: expanded.documentsById,
+          enrichedFacets,
+        };
         expansionMeta = {
           tiers: expanded.idsByTier,
           primaryFoundCount: expanded.primaryFoundCount,
@@ -2396,7 +2532,7 @@ export class SearchService implements OnModuleInit {
         if (!debugSearchEnabled && orderedProductIds.length > 0) {
           await this.cacheManager.set(
             expansionCacheKey,
-            { orderedIds: orderedProductIds },
+            cachedBrandBucketBundle,
             this.getExpansionOrderedIdsCacheTtlMs(),
           );
         }
@@ -2486,11 +2622,13 @@ export class SearchService implements OnModuleInit {
         pageProductIds,
         true,
       );
-    } else if (useBrandBucketFastPath) {
-      products = await this.buildSearchCardsFromTypesenseIds(pageProductIds, isAdmin);
+    } else if (useBrandBucketFastPath && cachedBrandBucketBundle) {
+      products = await this.buildSearchCardsFromCachedDocuments(
+        pageProductIds,
+        cachedBrandBucketBundle.documentsById,
+        isAdmin,
+      );
     } else {
-      const imageUrlsByProductId =
-        await this.productsService.findPrimaryImageUrlsByProductIds(pageProductIds);
       const hitsById = new Map<number, any>();
       hits.forEach((hit: any) => {
         const id = Number(hit?.document?.id);
@@ -2498,6 +2636,16 @@ export class SearchService implements OnModuleInit {
           hitsById.set(id, hit);
         }
       });
+      const needsImageLookup = pageProductIds.some((productId) => {
+        const document = hitsById.get(productId)?.document;
+        return document && !Object.prototype.hasOwnProperty.call(
+          document,
+          'primary_image_url',
+        );
+      });
+      const imageUrlsByProductId = needsImageLookup
+        ? await this.productsService.findPrimaryImageUrlsByProductIds(pageProductIds)
+        : new Map<number, string>();
 
       const mappedFromHits = pageProductIds
         .map((productId) => {
@@ -2527,22 +2675,32 @@ export class SearchService implements OnModuleInit {
         .filter((card): card is NonNullable<typeof card> => Boolean(card));
     }
 
-    let facetCountsSource = result.facet_counts;
-    if (shouldExpand && orderedProductIds.length > 0) {
-      const facetPoolIds = orderedProductIds.slice(0, this.typesenseIdPageSize);
-      const facetsFromExpandedPool = await this.typesenseService.search({
-        q: '*',
-        query_by: PRODUCT_CARD_QUERY_BY,
-        filter_by: `id:=[${facetPoolIds.join(',')}]`,
-        facet_by: this.getTypesenseFacetFields(),
-        max_facet_values: 100,
-        page: 1,
-        per_page: 1,
-      });
-      facetCountsSource = facetsFromExpandedPool.facet_counts;
-      if (useBrandBucketFastPath) {
-        result.search_time_ms = facetsFromExpandedPool.search_time_ms;
+    let enrichedFacets: CachedBrandBucketExpansion['enrichedFacets'] = [];
+    if (useBrandBucketFastPath && cachedBrandBucketBundle?.enrichedFacets) {
+      enrichedFacets = cachedBrandBucketBundle.enrichedFacets;
+    } else {
+      let facetCountsSource = result.facet_counts;
+      if (shouldExpand && orderedProductIds.length > 0) {
+        const facetPoolIds = orderedProductIds.slice(0, this.typesenseIdPageSize);
+        const facetsFromExpandedPool = await this.typesenseService.search({
+          q: '*',
+          query_by: PRODUCT_CARD_QUERY_BY,
+          filter_by: `id:=[${facetPoolIds.join(',')}]`,
+          facet_by: this.getTypesenseFacetFields(),
+          max_facet_values: 100,
+          page: 1,
+          per_page: 1,
+        });
+        facetCountsSource = facetsFromExpandedPool.facet_counts;
+        if (useBrandBucketFastPath) {
+          result.search_time_ms = facetsFromExpandedPool.search_time_ms;
+        }
       }
+
+      enrichedFacets = await this.enrichSearchFacets(
+        this.mapTypesenseFacetCounts(facetCountsSource),
+        dto,
+      );
     }
 
     const totalCount = shouldExpand
@@ -2559,10 +2717,7 @@ export class SearchService implements OnModuleInit {
             ? Math.ceil(totalCount / perPage)
             : 1,
       },
-      facets: await this.enrichSearchFacets(
-        this.mapTypesenseFacetCounts(facetCountsSource),
-        dto,
-      ),
+      facets: enrichedFacets,
       search_time_ms: result.search_time_ms,
     };
 

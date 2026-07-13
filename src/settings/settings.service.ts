@@ -255,7 +255,6 @@ export class SettingsService implements OnModuleInit {
 
     const rule = this.productPriceRuleRepository.create(candidate);
     const savedRule = await this.productPriceRuleRepository.save(rule);
-    await this.repriceAllProductsByActiveRules();
 
     return savedRule;
   }
@@ -301,7 +300,6 @@ export class SettingsService implements OnModuleInit {
     Object.assign(existingRule, candidate);
 
     const savedRule = await this.productPriceRuleRepository.save(existingRule);
-    await this.repriceAllProductsByActiveRules();
 
     return savedRule;
   }
@@ -314,8 +312,6 @@ export class SettingsService implements OnModuleInit {
     if (result.affected === 0) {
       throw new NotFoundException('Product price rule not found');
     }
-
-    await this.repriceAllProductsByActiveRules();
 
     return { message: 'Product price rule deleted successfully' };
   }

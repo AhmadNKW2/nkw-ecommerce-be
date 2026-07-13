@@ -58,6 +58,8 @@ export const productSchema: CollectionCreateSchema = {
 
     { name: 'slug', type: 'string', optional: true },
 
+    { name: 'primary_image_url', type: 'string', optional: true },
+
     { name: 'status', type: 'string', facet: true, optional: true },
 
     { name: 'visible', type: 'bool', facet: true, optional: true },

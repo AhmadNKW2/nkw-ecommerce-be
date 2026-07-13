@@ -65,6 +65,28 @@ describe('mapProductToTypesenseDoc', () => {
     expect(doc.effective_price).toBe(80);
     expect(doc.attributes_values_ids).toEqual([]);
     expect(doc.specifications_values_ids).toEqual([]);
+    expect(doc.primary_image_url).toBe('');
+  });
+
+  it('indexes the primary product image URL', () => {
+    const doc = mapProductToTypesenseDoc(
+      makeProduct({
+        productMedia: [
+          {
+            is_primary: false,
+            sort_order: 1,
+            media: { id: 10, url: 'https://cdn.example.com/second.jpg', type: 'image' },
+          },
+          {
+            is_primary: true,
+            sort_order: 2,
+            media: { id: 11, url: 'https://cdn.example.com/primary.jpg', type: 'image' },
+          },
+        ],
+      } as any),
+    );
+
+    expect(doc.primary_image_url).toBe('https://cdn.example.com/primary.jpg');
   });
 
   it('handles missing Arabic description fields gracefully', () => {
