@@ -79,6 +79,7 @@ type ExpansionTierKey =
 
 type CachedBrandBucketExpansion = {
   orderedIds: number[];
+  primaryFoundCount: number;
   documentsById: Record<string, Record<string, any>>;
   enrichedFacets: Array<{
     field_name: string;
@@ -556,6 +557,7 @@ export class SearchService implements OnModuleInit {
     filterBy?: string,
   ): Promise<string> {
     const payload = JSON.stringify({
+      expansionVersion: SEARCH_EXPANSION_VERSION,
       q: normalizeSearchQuery(dto.q),
       isAdmin,
       filterBy: filterBy ?? '',
@@ -652,6 +654,49 @@ export class SearchService implements OnModuleInit {
     }
 
     return results;
+  }
+
+  private async fetchPrimaryTypesenseSearch(params: {
+    normalizedQuery: string;
+    filterBy?: string;
+    dto: SearchQueryDto;
+    isAdmin: boolean;
+    perPage: number;
+  }): Promise<{
+    ids: number[];
+    found: number;
+    search_time_ms?: number;
+  }> {
+    const searchResult = await this.typesenseService.search({
+      q: params.normalizedQuery,
+      query_by: PRODUCT_QUERY_BY,
+      query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+      text_match_type: 'max_weight',
+      prioritize_token_position: true,
+      drop_tokens_threshold: 0,
+      filter_by: params.filterBy,
+      sort_by: this.buildTypesenseSortBy(
+        params.dto.sort_by,
+        params.isAdmin,
+        params.dto.q,
+      ),
+      page: 1,
+      per_page: params.perPage,
+      num_typos: this.getTypoBudget(
+        this.tokenizeQueryForExpansion(params.normalizedQuery),
+      ),
+      include_fields: 'id',
+    });
+    const hits = Array.isArray(searchResult.hits) ? searchResult.hits : [];
+    const ids = hits
+      .map((hit: any) => Number(hit?.document?.id))
+      .filter((id) => Number.isInteger(id) && id > 0);
+
+    return {
+      ids,
+      found: Number(searchResult.found ?? ids.length),
+      search_time_ms: searchResult.search_time_ms,
+    };
   }
 
   private isSearchDebugEnabledByEnv(): boolean {
@@ -2168,24 +2213,23 @@ export class SearchService implements OnModuleInit {
         filterBy?: string;
       }> = [];
       for (const queries of levelQueries) {
-        const canonicalQuery = this.dedupeConceptExpansionQueries(queries)[0];
-        if (!canonicalQuery) {
-          continue;
-        }
+        const variantQueries = this.dedupeConceptExpansionQueries(queries);
         for (const tier of ['same_brand_spec', 'cross_brand_spec'] as const) {
           if (!enabledLevels.has(tier)) {
             continue;
           }
-          bucketPlans.push({
-            tier,
-            query: canonicalQuery,
-            filterBy:
-              tier === 'same_brand_spec' ? sameBrandFilterBy : crossBrandFilterBy,
-          });
+          for (const query of variantQueries) {
+            bucketPlans.push({
+              tier,
+              query,
+              filterBy:
+                tier === 'same_brand_spec' ? sameBrandFilterBy : crossBrandFilterBy,
+            });
+          }
         }
       }
 
-      const perQueryLimit = Math.min(60, maxCandidates);
+      const perQueryLimit = Math.min(this.typesenseIdPageSize, maxCandidates);
       const batchSize = this.getConceptExpansionMultiSearchBatchSize();
       const hitsByPlanIndex = new Map<
         number,
@@ -2344,8 +2388,7 @@ export class SearchService implements OnModuleInit {
     if (
       enabledLevels.has('keyword') &&
       uniqueIds.size < params.requestedLimit &&
-      tokens.length > 0 &&
-      !hasBrandInQuery
+      tokens.length > 0
     ) {
       const keywordTokens = (hasBrandInQuery
         ? tokens.filter((token) => !brandTokensFromQuery.has(token))
@@ -2496,16 +2539,32 @@ export class SearchService implements OnModuleInit {
       if (hasCachedBundle && cachedBundle) {
         cachedBrandBucketBundle = cachedBundle;
         orderedProductIds = cachedBundle.orderedIds;
+        result.found =
+          cachedBundle.primaryFoundCount ?? orderedProductIds.length;
         if (!cachedBrandBucketBundle.enrichedFacets?.length) {
           cachedBrandBucketBundle.enrichedFacets =
             await this.computeExpandedSearchFacets(orderedProductIds, dto);
         }
       } else {
+        const primaryFetchLimit = Math.min(
+          maxCandidates,
+          Math.max(startOffset + perPage, primaryEnoughCount),
+        );
+        const primarySearch = await this.fetchPrimaryTypesenseSearch({
+          normalizedQuery,
+          filterBy,
+          dto,
+          isAdmin,
+          perPage: primaryFetchLimit,
+        });
+        result.found = primarySearch.found;
+        result.search_time_ms = primarySearch.search_time_ms;
+
         const expanded = await this.collectExpandedTypesenseIds({
           dto,
           isAdmin,
           baseFilterBy: filterBy,
-          primaryIds: [],
+          primaryIds: primarySearch.ids,
           requestedLimit: maxCandidates,
           debug: debugSearchEnabled,
         });
@@ -2516,6 +2575,7 @@ export class SearchService implements OnModuleInit {
         );
         cachedBrandBucketBundle = {
           orderedIds: orderedProductIds,
+          primaryFoundCount: primarySearch.found,
           documentsById: expanded.documentsById,
           enrichedFacets,
         };
@@ -2537,7 +2597,6 @@ export class SearchService implements OnModuleInit {
           );
         }
       }
-      result.found = orderedProductIds.length;
     } else {
       const primaryFetchLimit = Math.min(
         maxCandidates,
