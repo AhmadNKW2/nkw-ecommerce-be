@@ -82,9 +82,6 @@ export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly randomBrowseMaxResults = 2000;
   private readonly typesenseIdPageSize = 250;
-  private readonly bucketQueryPageSize = 50;
-  private readonly bucketQueryMaxPages = 3;
-  private conceptAnchorCategoryCache = new Map<string, { loadedAt: number; ids: number[] }>();
   private readonly unsupportedTypesenseFilterKeys = new Set([
     'attributes_ids',
     'specifications_ids',
@@ -519,35 +516,6 @@ export class SearchService implements OnModuleInit {
     return configured;
   }
 
-  /** Small headroom so layered buckets can finish a level before the page slice. */
-  private getExpansionPageBuffer(): number {
-    const configured = Number(
-      this.configService.get<string>('SEARCH_EXPANSION_PAGE_BUFFER', '15'),
-    );
-    if (!Number.isInteger(configured) || configured < 0) {
-      return 15;
-    }
-    return Math.min(50, configured);
-  }
-
-  private hasStructuredExpansionIntent(
-    tokens: string[],
-    brandIds: number[],
-  ): boolean {
-    return tokens.length > 1 || brandIds.length > 0;
-  }
-
-  private getStructuredExpansionTarget(
-    startOffset: number,
-    perPage: number,
-    maxCandidates: number,
-  ): number {
-    return Math.min(
-      maxCandidates,
-      startOffset + perPage + this.getExpansionPageBuffer(),
-    );
-  }
-
   private getConceptExpansionMultiSearchBatchSize(): number {
     const configured = Number(
       this.configService.get<string>(
@@ -587,7 +555,6 @@ export class SearchService implements OnModuleInit {
       baseFilterBy?: string;
       perQueryLimit: number;
       maxCandidates: number;
-      maxHitsPerQuery?: number;
     },
     shouldStop?: () => boolean,
   ): Promise<
@@ -602,12 +569,7 @@ export class SearchService implements OnModuleInit {
       hits: Array<{ id: number; categoryIds: number[] }>;
     }> = [];
     const uniqueQueries = this.dedupeConceptExpansionQueries(queries);
-    const perPage = Math.min(params.perQueryLimit, this.bucketQueryPageSize);
-    const maxHitsPerQuery = Math.min(
-      params.maxHitsPerQuery ?? perPage * this.bucketQueryMaxPages,
-      params.maxCandidates,
-    );
-    const maxPages = this.bucketQueryMaxPages;
+    const perPage = Math.min(params.perQueryLimit, params.maxCandidates);
 
     for (let index = 0; index < uniqueQueries.length; index += batchSize) {
       if (shouldStop?.()) {
@@ -615,71 +577,21 @@ export class SearchService implements OnModuleInit {
       }
 
       const chunk = uniqueQueries.slice(index, index + batchSize);
-      const queryStates = chunk.map((conceptQuery) => ({
-        conceptQuery,
-        page: 1,
-        hits: [] as Array<{ id: number; categoryIds: number[] }>,
-        done: false,
-      }));
+      const multiResult = await this.typesenseService.multiSearch(
+        chunk.map((conceptQuery) =>
+          this.buildConceptExpansionSearchParams(conceptQuery, {
+            baseFilterBy: params.baseFilterBy,
+            perPage,
+            typoTokens: this.tokenizeQueryForExpansion(conceptQuery),
+          }),
+        ),
+      );
 
-      while (queryStates.some((entry) => !entry.done)) {
-        if (shouldStop?.()) {
-          break;
-        }
-
-        const pending = queryStates.filter(
-          (entry) => !entry.done && entry.hits.length < maxHitsPerQuery,
-        );
-        if (pending.length === 0) {
-          break;
-        }
-
-        const multiResult = await this.typesenseService.multiSearch(
-          pending.map((entry) =>
-            this.buildConceptExpansionSearchParams(entry.conceptQuery, {
-              baseFilterBy: params.baseFilterBy,
-              perPage,
-              typoTokens: this.tokenizeQueryForExpansion(entry.conceptQuery),
-              page: entry.page,
-            }),
-          ),
-        );
-
-        pending.forEach((entry, resultIndex) => {
-          const searchResult = multiResult.results?.[resultIndex] ?? { hits: [] };
-          const mapped = this.mapTypesenseProductHits(searchResult);
-          if (mapped.length === 0) {
-            entry.done = true;
-            return;
-          }
-
-          const seen = new Set(entry.hits.map((hit) => hit.id));
-          mapped.forEach((hit) => {
-            if (!seen.has(hit.id)) {
-              seen.add(hit.id);
-              entry.hits.push(hit);
-            }
-          });
-
-          const totalFound = Number((searchResult as { found?: number }).found ?? 0);
-          if (
-            mapped.length < perPage ||
-            entry.hits.length >= totalFound ||
-            entry.hits.length >= maxHitsPerQuery ||
-            entry.page >= maxPages
-          ) {
-            entry.done = true;
-            return;
-          }
-
-          entry.page += 1;
-        });
-      }
-
-      queryStates.forEach((entry) => {
+      chunk.forEach((conceptQuery, resultIndex) => {
+        const searchResult = multiResult.results?.[resultIndex] ?? { hits: [] };
         results.push({
-          query: entry.conceptQuery,
-          hits: entry.hits,
+          query: conceptQuery,
+          hits: this.mapTypesenseProductHits(searchResult),
         });
       });
     }
@@ -1874,7 +1786,6 @@ export class SearchService implements OnModuleInit {
       baseFilterBy?: string;
       perPage: number;
       typoTokens: string[];
-      page?: number;
     },
   ): SearchParams<Record<string, any>> {
     // Bucket queries are intentional spec layers — disable typos so 5060 does not match 5050.
@@ -1888,106 +1799,10 @@ export class SearchService implements OnModuleInit {
       ...(params.baseFilterBy ? { filter_by: params.baseFilterBy } : {}),
       sort_by: '_text_match:desc,created_at_ts:desc',
       include_fields: 'id,category_ids',
-      page: params.page ?? 1,
+      page: 1,
       per_page: params.perPage,
       num_typos: 0,
     };
-  }
-
-  /** Categories shared by anchor-concept reference products (e.g. Laptops for "laptop"). */
-  private async resolveConceptAnchorCategoryIds(
-    segments: QueryVariantSegment[],
-  ): Promise<number[]> {
-    const anchorSegment = segments[0];
-    const referenceIds = anchorSegment?.referenceProductIds ?? [];
-    const cacheKey = [
-      anchorSegment?.text ?? '',
-      ...referenceIds.slice(0, 50).sort((a, b) => a - b),
-      ...(anchorSegment?.orderedVariants ?? []).map((variant) =>
-        normalizeConceptTermKey(variant),
-      ),
-    ].join('\0');
-    const cached = this.conceptAnchorCategoryCache.get(cacheKey);
-    const now = Date.now();
-    if (cached && now - cached.loadedAt < this.entityLexiconCacheTtlMs) {
-      return cached.ids;
-    }
-
-    let resolved: number[] = [];
-    if (referenceIds.length > 0) {
-      const products = await this.productsRepository.find({
-        where: { id: In(referenceIds.slice(0, 50)) },
-        relations: { productCategories: true },
-        select: {
-          id: true,
-          category_id: true,
-          productCategories: {
-            id: true,
-            category_id: true,
-          },
-        },
-      });
-      if (products.length > 0) {
-        const categoryIdSets = products.map((product) => {
-          const ids = new Set<number>();
-          if (product.category_id != null && product.category_id > 0) {
-            ids.add(product.category_id);
-          }
-          (product.productCategories ?? []).forEach((entry) => {
-            if (entry.category_id > 0) {
-              ids.add(entry.category_id);
-            }
-          });
-          return ids;
-        });
-
-        const [firstSet, ...restSets] = categoryIdSets;
-        const intersection = [...firstSet].filter((categoryId) =>
-          restSets.every((set) => set.has(categoryId)),
-        );
-        if (intersection.length > 0) {
-          resolved = intersection;
-        } else {
-          const union = new Set<number>();
-          categoryIdSets.forEach((set) => set.forEach((id) => union.add(id)));
-          resolved = [...union];
-        }
-      }
-    }
-
-    if (resolved.length === 0) {
-      if (!anchorSegment) {
-        this.conceptAnchorCategoryCache.set(cacheKey, { loadedAt: now, ids: [] });
-        return [];
-      }
-
-      const anchorTokens = new Set(
-        anchorSegment.orderedVariants
-          .map((variant) => normalizeConceptTermKey(variant))
-          .filter(Boolean),
-      );
-      if (anchorTokens.size === 0) {
-        this.conceptAnchorCategoryCache.set(cacheKey, { loadedAt: now, ids: [] });
-        return [];
-      }
-
-      const categoryLexicon = await this.getCategoryLexicon();
-      resolved = categoryLexicon
-        .filter((entry) =>
-          entry.normalizedTokens.some((token) =>
-            [...anchorTokens].some(
-              (anchor) =>
-                token === anchor ||
-                token.startsWith(anchor) ||
-                anchor.startsWith(token),
-            ),
-          ),
-        )
-        .map((entry) => entry.id);
-    }
-
-    this.conceptAnchorCategoryCache.set(cacheKey, { loadedAt: now, ids: resolved });
-    return resolved;
   }
 
   private mapTypesenseProductHits(result: {
@@ -2169,50 +1984,6 @@ export class SearchService implements OnModuleInit {
       expansionTokens,
       searchLocale,
     );
-    const conceptCategoryIds =
-      effectiveCategoryIds.length === 0
-        ? await this.resolveConceptAnchorCategoryIds(segmented.segments)
-        : [];
-    const bucketCategoryIds =
-      effectiveCategoryIds.length > 0 ? effectiveCategoryIds : conceptCategoryIds;
-    const runBucketQueries = async (
-      queries: string[],
-      tier: ExpansionTierKey,
-      baseFilterBy?: string,
-    ) => {
-      if (!enabledLevels.has(tier) || queries.length === 0) {
-        return;
-      }
-
-      const batchResults = await this.runConceptExpansionQueries(
-        queries,
-        {
-          baseFilterBy,
-          perQueryLimit: this.bucketQueryPageSize,
-          maxCandidates,
-          maxHitsPerQuery: Math.min(
-            this.bucketQueryPageSize * this.bucketQueryMaxPages,
-            Math.max(params.requestedLimit - uniqueIds.size, this.bucketQueryPageSize),
-          ),
-        },
-        () => uniqueIds.size >= params.requestedLimit,
-      );
-
-      for (const { query, hits } of batchResults) {
-        const beforeSize = uniqueIds.size;
-        addBucketIds(
-          tier,
-          hits.map((hit) => hit.id),
-        );
-        if (params.debug) {
-          conceptQueryDebug.push({
-            query,
-            added: uniqueIds.size - beforeSize,
-            categoryFiltered: bucketCategoryIds.length > 0,
-          });
-        }
-      }
-    };
     const variantLevels = buildVariantLevelQueries(
       segmented.segments.map((segment) => ({
         text: segment.text,
@@ -2245,46 +2016,80 @@ export class SearchService implements OnModuleInit {
       }
     }
 
-    if (hasBrandInQuery && uniqueIds.size < params.requestedLimit && hasExpansionQueries) {
-      const sameBrandFilters = [params.baseFilterBy];
-      if (bucketCategoryIds.length > 0) {
-        sameBrandFilters.push(
-          `category_ids:=[${bucketCategoryIds.join(',')}]`,
-        );
-      }
-      sameBrandFilters.push(
+    if (hasBrandInQuery && uniqueIds.size < maxCandidates && hasExpansionQueries) {
+      const sameBrandFilterBy = this.mergeFilterByClauses(
+        params.baseFilterBy,
+        ...(effectiveCategoryIds.length > 0
+          ? [`category_ids:=[${effectiveCategoryIds.join(',')}]`]
+          : []),
         `brand_id:=[${brandIdsFromQueryOnly.join(',')}]`,
       );
-
-      const crossBrandFilters = [params.baseFilterBy];
-      if (bucketCategoryIds.length > 0) {
-        crossBrandFilters.push(
-          `category_ids:=[${bucketCategoryIds.join(',')}]`,
-        );
-      }
-      crossBrandFilters.push(
+      const crossBrandFilterBy = this.mergeFilterByClauses(
+        params.baseFilterBy,
+        ...(effectiveCategoryIds.length > 0
+          ? [`category_ids:=[${effectiveCategoryIds.join(',')}]`]
+          : []),
         `brand_id:!=[${brandIdsFromQueryOnly.join(',')}]`,
       );
 
-      // Per level: requested brand first, then all other brands (complete each bucket).
+      // All levels × both brand buckets fired as one multi_search round trip;
+      // results are applied in strict level order afterwards.
+      const bucketPlans: Array<{
+        tier: ExpansionTierKey;
+        query: string;
+        filterBy?: string;
+      }> = [];
       for (const queries of levelQueries) {
-        if (uniqueIds.size >= params.requestedLimit) {
-          break;
+        const uniqueLevelQueries = this.dedupeConceptExpansionQueries(queries);
+        for (const tier of ['same_brand_spec', 'cross_brand_spec'] as const) {
+          if (!enabledLevels.has(tier)) {
+            continue;
+          }
+          for (const query of uniqueLevelQueries) {
+            bucketPlans.push({
+              tier,
+              query,
+              filterBy:
+                tier === 'same_brand_spec' ? sameBrandFilterBy : crossBrandFilterBy,
+            });
+          }
         }
-        await runBucketQueries(
-          queries,
-          'same_brand_spec',
-          this.mergeFilterByClauses(...sameBrandFilters),
-        );
-        if (uniqueIds.size >= params.requestedLimit) {
-          break;
-        }
-        await runBucketQueries(
-          queries,
-          'cross_brand_spec',
-          this.mergeFilterByClauses(...crossBrandFilters),
-        );
       }
+
+      const perQueryLimit = Math.min(100, maxCandidates);
+      const batchSize = this.getConceptExpansionMultiSearchBatchSize();
+      const hitsByPlanIndex = new Map<number, number[]>();
+      for (let index = 0; index < bucketPlans.length; index += batchSize) {
+        const chunk = bucketPlans.slice(index, index + batchSize);
+        const multiResult = await this.typesenseService.multiSearch(
+          chunk.map((plan) =>
+            this.buildConceptExpansionSearchParams(plan.query, {
+              baseFilterBy: plan.filterBy,
+              perPage: perQueryLimit,
+              typoTokens: this.tokenizeQueryForExpansion(plan.query),
+            }),
+          ),
+        );
+        chunk.forEach((_, chunkIndex) => {
+          const searchResult = multiResult.results?.[chunkIndex] ?? { hits: [] };
+          hitsByPlanIndex.set(
+            index + chunkIndex,
+            this.mapTypesenseProductHits(searchResult).map((hit) => hit.id),
+          );
+        });
+      }
+
+      bucketPlans.forEach((plan, planIndex) => {
+        const beforeSize = uniqueIds.size;
+        addBucketIds(plan.tier, hitsByPlanIndex.get(planIndex) ?? []);
+        if (params.debug) {
+          conceptQueryDebug.push({
+            query: `${plan.query} [${plan.tier}]`,
+            added: uniqueIds.size - beforeSize,
+            categoryFiltered: effectiveCategoryIds.length > 0,
+          });
+        }
+      });
 
       if (idsByTier.same_brand_spec.length > 0) {
         tierNotes.same_brand_spec =
@@ -2298,19 +2103,15 @@ export class SearchService implements OnModuleInit {
 
     if (!hasBrandInQuery && enabledLevels.has('specification') && hasExpansionQueries) {
       for (const queries of levelQueries) {
-        if (uniqueIds.size >= params.requestedLimit) break;
+        if (uniqueIds.size >= maxCandidates) break;
         const batchResults = await this.runConceptExpansionQueries(
           queries,
           {
             baseFilterBy: params.baseFilterBy,
-            perQueryLimit: this.bucketQueryPageSize,
+            perQueryLimit: Math.min(80, maxCandidates - uniqueIds.size),
             maxCandidates,
-            maxHitsPerQuery: Math.min(
-              this.bucketQueryPageSize * this.bucketQueryMaxPages,
-              Math.max(params.requestedLimit - uniqueIds.size, this.bucketQueryPageSize),
-            ),
           },
-          () => uniqueIds.size >= params.requestedLimit,
+          () => uniqueIds.size >= maxCandidates,
         );
         for (const { query, hits } of batchResults) {
           const beforeSize = uniqueIds.size;
@@ -2445,7 +2246,7 @@ export class SearchService implements OnModuleInit {
     );
     if (params.debug) {
       this.logger.log(
-        `[search-expansion] q="${params.dto.q ?? ''}" primary=${primaryFoundCount} requested=${params.requestedLimit} concept_categories=${conceptCategoryIds.join(',') || 'none'} final=${orderedIds.length} tiers=${JSON.stringify(
+        `[search-expansion] q="${params.dto.q ?? ''}" primary=${primaryFoundCount} requested=${params.requestedLimit} final=${orderedIds.length} tiers=${JSON.stringify(
           Object.fromEntries(
             this.expansionTierOrder.map((tier) => [tier, idsByTier[tier].length]),
           ),
@@ -2485,20 +2286,14 @@ export class SearchService implements OnModuleInit {
     const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
     const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
-    const detectedEntities =
+    const expansionPrepPromise =
       expansionEnabled && normalizedQuery && normalizedQuery !== '*'
-        ? await this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
-        : { brandIds: [], categoryIds: [] };
-    const hasStructuredQueryIntent = this.hasStructuredExpansionIntent(
-      conceptDetectionTokens,
-      detectedEntities.brandIds,
+        ? this.detectEntityIdsFromTokens(conceptDetectionTokens, normalizedQuery)
+        : Promise.resolve({ brandIds: [], categoryIds: [] });
+    const primaryFetchLimit = Math.min(
+      maxCandidates,
+      Math.max(startOffset + perPage, primaryEnoughCount),
     );
-    const primaryFetchLimit = hasStructuredQueryIntent
-      ? this.getStructuredExpansionTarget(startOffset, perPage, maxCandidates)
-      : Math.min(
-          maxCandidates,
-          Math.max(startOffset + perPage, primaryEnoughCount),
-        );
     const params: SearchParams<Record<string, any>> = {
       q: normalizedQuery,
       query_by: PRODUCT_QUERY_BY,
@@ -2516,13 +2311,19 @@ export class SearchService implements OnModuleInit {
       ...(fullResponse ? { include_fields: 'id' } : {}),
     };
 
-    const result = await this.typesenseService.search(params);
+    const [result, detectedEntities] = await Promise.all([
+      this.typesenseService.search(params),
+      expansionPrepPromise,
+    ]);
     const hits = Array.isArray(result.hits) ? result.hits : [];
     let orderedProductIds = hits
       .map((hit: any) => Number(hit?.document?.id))
       .filter((id) => Number.isInteger(id) && id > 0);
     const primaryCount = orderedProductIds.length;
     const primaryIsEnough = primaryCount >= primaryEnoughCount;
+    const hasStructuredQueryIntent =
+      conceptDetectionTokens.length > 1 ||
+      detectedEntities.brandIds.length > 0;
 
     const shouldExpand =
       expansionEnabled &&
@@ -2547,12 +2348,10 @@ export class SearchService implements OnModuleInit {
       | undefined;
 
     if (shouldExpand) {
-      const requestedExpansionCount = hasStructuredQueryIntent
-        ? this.getStructuredExpansionTarget(startOffset, perPage, maxCandidates)
-        : Math.max(
-            startOffset + perPage,
-            primaryCount + this.getExpansionExtraWhenLow(),
-          );
+      const requestedExpansionCount = Math.max(
+        startOffset + perPage,
+        primaryCount + this.getExpansionExtraWhenLow(),
+      );
       const expanded = await this.collectExpandedTypesenseIds({
         dto,
         isAdmin,

@@ -348,19 +348,22 @@ export class SettingsService implements OnModuleInit {
     const matchedPriceRule = params.fixedPercentage
       ? null
       : findBestMatchingProductPriceRule(activeRules, pricingContext);
-    const pricePercentage =
-      params.fixedPercentage ??
-      matchedPriceRule?.percentage ??
-      MIN_PRODUCT_PRICE_RULE_PERCENTAGE;
-    const priceAdjustmentType =
-      params.fixedAdjustmentType ??
-      matchedPriceRule?.adjustment_type ??
-      'decrease';
-    const price = calculateManagedPrice(
-      params.originalVendorPrice,
-      pricePercentage,
-      priceAdjustmentType,
-    );
+    // No matching rule and no fixed percentage means the price stays at the
+    // original vendor price (no hidden default adjustment).
+    const price =
+      params.fixedPercentage !== undefined
+        ? calculateManagedPrice(
+            params.originalVendorPrice,
+            params.fixedPercentage,
+            params.fixedAdjustmentType ?? 'decrease',
+          )
+        : matchedPriceRule
+          ? calculateManagedPrice(
+              params.originalVendorPrice,
+              matchedPriceRule.percentage,
+              matchedPriceRule.adjustment_type ?? 'decrease',
+            )
+          : roundManagedProductPrice(params.originalVendorPrice);
 
     let salePrice: number | null = null;
     let matchedSaleRule: AppliedProductPriceRule | null = null;
@@ -376,20 +379,21 @@ export class SettingsService implements OnModuleInit {
       const matchedSalePriceRule = params.fixedPercentage
         ? null
         : findBestMatchingProductPriceRule(activeRules, salePricingContext);
-      const salePercentage =
-        params.fixedPercentage ??
-        matchedSalePriceRule?.percentage ??
-        MIN_PRODUCT_PRICE_RULE_PERCENTAGE;
-      const saleAdjustmentType =
-        params.fixedAdjustmentType ??
-        matchedSalePriceRule?.adjustment_type ??
-        'decrease';
 
-      salePrice = calculateManagedPrice(
-        params.originalVendorSalePrice,
-        salePercentage,
-        saleAdjustmentType,
-      );
+      salePrice =
+        params.fixedPercentage !== undefined
+          ? calculateManagedPrice(
+              params.originalVendorSalePrice,
+              params.fixedPercentage,
+              params.fixedAdjustmentType ?? 'decrease',
+            )
+          : matchedSalePriceRule
+            ? calculateManagedPrice(
+                params.originalVendorSalePrice,
+                matchedSalePriceRule.percentage,
+                matchedSalePriceRule.adjustment_type ?? 'decrease',
+              )
+            : roundManagedProductPrice(params.originalVendorSalePrice);
       salePrice = ensureSalePriceBelowPrice(price, salePrice);
       matchedSaleRule = matchedSalePriceRule
         ? toAppliedProductPriceRule(matchedSalePriceRule)
@@ -598,7 +602,6 @@ export class SettingsService implements OnModuleInit {
     await this.ensureProductVendorPriceColumnsExist();
     await this.ensureProductMeasurementUnitColumnsExist();
     await this.ensureProductReferenceSlugColumnExists();
-    await this.seedDefaultProductPriceRule();
   }
 
   private async ensureSeoSettingsTableExists(): Promise<void> {
@@ -1306,28 +1309,6 @@ export class SettingsService implements OnModuleInit {
     } finally {
       await queryRunner.release();
     }
-  }
-
-  private async seedDefaultProductPriceRule(): Promise<void> {
-    const existingRulesCount = await this.productPriceRuleRepository.count();
-
-    if (existingRulesCount > 0) {
-      return;
-    }
-
-    await this.productPriceRuleRepository.save(
-      this.productPriceRuleRepository.create({
-        vendor_ids: null,
-        brand_ids: null,
-        category_ids: null,
-        price_condition: 'between',
-        adjustment_type: 'decrease',
-        min_product_price: null,
-        max_product_price: null,
-        percentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
-        is_active: true,
-      }),
-    );
   }
 
   private normalizeProductPriceRulePayload(input: {
