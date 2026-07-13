@@ -2800,10 +2800,6 @@ export class ProductsService {
       throw new NotFoundException('Product not found');
     }
 
-    if (!isAdmin && productBase.is_out_of_stock) {
-      throw new NotFoundException('Product not found');
-    }
-
     productBase.productCategories = productCategories;
     productBase.productMedia = productMedia;
     productBase.productAttachments = productAttachments;

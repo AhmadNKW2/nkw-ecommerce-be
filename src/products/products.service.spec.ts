@@ -370,15 +370,15 @@ describe('ProductsService detail attributes', () => {
     );
   });
 
-  it('hides out-of-stock product details from public requests', async () => {
+  it('returns out-of-stock product details for public requests', async () => {
     productsRepository.findOne.mockResolvedValue({
       ...productBase,
       is_out_of_stock: true,
     });
 
-    await expect(service.findOne(productBase.id, false)).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    const result = await service.findOne(productBase.id, false);
+
+    expect(result.is_out_of_stock).toBe(true);
   });
 
   it('returns only content fields and image urls from findProductContent', async () => {
