@@ -56,11 +56,41 @@ function parseArgs(argv) {
   return args;
 }
 
-function unwrap(payload) {
-  if (payload && typeof payload === 'object' && 'data' in payload && 'success' in payload) {
-    return payload.data;
+function parseSearchResponse(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { products: [], meta: { total: 0 } };
   }
-  return payload;
+
+  if (payload.success === true && Array.isArray(payload.data)) {
+    return {
+      products: payload.data,
+      meta: payload.meta ?? { total: payload.data.length },
+      search_time_ms: payload.search_time_ms,
+    };
+  }
+
+  if (
+    payload.success === true &&
+    payload.data &&
+    typeof payload.data === 'object' &&
+    Array.isArray(payload.data.data)
+  ) {
+    return {
+      products: payload.data.data,
+      meta: payload.data.meta ?? payload.meta ?? { total: payload.data.data.length },
+      search_time_ms: payload.data.search_time_ms ?? payload.search_time_ms,
+    };
+  }
+
+  if (Array.isArray(payload.data)) {
+    return {
+      products: payload.data,
+      meta: payload.meta ?? { total: payload.data.length },
+      search_time_ms: payload.search_time_ms,
+    };
+  }
+
+  return { products: [], meta: { total: 0 } };
 }
 
 async function getJson(url) {
@@ -78,12 +108,11 @@ async function getJson(url) {
 
 async function fetchAllSearchIds(apiBase, query, options) {
   const ids = [];
-  let page = 1;
-  let total = Infinity;
+  let metaTotal = 0;
   let totalMs = 0;
-  let expansionVersion;
+  const maxPage = options.maxPages;
 
-  while (page <= options.maxPages && ids.length < total) {
+  const fetchPage = async (page) => {
     const params = new URLSearchParams({
       q: query,
       page: String(page),
@@ -101,31 +130,53 @@ async function fetchAllSearchIds(apiBase, query, options) {
       throw new Error(`${apiBase} page ${page} HTTP ${result.status}: ${JSON.stringify(result.body).slice(0, 300)}`);
     }
 
-    const data = unwrap(result.body);
-    const batch = (data?.data ?? [])
+    const parsed = parseSearchResponse(result.body);
+    const batch = parsed.products
       .map((item) => Number(item?.id))
       .filter((id) => Number.isInteger(id) && id > 0);
 
-    total = Number(data?.meta?.total ?? batch.length);
-    if (batch.length === 0) {
-      break;
+    const pageTotal = Number(parsed.meta?.total);
+    if (Number.isFinite(pageTotal) && pageTotal > 0) {
+      metaTotal = Math.max(metaTotal, pageTotal);
     }
 
-    batch.forEach((id) => {
-      if (!ids.includes(id)) {
-        ids.push(id);
-      }
-    });
+    return batch;
+  };
 
-    page += 1;
+  const firstBatch = await fetchPage(1);
+  firstBatch.forEach((id) => {
+    if (!ids.includes(id)) {
+      ids.push(id);
+    }
+  });
+
+  const pageTotal = Number.isFinite(metaTotal) ? metaTotal : firstBatch.length;
+  const estimatedPages = Math.min(
+    maxPage,
+    Math.max(1, Math.ceil(pageTotal / options.perPage)),
+  );
+
+  if (estimatedPages > 1) {
+    const remainingPages = [];
+    for (let page = 2; page <= estimatedPages; page += 1) {
+      remainingPages.push(page);
+    }
+
+    const batches = await Promise.all(remainingPages.map((page) => fetchPage(page)));
+    batches.forEach((batch) => {
+      batch.forEach((id) => {
+        if (!ids.includes(id)) {
+          ids.push(id);
+        }
+      });
+    });
   }
 
   return {
     ids,
-    total,
-    pagesFetched: page - 1,
+    total: Number.isFinite(metaTotal) ? metaTotal : ids.length,
+    pagesFetched: estimatedPages,
     totalMs,
-    expansionVersion,
   };
 }
 

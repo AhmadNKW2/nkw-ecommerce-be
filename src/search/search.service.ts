@@ -573,6 +573,31 @@ export class SearchService implements OnModuleInit {
     return this.searchCacheService.buildCacheKey('search-expansion', payload);
   }
 
+  private buildSearchResponseCachePayload(
+    dto: SearchQueryDto,
+    normalizedQuery: string,
+  ): string {
+    const perPage = Number((dto as any).per_page ?? (dto as any).limit ?? 20);
+    return JSON.stringify({
+      q: normalizedQuery,
+      page: Number(dto.page ?? 1),
+      per_page: perPage,
+      sort_by: dto.sort_by ?? null,
+      locale: dto.locale ?? null,
+      brand_id: dto.brand_id ?? null,
+      brand_ids: (dto as any).brand_ids ?? null,
+      category_id: dto.category_id ?? null,
+      category_ids: (dto as any).category_ids ?? null,
+      min_price: dto.min_price ?? null,
+      max_price: dto.max_price ?? null,
+      vendor_id: dto.vendor_id ?? null,
+      vendor_ids: (dto as any).vendor_ids ?? null,
+      attributes_values_ids: (dto as any).attributes_values_ids ?? null,
+      specifications_values_ids: (dto as any).specifications_values_ids ?? null,
+      average_rating_min: dto.average_rating_min ?? null,
+    });
+  }
+
   private getConceptExpansionMultiSearchBatchSize(): number {
     const configured = Number(
       this.configService.get<string>(
@@ -2671,10 +2696,7 @@ export class SearchService implements OnModuleInit {
           isAdmin,
           filterBy,
         );
-        const primaryFetchLimit = Math.min(
-          maxCandidates,
-          Math.max(startOffset + perPage, primaryEnoughCount),
-        );
+        const primaryFetchLimit = maxCandidates;
         const expanded = await this.collectExpandedTypesenseIds({
           dto,
           isAdmin,
@@ -3117,12 +3139,15 @@ export class SearchService implements OnModuleInit {
     // queries that only look equal after normalization can legitimately
     // produce different ILIKE results there).
     const willNormalizeQueryForCacheKey = canUseTypesense && !useRandomBrowse;
-    const cacheDto = willNormalizeQueryForCacheKey
-      ? { ...preparedDto, q: normalizeSearchQuery(preparedDto.q) }
-      : preparedDto;
+    const normalizedCacheQuery = willNormalizeQueryForCacheKey
+      ? normalizeSearchQuery(preparedDto.q)
+      : preparedDto.q;
     const cacheKey = await this.searchCacheService.buildCacheKey(
       `search:${isAdmin ? 'admin' : 'public'}:${fullResponse ? 'full' : 'card'}`,
-      JSON.stringify(cacheDto),
+      this.buildSearchResponseCachePayload(
+        preparedDto,
+        normalizedCacheQuery ?? '',
+      ),
     );
     const skipResponseCache = dto.is_admin === true || debugSearchEnabled;
     const cached =
@@ -3213,7 +3238,18 @@ export class SearchService implements OnModuleInit {
     }
 
     if (!useRandomBrowse && !skipResponseCache) {
-      await this.cacheManager.set(cacheKey, response, 300 * 1000);
+      const startOffset = ((preparedDto.page ?? 1) - 1) * (
+        (preparedDto as any).per_page ?? (preparedDto as any).limit ?? 20
+      );
+      const shouldSkipEmptyPageCache =
+        (preparedDto.page ?? 1) > 1 &&
+        Array.isArray(response?.data) &&
+        response.data.length === 0 &&
+        Number(response?.meta?.total ?? 0) > startOffset;
+
+      if (!shouldSkipEmptyPageCache) {
+        await this.cacheManager.set(cacheKey, response, 300 * 1000);
+      }
     }
     return response;
   }
