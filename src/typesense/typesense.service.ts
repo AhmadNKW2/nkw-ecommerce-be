@@ -248,6 +248,25 @@ export class TypesenseService implements OnModuleInit {
     return this.client.collections(this.collectionName).documents().search(params);
   }
 
+  async multiSearch(
+    searches: Array<SearchParams<Record<string, any>>>,
+  ): Promise<{ results: Array<{ hits?: Array<{ document?: Record<string, any> }> }> }> {
+    if (!this.isEnabled()) {
+      throw new Error('Typesense is disabled');
+    }
+
+    if (searches.length === 0) {
+      return { results: [] };
+    }
+
+    return this.client.multiSearch.perform({
+      searches: searches.map((searchParams) => ({
+        collection: this.collectionName,
+        ...searchParams,
+      })),
+    });
+  }
+
   async healthCheck() {
     if (!this.isEnabled()) {
       return {

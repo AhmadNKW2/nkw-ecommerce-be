@@ -644,18 +644,33 @@ export class SearchService implements OnModuleInit {
     return Math.min(20, configured);
   }
 
-  private async getReferenceProductIdsFromMatchedConcepts(
+  private getConceptExpansionMultiSearchBatchSize(): number {
+    const configured = Number(
+      this.configService.get<string>(
+        'SEARCH_EXPANSION_CONCEPT_MULTI_SEARCH_BATCH',
+        '25',
+      ),
+    );
+    if (!Number.isInteger(configured) || configured <= 0) {
+      return 25;
+    }
+    return Math.min(50, configured);
+  }
+
+  private async loadMatchedTermGroups(
     matchedConcepts: MatchedConceptInQuery[],
-  ): Promise<number[]> {
+  ): Promise<TermGroup[]> {
     if (matchedConcepts.length === 0) {
       return [];
     }
 
     const groupIds = [...new Set(matchedConcepts.map((concept) => concept.groupId))];
-    const groups = await this.termGroupsRepository.find({
+    return this.termGroupsRepository.find({
       where: { id: In(groupIds) },
     });
+  }
 
+  private collectReferenceProductIdsFromGroups(groups: TermGroup[]): number[] {
     return [
       ...new Set(
         groups
@@ -663,6 +678,59 @@ export class SearchService implements OnModuleInit {
           .filter((id) => Number.isInteger(id) && id > 0),
       ),
     ];
+  }
+
+  private async resolveCategoryIdsFromMatchedConcepts(
+    matchedConcepts: MatchedConceptInQuery[],
+    preloadedGroups?: TermGroup[],
+  ): Promise<number[]> {
+    if (matchedConcepts.length === 0) {
+      return [];
+    }
+
+    const groups =
+      preloadedGroups ?? (await this.loadMatchedTermGroups(matchedConcepts));
+    const groupsById = new Map(groups.map((group) => [group.id, group]));
+
+    const referenceCategoryIds =
+      await this.resolveCategoryIdsFromReferenceProducts(groups);
+    if (referenceCategoryIds.length > 0) {
+      return this.expandCategoryIdsWithDescendants(referenceCategoryIds);
+    }
+
+    const conceptTermKeys = this.collectNarrowConceptCategoryTermKeys(
+      matchedConcepts,
+      groupsById,
+    );
+    if (conceptTermKeys.size === 0) {
+      return [];
+    }
+
+    const categoryLexicon = await this.getCategoryLexicon();
+    const matchedCategoryIds = new Set<number>();
+    categoryLexicon.forEach((entry) => {
+      const matchesConcept = entry.normalizedTokens.some((token) =>
+        conceptTermKeys.has(normalizeConceptTermKey(token)),
+      );
+      if (matchesConcept) {
+        matchedCategoryIds.add(entry.id);
+      }
+    });
+
+    return this.expandCategoryIdsWithDescendants(Array.from(matchedCategoryIds));
+  }
+
+  private async getReferenceProductIdsFromMatchedConcepts(
+    matchedConcepts: MatchedConceptInQuery[],
+    preloadedGroups?: TermGroup[],
+  ): Promise<number[]> {
+    if (matchedConcepts.length === 0) {
+      return [];
+    }
+
+    const groups =
+      preloadedGroups ?? (await this.loadMatchedTermGroups(matchedConcepts));
+    return this.collectReferenceProductIdsFromGroups(groups);
   }
 
   private dedupeConceptExpansionQueries(queries: string[]): string[] {
@@ -700,34 +768,37 @@ export class SearchService implements OnModuleInit {
       hits: Array<{ id: number; categoryIds: number[] }>;
     }>
   > {
-    const concurrency = this.getConceptExpansionQueryConcurrency();
+    const batchSize = this.getConceptExpansionMultiSearchBatchSize();
     const results: Array<{
       query: string;
       hits: Array<{ id: number; categoryIds: number[] }>;
     }> = [];
     const uniqueQueries = this.dedupeConceptExpansionQueries(queries);
+    const perPage = Math.min(params.perQueryLimit, params.maxCandidates);
 
-    for (let index = 0; index < uniqueQueries.length; index += concurrency) {
+    for (let index = 0; index < uniqueQueries.length; index += batchSize) {
       if (shouldStop?.()) {
         break;
       }
 
-      const chunk = uniqueQueries.slice(index, index + concurrency);
-      const chunkResults = await Promise.all(
-        chunk.map(async (conceptQuery) => {
-          const hits = await this.searchTypesenseProductHits({
-            q: conceptQuery,
-            filterBy: params.baseFilterBy,
-            sortBy: '_text_match:desc,created_at_ts:desc',
-            limit: Math.min(
-              params.perQueryLimit,
-              params.maxCandidates,
-            ),
-          });
-          return { query: conceptQuery, hits };
-        }),
+      const chunk = uniqueQueries.slice(index, index + batchSize);
+      const multiResult = await this.typesenseService.multiSearch(
+        chunk.map((conceptQuery) =>
+          this.buildConceptExpansionSearchParams(conceptQuery, {
+            baseFilterBy: params.baseFilterBy,
+            perPage,
+            typoTokens: this.tokenizeQueryForExpansion(conceptQuery),
+          }),
+        ),
       );
-      results.push(...chunkResults);
+
+      chunk.forEach((conceptQuery, resultIndex) => {
+        const searchResult = multiResult.results?.[resultIndex] ?? { hits: [] };
+        results.push({
+          query: conceptQuery,
+          hits: this.mapTypesenseProductHits(searchResult),
+        });
+      });
     }
 
     return results;
@@ -1072,47 +1143,6 @@ export class SearchService implements OnModuleInit {
 
   static getSearchExpansionVersion(): string {
     return SEARCH_EXPANSION_VERSION;
-  }
-
-  private async resolveCategoryIdsFromMatchedConcepts(
-    matchedConcepts: MatchedConceptInQuery[],
-  ): Promise<number[]> {
-    if (matchedConcepts.length === 0) {
-      return [];
-    }
-
-    const groupIds = [...new Set(matchedConcepts.map((concept) => concept.groupId))];
-    const groups = await this.termGroupsRepository.find({
-      where: { id: In(groupIds) },
-    });
-    const groupsById = new Map(groups.map((group) => [group.id, group]));
-
-    const referenceCategoryIds =
-      await this.resolveCategoryIdsFromReferenceProducts(groups);
-    if (referenceCategoryIds.length > 0) {
-      return this.expandCategoryIdsWithDescendants(referenceCategoryIds);
-    }
-
-    const conceptTermKeys = this.collectNarrowConceptCategoryTermKeys(
-      matchedConcepts,
-      groupsById,
-    );
-    if (conceptTermKeys.size === 0) {
-      return [];
-    }
-
-    const categoryLexicon = await this.getCategoryLexicon();
-    const matchedCategoryIds = new Set<number>();
-    categoryLexicon.forEach((entry) => {
-      const matchesConcept = entry.normalizedTokens.some((token) =>
-        conceptTermKeys.has(normalizeConceptTermKey(token)),
-      );
-      if (matchesConcept) {
-        matchedCategoryIds.add(entry.id);
-      }
-    });
-
-    return this.expandCategoryIdsWithDescendants(Array.from(matchedCategoryIds));
   }
 
   private async resolveCategoryIdsFromReferenceProducts(
@@ -2017,6 +2047,52 @@ export class SearchService implements OnModuleInit {
     return hits.map((hit) => hit.id);
   }
 
+  private buildConceptExpansionSearchParams(
+    conceptQuery: string,
+    params: {
+      baseFilterBy?: string;
+      perPage: number;
+      typoTokens: string[];
+    },
+  ): SearchParams<Record<string, any>> {
+    return {
+      q: normalizeSearchQuery(conceptQuery || '*') || '*',
+      query_by: PRODUCT_QUERY_BY,
+      query_by_weights: PRODUCT_QUERY_BY_WEIGHTS,
+      text_match_type: 'max_weight',
+      prioritize_token_position: true,
+      ...(params.baseFilterBy ? { filter_by: params.baseFilterBy } : {}),
+      sort_by: '_text_match:desc,created_at_ts:desc',
+      include_fields: 'id,category_ids',
+      page: 1,
+      per_page: params.perPage,
+      num_typos: this.getTypoBudget(params.typoTokens),
+    };
+  }
+
+  private mapTypesenseProductHits(result: {
+    hits?: Array<{ document?: Record<string, any> }>;
+  }): Array<{ id: number; categoryIds: number[] }> {
+    const hits = Array.isArray(result.hits) ? result.hits : [];
+    return hits
+      .map((hit: any) => {
+        const id = Number(hit?.document?.id);
+        if (!Number.isInteger(id) || id <= 0) {
+          return null;
+        }
+
+        const rawCategoryIds = hit?.document?.category_ids;
+        const categoryIds = Array.isArray(rawCategoryIds)
+          ? rawCategoryIds
+              .map((value) => Number(value))
+              .filter((value) => Number.isInteger(value) && value > 0)
+          : [];
+
+        return { id, categoryIds };
+      })
+      .filter((hit): hit is { id: number; categoryIds: number[] } => hit != null);
+  }
+
   private async searchTypesenseProductHits(params: {
     q: string;
     filterBy?: string;
@@ -2037,24 +2113,7 @@ export class SearchService implements OnModuleInit {
       num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(params.q)),
     } as SearchParams<Record<string, any>>);
 
-    const hits = Array.isArray(result.hits) ? result.hits : [];
-    return hits
-      .map((hit: any) => {
-        const id = Number(hit?.document?.id);
-        if (!Number.isInteger(id) || id <= 0) {
-          return null;
-        }
-
-        const rawCategoryIds = hit?.document?.category_ids;
-        const categoryIds = Array.isArray(rawCategoryIds)
-          ? rawCategoryIds
-              .map((value) => Number(value))
-              .filter((value) => Number.isInteger(value) && value > 0)
-          : [];
-
-        return { id, categoryIds };
-      })
-      .filter((hit): hit is { id: number; categoryIds: number[] } => hit != null);
+    return this.mapTypesenseProductHits(result);
   }
 
   private mergeFilterByClauses(...clauses: Array<string | undefined>): string | undefined {
@@ -2239,13 +2298,18 @@ export class SearchService implements OnModuleInit {
     const hasConceptMatches =
       matchedConcepts.length > 0 || progressiveExpansionQueries.length > 0;
     const hasExpansionQueries = progressiveExpansionQueries.length > 0;
-    const conceptRefinementCategoryIds =
+    const matchedGroups =
       matchedConcepts.length > 0
-        ? await this.resolveCategoryIdsFromMatchedConcepts(matchedConcepts)
+        ? await this.loadMatchedTermGroups(matchedConcepts)
         : [];
     const referenceProductIds =
+      this.collectReferenceProductIdsFromGroups(matchedGroups);
+    const conceptRefinementCategoryIds =
       matchedConcepts.length > 0
-        ? await this.getReferenceProductIdsFromMatchedConcepts(matchedConcepts)
+        ? await this.resolveCategoryIdsFromMatchedConcepts(
+            matchedConcepts,
+            matchedGroups,
+          )
         : [];
     const conceptProductCategoryIds = new Map<number, number[]>();
     const conceptQueryDebug: Array<{
@@ -2559,6 +2623,17 @@ export class SearchService implements OnModuleInit {
     const primaryEnoughCount = this.getPrimaryEnoughCount();
     const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
     const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
+    const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
+    const lexiconWarmupPromise =
+      expansionEnabled && normalizedQuery && normalizedQuery !== '*'
+        ? this.termConceptLexicon
+            .resolveAllConceptsInQuery(
+              normalizedQuery,
+              conceptDetectionTokens,
+              normalizeSearchLocale((dto as any).locale, conceptDetectionTokens),
+            )
+            .then(() => undefined)
+        : Promise.resolve();
     const primaryFetchLimit = Math.min(
       maxCandidates,
       Math.max(startOffset + perPage, primaryEnoughCount),
@@ -2579,7 +2654,10 @@ export class SearchService implements OnModuleInit {
       ...(fullResponse ? { include_fields: 'id' } : {}),
     };
 
-    const result = await this.typesenseService.search(params);
+    const [result] = await Promise.all([
+      this.typesenseService.search(params),
+      lexiconWarmupPromise,
+    ]);
     const hits = Array.isArray(result.hits) ? result.hits : [];
     let orderedProductIds = hits
       .map((hit: any) => Number(hit?.document?.id))
