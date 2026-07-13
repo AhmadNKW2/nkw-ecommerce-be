@@ -285,6 +285,7 @@ export class TypesenseService implements OnModuleInit {
       hits?: Array<{ document?: Record<string, any> }>;
       found?: number;
       search_time_ms?: number;
+      facet_counts?: unknown;
     }>;
   }> {
     if (!this.isEnabled()) {

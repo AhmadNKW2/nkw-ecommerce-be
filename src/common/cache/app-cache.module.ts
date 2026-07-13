@@ -2,7 +2,6 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import KeyvRedis from '@keyv/redis';
-import { Keyv } from 'keyv';
 
 export const CACHE_BACKEND_MEMORY = 'memory';
 export const CACHE_BACKEND_REDIS = 'redis';
@@ -18,19 +17,19 @@ export function resolveCacheBackend(configService: ConfigService): string {
     CacheModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
+      isGlobal: true,
       useFactory: async (configService: ConfigService) => {
         const redisUrl = configService.get<string>('REDIS_URL')?.trim();
         const ttlMs = Number(configService.get<string>('CACHE_TTL', '300')) * 1000;
         const max = Number(configService.get<string>('CACHE_MAX', '500'));
 
         if (redisUrl) {
+          // Pass KeyvRedis directly — wrapping with `new Keyv({ store })` breaks
+          // persistence with @keyv/redis v5 + Nest CacheModule (silent no-ops /
+          // non-shared memory behavior across Railway replicas).
           return {
-            stores: [
-              new Keyv({
-                store: new KeyvRedis(redisUrl),
-                ttl: ttlMs,
-              }),
-            ],
+            stores: [new KeyvRedis(redisUrl)],
+            ttl: ttlMs,
           };
         }
 

@@ -611,13 +611,14 @@ export class SearchService implements OnModuleInit {
     const configured = Number(
       this.configService.get<string>(
         'SEARCH_EXPANSION_CONCEPT_MULTI_SEARCH_BATCH',
-        '25',
+        '50',
       ),
     );
     if (!Number.isInteger(configured) || configured <= 0) {
-      return 25;
+      return 50;
     }
-    return Math.min(50, configured);
+    // Typesense multi_search handles large batches; prefer one RTT over many.
+    return Math.min(100, configured);
   }
 
   private dedupeConceptExpansionQueries(queries: string[]): string[] {
@@ -1884,6 +1885,86 @@ export class SearchService implements OnModuleInit {
     );
   }
 
+  /**
+   * Page cards + expanded facets in one Typesense multi_search (one RTT).
+   * Same documents/facet counts as running the two searches separately.
+   */
+  private async hydratePageCardsAndExpandedFacets(params: {
+    pageProductIds: number[];
+    orderedProductIds: number[];
+    dto: SearchQueryDto;
+    isAdmin: boolean;
+  }): Promise<{
+    products: any[];
+    enrichedFacets: CachedBrandBucketExpansion['enrichedFacets'];
+  }> {
+    const { pageProductIds, orderedProductIds, dto, isAdmin } = params;
+    if (orderedProductIds.length === 0) {
+      return { products: [], enrichedFacets: [] };
+    }
+
+    const facetPoolIds = orderedProductIds.slice(0, this.typesenseIdPageSize);
+    const cardFilterBy =
+      pageProductIds.length > 0
+        ? `id:=[${pageProductIds.join(',')}]${
+            isAdmin ? '' : ' && is_out_of_stock:=false'
+          }`
+        : undefined;
+
+    const searches: SearchParams<Record<string, any>>[] = [
+      {
+        q: '*',
+        query_by: PRODUCT_CARD_QUERY_BY,
+        filter_by: `id:=[${facetPoolIds.join(',')}]`,
+        facet_by: this.getTypesenseFacetFields(),
+        max_facet_values: 100,
+        page: 1,
+        per_page: 1,
+      },
+    ];
+
+    if (cardFilterBy) {
+      searches.unshift({
+        q: '*',
+        query_by: PRODUCT_CARD_QUERY_BY,
+        filter_by: cardFilterBy,
+        include_fields: BUCKET_SEARCH_CARD_INCLUDE_FIELDS,
+        per_page: pageProductIds.length,
+        page: 1,
+      });
+    }
+
+    const multiResult = await this.typesenseService.multiSearch(searches);
+    const cardResult = cardFilterBy
+      ? multiResult.results?.[0]
+      : undefined;
+    const facetResult = multiResult.results?.[cardFilterBy ? 1 : 0];
+
+    const cardsById = new Map<string, any>();
+    const hits = Array.isArray(cardResult?.hits) ? cardResult.hits : [];
+    hits.forEach((hit: any) => {
+      const productId = Number(hit?.document?.id);
+      if (!Number.isInteger(productId) || productId <= 0 || !hit?.document) {
+        return;
+      }
+      cardsById.set(
+        String(productId),
+        this.mapTypesenseDocumentToSearchCard(hit.document),
+      );
+    });
+
+    const products = pageProductIds
+      .map((id) => cardsById.get(String(id)))
+      .filter((card): card is NonNullable<typeof card> => Boolean(card));
+
+    const enrichedFacets = await this.enrichSearchFacets(
+      this.mapTypesenseFacetCounts(facetResult?.facet_counts),
+      dto,
+    );
+
+    return { products, enrichedFacets };
+  }
+
   private async buildSearchCardsFromTypesenseIds(
     productIds: number[],
     isAdmin: boolean,
@@ -2925,11 +3006,22 @@ export class SearchService implements OnModuleInit {
         Boolean(expansionCacheKey);
 
       if (needsFacets) {
-        // Facets + page cards in parallel (cards hydrate is a small id:= search).
-        [products, enrichedFacets] = await Promise.all([
-          buildFastPathProducts(),
-          this.computeExpandedSearchFacets(orderedProductIds, dto),
-        ]);
+        if (fullResponse) {
+          [products, enrichedFacets] = await Promise.all([
+            buildFastPathProducts(),
+            this.computeExpandedSearchFacets(orderedProductIds, dto),
+          ]);
+        } else {
+          // One Typesense RTT for page cards + facet pool (vs two parallel calls).
+          const hydrated = await this.hydratePageCardsAndExpandedFacets({
+            pageProductIds,
+            orderedProductIds,
+            dto,
+            isAdmin,
+          });
+          products = hydrated.products;
+          enrichedFacets = hydrated.enrichedFacets;
+        }
         cachedBrandBucketBundle.enrichedFacets = enrichedFacets;
       } else {
         products = await buildFastPathProducts();

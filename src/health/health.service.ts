@@ -1,5 +1,7 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Inject, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { InjectDataSource } from '@nestjs/typeorm';
 import type { DataSource } from 'typeorm';
 import {
@@ -15,6 +17,7 @@ export class HealthService {
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly typesenseService: TypesenseService,
     private readonly configService: ConfigService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   async check() {
@@ -26,6 +29,23 @@ export class HealthService {
       // Lightweight query to ensure the DB compute is awake (Neon Scale-to-Zero).
       await this.dataSource.query('SELECT 1');
       const latencyMs = Date.now() - start;
+
+      const cacheBackend = resolveCacheBackend(this.configService);
+      let redisOk: boolean | undefined;
+      let redisLatencyMs: number | undefined;
+      if (cacheBackend === CACHE_BACKEND_REDIS) {
+        const probeKey = 'health:cache-probe';
+        const probeStarted = Date.now();
+        try {
+          await this.cacheManager.set(probeKey, Date.now(), 10_000);
+          const probeValue = await this.cacheManager.get<number>(probeKey);
+          redisOk = typeof probeValue === 'number';
+          redisLatencyMs = Date.now() - probeStarted;
+        } catch {
+          redisOk = false;
+          redisLatencyMs = Date.now() - probeStarted;
+        }
+      }
 
       return {
         status: 'ok',
@@ -39,10 +59,11 @@ export class HealthService {
             undefined,
         },
         cache: {
-          backend: resolveCacheBackend(this.configService),
+          backend: cacheBackend,
           redis_configured: Boolean(this.configService.get<string>('REDIS_URL')?.trim()),
-          shared_across_instances:
-            resolveCacheBackend(this.configService) === CACHE_BACKEND_REDIS,
+          redis_ok: redisOk,
+          redis_latency_ms: redisLatencyMs,
+          shared_across_instances: cacheBackend === CACHE_BACKEND_REDIS && redisOk !== false,
         },
         db: {
           status: 'ok',
