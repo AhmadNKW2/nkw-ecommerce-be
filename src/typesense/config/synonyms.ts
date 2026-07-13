@@ -22,3 +22,8 @@ export const PRODUCT_SYNONYM_GROUPS: Record<string, string[]> = {
 // synonym_sets API). Must also be linked to the collection via its
 // `synonym_sets` field for the synonyms to actually apply.
 export const PRODUCT_SYNONYM_SET_NAME = 'products-english-abbreviations';
+
+// Dynamic concept terms synced from `term_groups` (admin Terms / Concepts).
+export const PRODUCT_CONCEPT_SYNONYM_SET_NAME = 'products-concept-terms';
+
+export const PRODUCT_CONCEPT_SYNONYM_ID_PREFIX = 'concept-';

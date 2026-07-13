@@ -456,6 +456,14 @@ export class SearchService implements OnModuleInit {
     return value.toLowerCase() === 'true';
   }
 
+  private isTypesenseConceptSynonymsEnabled(): boolean {
+    const raw = this.configService.get<string>(
+      'SEARCH_TYPESENSE_CONCEPT_SYNONYMS',
+      'true',
+    );
+    return raw.trim().toLowerCase() !== 'false';
+  }
+
   private getMaxExpansionCandidates(): number {
     const configured = Number(
       this.configService.get<string>('SEARCH_EXPANSION_MAX_CANDIDATES', '240'),
@@ -2476,10 +2484,17 @@ export class SearchService implements OnModuleInit {
           )
         : [];
     const hasQueryConcepts = queryConcepts.length > 0;
+    const canSkipExpansionWithSynonyms =
+      this.isTypesenseConceptSynonymsEnabled() &&
+      this.searchProvider === 'typesense' &&
+      this.typesenseService.isEnabled() &&
+      conceptDetectionTokens.length <= 1;
 
     const shouldExpand =
       expansionEnabled &&
-      (!primaryIsEnough || hasQueryConcepts) &&
+      !canSkipExpansionWithSynonyms &&
+      (!primaryIsEnough ||
+        (hasQueryConcepts && conceptDetectionTokens.length > 1)) &&
       perPage > 0 &&
       startOffset + perPage <= maxCandidates;
     let expansionMeta:

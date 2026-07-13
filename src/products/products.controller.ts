@@ -62,6 +62,8 @@ const PRODUCTS_MANAGER_ROLES = [
   UserRole.ADMIN,
   UserRole.CATALOG_MANAGER,
   UserRole.CONSTANT_TOKEN_ADMIN,
+  UserRole.VENDOR_ADMIN,
+  UserRole.STORE_ADMIN,
 ] as const;
 
 @ApiTags('Products')

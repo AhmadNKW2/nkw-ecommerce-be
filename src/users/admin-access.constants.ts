@@ -60,3 +60,23 @@ export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
   settings: false,
   admins: false,
 };
+
+export const DEFAULT_VENDOR_PORTAL_ACCESS: AdminAccess = {
+  products: true,
+  product_pricing: true,
+  categories: false,
+  vendors: false,
+  brands: false,
+  attributes: false,
+  specifications: false,
+  orders: false,
+  customers: false,
+  partners: false,
+  banners: false,
+  cashback_rules: false,
+  notes: false,
+  concepts: false,
+  archived: false,
+  settings: false,
+  admins: false,
+};

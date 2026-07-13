@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import Typesense from 'typesense';
 import { TYPESENSE_CLIENT } from './typesense.constants';
 import { TypesenseService } from './typesense.service';
+import { TermConceptSynonymSyncService } from './term-concept-synonym-sync.service';
 
 @Global()
 @Module({
@@ -27,7 +28,8 @@ import { TypesenseService } from './typesense.service';
       inject: [ConfigService],
     },
     TypesenseService,
+    TermConceptSynonymSyncService,
   ],
-  exports: [TYPESENSE_CLIENT, TypesenseService],
+  exports: [TYPESENSE_CLIENT, TypesenseService, TermConceptSynonymSyncService],
 })
 export class TypesenseModule {}

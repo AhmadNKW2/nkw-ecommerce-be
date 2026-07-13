@@ -87,14 +87,15 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
     expect(params.query_by).toContain('sku');
   });
 
-  it('does not apply the SEARCHABLE_STATUSES filter for admin search', async () => {
+  it('applies default SEARCHABLE_STATUSES filter for admin search too', async () => {
     const { service, typesenseSearch } = makeService();
     const dto: SearchQueryDto = { q: 'tablet' } as SearchQueryDto;
 
     await service.search(dto, true, false);
 
     const params = typesenseSearch.mock.calls[0][0];
-    expect(params.filter_by ?? '').not.toContain('status:=');
+    expect(params.filter_by).toContain('status:=[active,updated,review]');
+    expect(params.filter_by).toContain('visible:=true');
   });
 
   it('normalizes Arabic variants in the query sent to Typesense for main search', async () => {
@@ -149,14 +150,14 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     expect(params.sort_by).toBe('_text_match:desc,created_at_ts:desc');
   });
 
-  it('treats the explicit "created_at:desc" option the same as the default (relevance-primary)', async () => {
+  it('uses created_at_ts:desc when created_at:desc is explicitly requested', async () => {
     const { service, typesenseSearch } = makeService();
     const dto: SearchQueryDto = { q: 'tablet', sort_by: 'created_at:desc' } as SearchQueryDto;
 
     await service.search(dto, false, false);
 
     const params = typesenseSearch.mock.calls[0][0];
-    expect(params.sort_by).toBe('_text_match:desc,created_at_ts:desc');
+    expect(params.sort_by).toBe('created_at_ts:desc');
   });
 
   it('lets an explicit price sort override relevance entirely', async () => {
@@ -381,21 +382,22 @@ describe('SearchService — core intent category boost', () => {
     { id: 52, slug: 'hdd' },
   ];
 
-  it('prepends a category _eval boost for an exact CPU query on the default sort', async () => {
+  it('does not prepend category _eval boost for an exact CPU query', async () => {
     const { service, typesenseSearch } = makeService(undefined, boostCategories);
     await service.search({ q: 'CPU' } as SearchQueryDto, false, false);
 
     const params = typesenseSearch.mock.calls[0][0];
-    expect(params.sort_by).toContain('_eval([(category_ids:=[44,96]):1]):desc');
-    expect(params.sort_by).toContain('_text_match:desc,created_at_ts:desc');
+    expect(params.sort_by).toBe('_text_match:desc,created_at_ts:desc');
+    expect(params.sort_by).not.toContain('_eval');
   });
 
-  it('prepends a category _eval boost for CPU autocomplete', async () => {
+  it('does not prepend category _eval boost for CPU autocomplete', async () => {
     const { service, typesenseSearch } = makeService(undefined, boostCategories);
     await service.autocomplete({ q: 'cpu' } as AutocompleteQueryDto, false);
 
     const params = typesenseSearch.mock.calls[0][0];
-    expect(params.sort_by).toContain('_eval([(category_ids:=[44,96]):1]):desc');
+    expect(params.sort_by).toBe('_text_match:desc,created_at_ts:desc');
+    expect(params.sort_by).not.toContain('_eval');
   });
 
   it('does not apply category boost for multi-word queries like "cpu cooler"', async () => {

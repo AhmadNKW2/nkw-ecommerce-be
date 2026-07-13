@@ -16,6 +16,8 @@ export enum UserRole {
   ADMIN = 'admin',
   CATALOG_MANAGER = 'catalog_manager',
   CONSTANT_TOKEN_ADMIN = 'constant_token_admin',
+  VENDOR_ADMIN = 'vendor_admin',
+  STORE_ADMIN = 'store_admin',
 }
 
 @Entity('users')
@@ -65,6 +67,9 @@ export class User {
 
   @Column({ name: 'admin_access', type: 'jsonb', nullable: true })
   adminAccess: AdminAccess | null;
+
+  @Column({ name: 'vendor_id', type: 'int', nullable: true })
+  vendor_id: number | null;
 
   @Column({ name: 'constant_access_token', type: 'text', nullable: true })
   constant_access_token: string | null;

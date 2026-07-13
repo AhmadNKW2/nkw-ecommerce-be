@@ -90,6 +90,14 @@ describe('VendorsService vendor categories', () => {
       {} as never,
       {} as never,
       vendorCategoryRepository as never,
+      {
+        createQueryRunner: jest.fn().mockReturnValue({
+          connect: jest.fn().mockResolvedValue(undefined),
+          hasColumn: jest.fn().mockResolvedValue(true),
+          addColumn: jest.fn().mockResolvedValue(undefined),
+          release: jest.fn().mockResolvedValue(undefined),
+        }),
+      } as never,
     );
   });
 

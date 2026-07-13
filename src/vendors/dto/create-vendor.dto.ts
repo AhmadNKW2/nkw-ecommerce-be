@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsEnum,
   ValidateNested,
+  MinLength,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
@@ -36,6 +37,12 @@ export class CreateVendorDto {
   @IsOptional()
   @Transform(({ value }) => (value === '' ? undefined : value))
   email?: string;
+
+  @IsString()
+  @MinLength(6)
+  @IsOptional()
+  @Transform(({ value }) => (value === '' ? undefined : value))
+  password?: string;
 
   @IsString()
   @IsOptional()

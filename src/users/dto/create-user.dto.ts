@@ -12,6 +12,7 @@ import {
   IsArray,
   IsNumber,
   IsObject,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { UserRole } from '../entities/user.entity';
@@ -68,6 +69,18 @@ export class CreateUserDto {
   @IsString()
   @MinLength(6)
   password: string;
+
+  @ApiPropertyOptional({
+    example: 12,
+    description:
+      'Vendor/store record linked to vendor_admin or store_admin accounts.',
+  })
+  @ValidateIf(
+    (dto) =>
+      dto.role === UserRole.VENDOR_ADMIN || dto.role === UserRole.STORE_ADMIN,
+  )
+  @IsNumber()
+  vendor_id?: number;
 
   @ApiPropertyOptional({
     example: '+966500000000',

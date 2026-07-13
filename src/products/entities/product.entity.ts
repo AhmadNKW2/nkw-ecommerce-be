@@ -50,6 +50,8 @@ export enum ProductStatus {
   ARCHIVED = 'archived',
   UPDATED = 'updated',
   REVIEW = 'review',
+  VENDOR = 'vendor',
+  STORE = 'store',
 }
 
 export enum ProductWeightUnit {

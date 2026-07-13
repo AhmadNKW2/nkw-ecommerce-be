@@ -10,6 +10,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, LessThan } from 'typeorm';
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../users/entities/user.entity';
+import { VendorsService } from '../vendors/vendors.service';
+import { VendorStatus } from '../vendors/entities/vendor.entity';
 import { resolveAdminAccess } from '../users/utils/admin-access.util';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -26,6 +28,8 @@ export interface TokenPayload {
   role: string;
   jti: string;
   type: 'access' | 'refresh' | 'static_access';
+  authSource?: 'user' | 'vendor';
+  vendorId?: number;
 }
 
 export interface AuthTokens {
@@ -56,6 +60,7 @@ export class AuthService {
 
   constructor(
     private usersService: UsersService,
+    private vendorsService: VendorsService,
     private jwtService: JwtService,
     private configService: ConfigService,
     @InjectRepository(PasswordResetToken)
@@ -115,6 +120,7 @@ export class AuthService {
     email: string,
     role: string,
     metadata?: RequestMetadata,
+    options?: { authSource?: 'user' | 'vendor'; vendorId?: number },
   ): Promise<AuthTokens> {
     const isStaticAccessToken = this.isStaticAccessRole(role);
     const accessTokenJti = isStaticAccessToken
@@ -140,6 +146,8 @@ export class AuthService {
       role,
       jti: accessTokenJti,
       type: isStaticAccessToken ? 'static_access' : 'access',
+      authSource: options?.authSource,
+      vendorId: options?.vendorId,
     };
     const accessToken = isStaticAccessToken
       ? await this.resolveStaticAccessToken(userId, accessPayload)
@@ -154,6 +162,8 @@ export class AuthService {
       role,
       jti: refreshTokenJti,
       type: 'refresh',
+      authSource: options?.authSource,
+      vendorId: options?.vendorId,
     };
     const refreshToken = this.jwtService.sign(refreshPayload, {
       expiresIn: this.refreshTokenExpiresIn,
@@ -413,44 +423,90 @@ export class AuthService {
   }
 
   async login(loginDto: LoginDto, metadata?: RequestMetadata) {
-    const user = await this.usersService.findByEmail(
-      loginDto.email.toLowerCase().trim(),
-    );
+    const normalizedEmail = loginDto.email.toLowerCase().trim();
+    const user = await this.usersService.findByEmail(normalizedEmail);
 
-    if (!user) {
+    if (user) {
+      const isPasswordValid = await this.usersService.validatePassword(
+        loginDto.password,
+        user.password,
+      );
+
+      if (!isPasswordValid) {
+        throw new UnauthorizedException('Invalid credentials');
+      }
+
+      if (!user.isActive) {
+        throw new UnauthorizedException('Account is deactivated');
+      }
+
+      const tokens = await this.generateTokens(
+        user.id,
+        user.email,
+        user.role,
+        metadata,
+        {
+          authSource: 'user',
+          vendorId: user.vendor_id ?? undefined,
+        },
+      );
+
+      return {
+        tokens,
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role,
+          vendorId: user.vendor_id ?? null,
+          adminAccess: resolveAdminAccess(user),
+        },
+      };
+    }
+
+    const vendor = await this.vendorsService.findByEmailWithPassword(normalizedEmail);
+    if (!vendor || !this.vendorsService.vendorHasPortalAccess(vendor)) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const isPasswordValid = await this.usersService.validatePassword(
+    if (vendor.status !== VendorStatus.ACTIVE) {
+      throw new UnauthorizedException('Vendor account is not active');
+    }
+
+    const isVendorPasswordValid = await this.vendorsService.validateVendorPassword(
       loginDto.password,
-      user.password,
+      vendor.password,
     );
 
-    if (!isPasswordValid) {
+    if (!isVendorPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (!user.isActive) {
-      throw new UnauthorizedException('Account is deactivated');
-    }
-
-    // Generate tokens
     const tokens = await this.generateTokens(
-      user.id,
-      user.email,
-      user.role,
+      -vendor.id,
+      vendor.email!,
+      UserRole.VENDOR_ADMIN,
       metadata,
+      {
+        authSource: 'vendor',
+        vendorId: vendor.id,
+      },
     );
 
     return {
       tokens,
       user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        adminAccess: resolveAdminAccess(user),
+        id: vendor.id,
+        email: vendor.email,
+        firstName: vendor.name_en,
+        lastName: vendor.name_ar,
+        role: UserRole.VENDOR_ADMIN,
+        vendorId: vendor.id,
+        adminAccess: resolveAdminAccess({
+          role: UserRole.VENDOR_ADMIN,
+          adminAccess: null,
+        }),
       },
     };
   }
@@ -503,10 +559,23 @@ export class AuthService {
         throw new UnauthorizedException('Refresh token has expired');
       }
 
-      // Verify user still exists and is active
-      const user = await this.usersService.findOneById(payload.sub);
-      if (!user || !user.isActive) {
-        throw new UnauthorizedException('User not found or deactivated');
+      // Verify account still exists and is active
+      if (payload.authSource === 'vendor') {
+        const vendor = await this.vendorsService.findByEmailWithPassword(payload.email);
+        const vendorId = payload.vendorId ?? Math.abs(payload.sub);
+        if (
+          !vendor ||
+          vendor.id !== vendorId ||
+          vendor.status !== VendorStatus.ACTIVE ||
+          !this.vendorsService.vendorHasPortalAccess(vendor)
+        ) {
+          throw new UnauthorizedException('Vendor not found or deactivated');
+        }
+      } else {
+        const user = await this.usersService.findOneById(payload.sub);
+        if (!user || !user.isActive) {
+          throw new UnauthorizedException('User not found or deactivated');
+        }
       }
 
       // Revoke the old refresh token (rotation)
@@ -515,10 +584,14 @@ export class AuthService {
 
       // Generate new tokens
       const newTokens = await this.generateTokens(
-        user.id,
-        user.email,
-        user.role,
+        payload.sub,
+        payload.email,
+        payload.role,
         metadata,
+        {
+          authSource: payload.authSource,
+          vendorId: payload.vendorId,
+        },
       );
 
       // Link old token to new one for audit
@@ -657,6 +730,37 @@ export class AuthService {
       throw new UnauthorizedException('Token has been revoked');
     }
 
+    if (payload.authSource === 'vendor') {
+      const vendor = await this.vendorsService.findByEmailWithPassword(payload.email);
+      const vendorId = payload.vendorId ?? Math.abs(payload.sub);
+      if (!vendor || vendor.id !== vendorId) {
+        throw new UnauthorizedException('Vendor not found');
+      }
+
+      if (vendor.status !== VendorStatus.ACTIVE) {
+        throw new UnauthorizedException('Vendor account is not active');
+      }
+
+      if (!this.vendorsService.vendorHasPortalAccess(vendor)) {
+        throw new UnauthorizedException('Vendor portal access is disabled');
+      }
+
+      return {
+        id: vendor.id,
+        email: vendor.email,
+        firstName: vendor.name_en,
+        lastName: vendor.name_ar,
+        role: UserRole.VENDOR_ADMIN,
+        vendorId: vendor.id,
+        authSource: 'vendor' as const,
+        isActive: true,
+        adminAccess: resolveAdminAccess({
+          role: UserRole.VENDOR_ADMIN,
+          adminAccess: null,
+        }),
+      };
+    }
+
     // Validate user
     const user = await this.usersService.findOneById(payload.sub);
     if (!user) {
@@ -669,7 +773,12 @@ export class AuthService {
 
     // Remove password from user object
     const { password, ...result } = user;
-    return result;
+    return {
+      ...result,
+      vendorId: user.vendor_id ?? null,
+      authSource: 'user' as const,
+      adminAccess: resolveAdminAccess(user),
+    };
   }
 
   async forgotPassword(forgotPasswordDto: ForgotPasswordDto) {

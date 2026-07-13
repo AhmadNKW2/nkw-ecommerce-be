@@ -58,6 +58,12 @@ async function ensureUsersColumns(client) {
   console.log('users columns');
   await addColumnIfMissing(client, 'users', 'admin_access', 'jsonb NULL');
   await addColumnIfMissing(client, 'users', 'constant_access_token', 'text NULL');
+  await addColumnIfMissing(client, 'users', 'vendor_id', 'integer NULL');
+}
+
+async function ensureVendorsColumns(client) {
+  console.log('vendors columns');
+  await addColumnIfMissing(client, 'vendors', 'password', 'text NULL');
 }
 
 async function ensureProductAttachmentsTable(client) {
@@ -245,6 +251,7 @@ async function main() {
 
   try {
     await ensureUsersColumns(client);
+    await ensureVendorsColumns(client);
     await ensureProductAttachmentsTable(client);
     await ensureProductFieldTogglesColumns(client);
     await ensureProductsColumns(client);

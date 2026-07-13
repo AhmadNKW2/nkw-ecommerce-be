@@ -5,6 +5,7 @@ import {
   AdminAccessKey,
   DEFAULT_ADMIN_ACCESS,
   DEFAULT_CATALOG_MANAGER_ACCESS,
+  DEFAULT_VENDOR_PORTAL_ACCESS,
 } from '../admin-access.constants';
 
 type UserWithAccess = {
@@ -15,6 +16,10 @@ type UserWithAccess = {
 function getDefaultAccessForRole(role: UserRole): AdminAccess {
   if (role === UserRole.CATALOG_MANAGER) {
     return { ...DEFAULT_CATALOG_MANAGER_ACCESS };
+  }
+
+  if (role === UserRole.VENDOR_ADMIN || role === UserRole.STORE_ADMIN) {
+    return { ...DEFAULT_VENDOR_PORTAL_ACCESS };
   }
 
   if (role === UserRole.ADMIN || role === UserRole.CONSTANT_TOKEN_ADMIN) {

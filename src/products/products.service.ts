@@ -43,6 +43,10 @@ import {
   hasAdminAccess,
   stripProductPricingFields,
 } from '../users/utils/admin-access.util';
+import {
+  isSimplifiedProductCreator,
+  validateAndNormalizeSimplifiedCreateDto,
+} from './utils/simplified-product-creator.util';
 
 import { ProductSpecificationInputDto } from './dto/product-specification.dto';
 import { ProductAttributeInputDto } from './dto/product-attribute.dto';
@@ -1570,9 +1574,26 @@ export class ProductsService {
     );
   }
 
-  async create(dto: CreateProductDto, userId?: number, user?: { role: string; adminAccess?: unknown }): Promise<any> {
+  async create(dto: CreateProductDto, userId?: number, user?: { role: string; adminAccess?: unknown; vendorId?: number | null; authSource?: 'user' | 'vendor' }): Promise<any> {
     try {
-      if (user && !hasAdminAccess(user as any, 'product_pricing')) {
+      const creatorContext = {
+        role: user?.role,
+        authSource: user?.authSource,
+        vendorId: user?.vendorId ?? null,
+      };
+
+      if (isSimplifiedProductCreator(creatorContext)) {
+        dto = validateAndNormalizeSimplifiedCreateDto(dto, creatorContext);
+      } else {
+        if (!dto.category_ids?.length) {
+          throw new BadRequestException('At least one category is required');
+        }
+        if (!dto.short_description_en?.trim() || !dto.short_description_ar?.trim()) {
+          throw new BadRequestException('Short descriptions in English and Arabic are required');
+        }
+      }
+
+      if (user && !hasAdminAccess(user as any, 'product_pricing') && !isSimplifiedProductCreator(creatorContext)) {
         dto = stripProductPricingFields(dto);
       }
       // Validate categories exist and are active
@@ -1636,8 +1657,9 @@ export class ProductsService {
         dto.original_sale_price ??
         dto.sale_price ??
         null;
-      const managedPricingFromRule =
-        await this.computeManagedPricingFromOriginalInput({
+      const managedPricingFromRule = isSimplifiedProductCreator(creatorContext)
+        ? null
+        : await this.computeManagedPricingFromOriginalInput({
           vendor_id: dto.vendor_id ?? null,
           brand_id: dto.brand_id ?? null,
           categoryIds: dto.category_ids ?? [],

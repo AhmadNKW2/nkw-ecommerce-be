@@ -41,8 +41,11 @@ export class Vendor {
   @Column({ type: 'text', nullable: true })
   description_ar: string;
 
-  @Column({ nullable: true })
-  email: string;
+  @Column('varchar', { nullable: true })
+  email: string | null;
+
+  @Column('text', { nullable: true, select: false })
+  password: string | null;
 
   @Column({ nullable: true })
   phone: string;

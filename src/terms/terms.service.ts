@@ -5,6 +5,7 @@ import {
   Logger,
   MessageEvent,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
@@ -14,6 +15,7 @@ import { TermGroup } from './entities/term-group.entity';
 import { GenerateTermsDto } from './dto/generate-terms.dto';
 import { CreateTermGroupDto } from './dto/create-term-group.dto';
 import { UpdateTermGroupDto } from './dto/update-term-group.dto';
+import { TermConceptSynonymSyncService } from '../typesense/term-concept-synonym-sync.service';
 import { Product, ProductStatus } from '../products/entities/product.entity';
 import { Category, CategoryStatus } from '../categories/entities/category.entity';
 import { ProductCategory } from '../products/entities/product-category.entity';
@@ -65,7 +67,7 @@ type OpenAiConceptOutput = {
 };
 
 @Injectable()
-export class TermsService {
+export class TermsService implements OnModuleInit {
   private readonly logger = new Logger(TermsService.name);
   private readonly termsJobs = new Map<string, TermsGenerationJob>();
 
@@ -78,7 +80,12 @@ export class TermsService {
     private readonly categoriesRepository: Repository<Category>,
     @InjectRepository(ProductCategory)
     private readonly productCategoriesRepository: Repository<ProductCategory>,
+    private readonly termConceptSynonymSync: TermConceptSynonymSyncService,
   ) {}
+
+  async onModuleInit() {
+    await this.syncConceptSynonymsToTypesense();
+  }
 
   private createTermsJob(): string {
     const jobId = `terms-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -767,6 +774,7 @@ export class TermsService {
     });
 
     const saved = await this.termGroupsRepository.save(created);
+    await this.syncConceptSynonymsToTypesense();
     return this.mapTermGroup(saved);
   }
 
@@ -808,6 +816,7 @@ export class TermsService {
     }
 
     const saved = await this.termGroupsRepository.save(group);
+    await this.syncConceptSynonymsToTypesense();
     return this.mapTermGroup(saved);
   }
 
@@ -818,6 +827,7 @@ export class TermsService {
     }
 
     await this.termGroupsRepository.remove(group);
+    await this.syncConceptSynonymsToTypesense();
     return {
       message: 'Concept deleted successfully.',
       group_id: id,
@@ -838,6 +848,21 @@ export class TermsService {
 
   private normalizeReferenceProductIds(ids: number[]): number[] {
     return [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))].sort((a, b) => a - b);
+  }
+
+  private async syncConceptSynonymsToTypesense(): Promise<void> {
+    try {
+      const groups = await this.termGroupsRepository.find({
+        order: { id: 'ASC' },
+      });
+      await this.termConceptSynonymSync.syncGroups(groups);
+    } catch (error) {
+      this.logger.warn(
+        `Failed to sync concept synonyms to Typesense: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   async startTermsGeneration(dto: GenerateTermsDto) {
@@ -862,6 +887,7 @@ export class TermsService {
 
   async clearAllConcepts() {
     await this.termGroupsRepository.clear();
+    await this.syncConceptSynonymsToTypesense();
     return {
       message: 'All concepts removed successfully.',
     };
@@ -1097,5 +1123,9 @@ export class TermsService {
 
     job.finishedAt = new Date();
     job.status = job.cancellationRequested ? 'cancelled' : 'done';
+
+    if (job.status === 'done') {
+      await this.syncConceptSynonymsToTypesense();
+    }
   }
 }

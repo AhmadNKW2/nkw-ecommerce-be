@@ -13,6 +13,8 @@ import {
   PRODUCT_SYNONYM_SET_NAME,
 } from './config/synonyms';
 
+export type SynonymGroupMap = Record<string, string[]>;
+
 // Typesense v30 replaced the classic per-collection Synonyms API with a new
 // `synonym_sets` API (the old one still logs a deprecation warning via the
 // client, and isn't guaranteed to keep working). Since production and local
@@ -85,12 +87,7 @@ export class TypesenseService implements OnModuleInit {
 
   private async ensureSynonyms() {
     try {
-      const majorVersion = await this.detectServerMajorVersion();
-      if (majorVersion !== null && majorVersion >= SYNONYM_SETS_MIN_MAJOR_VERSION) {
-        await this.ensureSynonymsViaSynonymSets();
-      } else {
-        await this.ensureSynonymsViaClassicApi();
-      }
+      await this.syncSynonymSet(PRODUCT_SYNONYM_SET_NAME, PRODUCT_SYNONYM_GROUPS);
     } catch (error) {
       this.logger.warn(
         `Failed to register Typesense synonyms: ${
@@ -100,32 +97,52 @@ export class TypesenseService implements OnModuleInit {
     }
   }
 
-  private async ensureSynonymsViaSynonymSets() {
-    const items = Object.entries(PRODUCT_SYNONYM_GROUPS).map(([id, synonyms]) => ({
+  async syncSynonymSet(
+    setName: string,
+    groups: SynonymGroupMap,
+  ): Promise<void> {
+    if (!this.isEnabled()) {
+      return;
+    }
+
+    const majorVersion = await this.detectServerMajorVersion();
+    if (majorVersion !== null && majorVersion >= SYNONYM_SETS_MIN_MAJOR_VERSION) {
+      await this.syncSynonymSetViaSynonymSets(setName, groups);
+      return;
+    }
+
+    await this.syncSynonymSetViaClassicApi(groups);
+  }
+
+  private async syncSynonymSetViaSynonymSets(
+    setName: string,
+    groups: SynonymGroupMap,
+  ) {
+    const items = Object.entries(groups).map(([id, synonyms]) => ({
       id,
       synonyms,
     }));
 
-    await this.client.synonymSets(PRODUCT_SYNONYM_SET_NAME).upsert({ items });
+    await this.client.synonymSets(setName).upsert({ items });
 
     const collection = await this.client.collections(this.collectionName).retrieve();
     const linkedSets: string[] = Array.isArray(collection.synonym_sets)
       ? collection.synonym_sets
       : [];
 
-    if (!linkedSets.includes(PRODUCT_SYNONYM_SET_NAME)) {
+    if (!linkedSets.includes(setName)) {
       await this.client.collections(this.collectionName).update({
-        synonym_sets: [...linkedSets, PRODUCT_SYNONYM_SET_NAME],
+        synonym_sets: [...linkedSets, setName],
       });
     }
 
     this.logger.log(
-      `Registered Typesense synonym set "${PRODUCT_SYNONYM_SET_NAME}" (${items.length} groups)`,
+      `Registered Typesense synonym set "${setName}" (${items.length} groups)`,
     );
   }
 
-  private async ensureSynonymsViaClassicApi() {
-    for (const [id, synonyms] of Object.entries(PRODUCT_SYNONYM_GROUPS)) {
+  private async syncSynonymSetViaClassicApi(groups: SynonymGroupMap) {
+    for (const [id, synonyms] of Object.entries(groups)) {
       try {
         await this.client
           .collections(this.collectionName)
@@ -141,7 +158,7 @@ export class TypesenseService implements OnModuleInit {
     }
 
     this.logger.log(
-      `Registered ${Object.keys(PRODUCT_SYNONYM_GROUPS).length} classic Typesense synonym groups`,
+      `Registered ${Object.keys(groups).length} classic Typesense synonym groups`,
     );
   }
 

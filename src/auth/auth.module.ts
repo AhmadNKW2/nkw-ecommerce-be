@@ -7,6 +7,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { UsersModule } from '../users/users.module';
+import { VendorsModule } from '../vendors/vendors.module';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { GoogleStrategy } from './strategies/google.strategy';
 import { FacebookStrategy } from './strategies/facebook.strategy';
@@ -46,6 +47,7 @@ for (const [provider, status] of Object.entries(oauthStatuses)) {
 @Module({
   imports: [
     UsersModule,
+    VendorsModule,
     PassportModule,
     ScheduleModule.forRoot(),
     TypeOrmModule.forFeature([

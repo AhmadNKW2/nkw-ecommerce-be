@@ -18,7 +18,11 @@ export class ProductSchemaService implements OnModuleInit {
       return this.schemaInitPromise;
     }
 
-    this.schemaInitPromise = this.ensureProductAttachmentsTableExists()
+    this.schemaInitPromise = Promise.all([
+      this.ensureProductAttachmentsTableExists(),
+      this.ensureProductStatusEnumValues(),
+    ])
+      .then(() => undefined)
       .catch((error) => {
         this.logger.error(
           `Failed to ensure product schema: ${error instanceof Error ? error.message : String(error)}`,
@@ -30,6 +34,46 @@ export class ProductSchemaService implements OnModuleInit {
       });
 
     return this.schemaInitPromise;
+  }
+
+  private async ensureProductStatusEnumValues(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+      await queryRunner.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_enum e
+            JOIN pg_type t ON e.enumtypid = t.oid
+            WHERE t.typname = 'products_status_enum' AND e.enumlabel = 'vendor'
+          ) THEN
+            ALTER TYPE products_status_enum ADD VALUE 'vendor';
+          END IF;
+        END $$;
+      `);
+      await queryRunner.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_enum e
+            JOIN pg_type t ON e.enumtypid = t.oid
+            WHERE t.typname = 'products_status_enum' AND e.enumlabel = 'store'
+          ) THEN
+            ALTER TYPE products_status_enum ADD VALUE 'store';
+          END IF;
+        END $$;
+      `);
+    } catch (error) {
+      this.logger.warn(
+        `Could not ensure product status enum values: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   private async ensureProductAttachmentsTableExists(): Promise<void> {

@@ -98,11 +98,13 @@ export class CreateProductDto {
 
   @ApiProperty({ example: 'High quality wireless headphones with ANC.', description: 'Short description in English' })
   @IsString()
-  short_description_en: string;
+  @IsOptional()
+  short_description_en?: string;
 
   @ApiProperty({ example: 'سماعات لاسلكية عالية الجودة مع خاصية إلغاء الضوضاء.', description: 'Short description in Arabic' })
   @IsString()
-  short_description_ar: string;
+  @IsOptional()
+  short_description_ar?: string;
 
   @ApiProperty({ example: '<p>Experience immersive audio...</p>', description: 'Full description in English (HTML allowed)' })
   @IsString()
@@ -126,10 +128,11 @@ export class CreateProductDto {
   @IsOptional()
   reference_slug?: string;
 
-  @ApiProperty({ example: [5, 12], description: 'Array of category IDs this product belongs to' })
+  @ApiPropertyOptional({ example: [5, 12], description: 'Array of category IDs this product belongs to' })
   @IsArray()
   @IsNumber({}, { each: true })
-  category_ids: number[];
+  @IsOptional()
+  category_ids?: number[];
 
   @ApiPropertyOptional({ example: 4, description: 'Vendor ID creating the product' })
   @IsNumber()

@@ -52,6 +52,67 @@ export class UsersService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     await this.ensureAdminAccessColumn();
     await this.ensureConstantAccessTokenColumn();
+    await this.ensureVendorIdColumn();
+    await this.ensureUserRoleEnumValues();
+  }
+
+  private async ensureUserRoleEnumValues(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+      await queryRunner.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_enum e
+            JOIN pg_type t ON e.enumtypid = t.oid
+            WHERE t.typname = 'users_role_enum' AND e.enumlabel = 'vendor_admin'
+          ) THEN
+            ALTER TYPE users_role_enum ADD VALUE 'vendor_admin';
+          END IF;
+        END $$;
+      `);
+      await queryRunner.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM pg_enum e
+            JOIN pg_type t ON e.enumtypid = t.oid
+            WHERE t.typname = 'users_role_enum' AND e.enumlabel = 'store_admin'
+          ) THEN
+            ALTER TYPE users_role_enum ADD VALUE 'store_admin';
+          END IF;
+        END $$;
+      `);
+    } catch (error) {
+      // Enum type name may differ across environments; column migration still applies.
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureVendorIdColumn(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasColumn('users', 'vendor_id'))) {
+        await queryRunner.addColumn(
+          'users',
+          new TableColumn({
+            name: 'vendor_id',
+            type: 'int',
+            isNullable: true,
+          }),
+        );
+      }
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   private async ensureConstantAccessTokenColumn(): Promise<void> {
@@ -118,7 +179,9 @@ export class UsersService implements OnModuleInit {
     if (
       role !== UserRole.ADMIN &&
       role !== UserRole.CATALOG_MANAGER &&
-      role !== UserRole.CONSTANT_TOKEN_ADMIN
+      role !== UserRole.CONSTANT_TOKEN_ADMIN &&
+      role !== UserRole.VENDOR_ADMIN &&
+      role !== UserRole.STORE_ADMIN
     ) {
       return null;
     }
@@ -144,7 +207,7 @@ export class UsersService implements OnModuleInit {
   }
 
   async create(createUserDto: CreateUserDto): Promise<User> {
-    const { product_ids, adminAccess, ...userData } = createUserDto;
+    const { product_ids, adminAccess, vendor_id, ...userData } = createUserDto;
     userData.email = userData.email.toLowerCase().trim();
 
     const existingUser = await this.usersRepository.findOne({
@@ -158,10 +221,21 @@ export class UsersService implements OnModuleInit {
     const hashedPassword = await bcrypt.hash(userData.password, 10);
     const role = userData.role || UserRole.USER;
 
+    if (
+      (role === UserRole.VENDOR_ADMIN || role === UserRole.STORE_ADMIN) &&
+      (!vendor_id || vendor_id <= 0)
+    ) {
+      throw new ConflictException('vendor_id is required for vendor/store admins');
+    }
+
     const user = this.usersRepository.create({
       ...userData,
       password: hashedPassword,
       role,
+      vendor_id:
+        role === UserRole.VENDOR_ADMIN || role === UserRole.STORE_ADMIN
+          ? vendor_id
+          : null,
       adminAccess: this.buildStoredAdminAccess(role, adminAccess),
     });
 

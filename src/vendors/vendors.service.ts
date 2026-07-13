@@ -4,9 +4,11 @@ import {
   ConflictException,
   BadRequestException,
   Logger,
+  OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Like } from 'typeorm';
+import { Repository, In, Like, DataSource, TableColumn } from 'typeorm';
+import * as bcrypt from 'bcrypt';
 import { Vendor, VendorStatus } from './entities/vendor.entity';
 import { CreateVendorDto } from './dto/create-vendor.dto';
 import { UpdateVendorDto } from './dto/update-vendor.dto';
@@ -64,7 +66,7 @@ export type SerializedVendorCategoryListItem = Omit<
 >;
 
 @Injectable()
-export class VendorsService {
+export class VendorsService implements OnModuleInit {
   private readonly logger = new Logger(VendorsService.name);
 
   constructor(
@@ -78,7 +80,75 @@ export class VendorsService {
     private readonly productsService: ProductsService,
     @InjectRepository(VendorCategory)
     private vendorCategoryRepository: Repository<VendorCategory>,
+    private readonly dataSource: DataSource,
   ) {}
+
+  async onModuleInit(): Promise<void> {
+    await this.ensureVendorPasswordColumn();
+  }
+
+  private async ensureVendorPasswordColumn(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasColumn('vendors', 'password'))) {
+        await queryRunner.addColumn(
+          'vendors',
+          new TableColumn({
+            name: 'password',
+            type: 'text',
+            isNullable: true,
+          }),
+        );
+      }
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private validateVendorCredentials(email?: string, password?: string): void {
+    const hasEmail = Boolean(email?.trim());
+    const hasPassword = Boolean(password?.trim());
+
+    if (hasEmail !== hasPassword) {
+      throw new BadRequestException(
+        'Vendor email and password must both be provided or both omitted',
+      );
+    }
+  }
+
+  private async hashVendorPassword(password?: string): Promise<string | null> {
+    if (!password?.trim()) {
+      return null;
+    }
+
+    return bcrypt.hash(password.trim(), 10);
+  }
+
+  async findByEmailWithPassword(email: string): Promise<Vendor | null> {
+    return this.vendorRepository
+      .createQueryBuilder('vendor')
+      .addSelect('vendor.password')
+      .where('LOWER(vendor.email) = LOWER(:email)', { email })
+      .getOne();
+  }
+
+  async validateVendorPassword(
+    plainPassword: string,
+    hashedPassword: string | null,
+  ): Promise<boolean> {
+    if (!hashedPassword) {
+      return false;
+    }
+
+    return bcrypt.compare(plainPassword, hashedPassword);
+  }
+
+  vendorHasPortalAccess(vendor: Pick<Vendor, 'email' | 'password'>): boolean {
+    return Boolean(vendor.email?.trim() && vendor.password);
+  }
 
   private async ensureVendorExists(vendorId: number): Promise<Vendor> {
     const vendor = await this.vendorRepository.findOne({
@@ -549,11 +619,15 @@ export class VendorsService {
 
     const nextSortOrder = (maxSortOrder?.max ?? -1) + 1;
 
-    const { product_changes, ...vendorData } = createVendorDto;
+    const { product_changes, password, email, ...vendorData } = createVendorDto;
+    this.validateVendorCredentials(email, password);
     const slug = await this.generateUniqueSlug(vendorData.name_en);
+    const hashedPassword = await this.hashVendorPassword(password);
 
     const vendor = this.vendorRepository.create({
       ...vendorData,
+      email: email?.trim().toLowerCase() || null,
+      password: hashedPassword,
       slug,
       logo: logoUrl,
       sort_order: nextSortOrder,
@@ -857,7 +931,30 @@ export class VendorsService {
       vendor.slug = await this.generateUniqueSlug(updateVendorDto.name_en, id);
     }
 
-    const { product_changes, ...updateData } = updateVendorDto;
+    const { product_changes, password, email, ...updateData } = updateVendorDto;
+
+    if (email !== undefined || password !== undefined) {
+      const nextEmail =
+        email !== undefined ? email?.trim().toLowerCase() || null : vendor.email;
+      const willHavePassword =
+        password !== undefined
+          ? Boolean(password?.trim())
+          : Boolean(vendor.password);
+
+      if (Boolean(nextEmail) !== willHavePassword) {
+        throw new BadRequestException(
+          'Vendor email and password must both be provided or both omitted',
+        );
+      }
+
+      if (email !== undefined) {
+        vendor.email = nextEmail;
+      }
+
+      if (password !== undefined) {
+        vendor.password = await this.hashVendorPassword(password);
+      }
+    }
 
     Object.assign(vendor, updateData);
     if (logoUrl) {

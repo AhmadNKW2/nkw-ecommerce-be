@@ -38,7 +38,12 @@ export class MediaController {
    */
   @Post('upload')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.CATALOG_MANAGER,
+    UserRole.VENDOR_ADMIN,
+    UserRole.STORE_ADMIN,
+  )
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -63,7 +68,12 @@ export class MediaController {
    */
   @Post('upload-attachment')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.CATALOG_MANAGER,
+    UserRole.VENDOR_ADMIN,
+    UserRole.STORE_ADMIN,
+  )
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -114,7 +124,12 @@ export class MediaController {
    */
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.CATALOG_MANAGER,
+    UserRole.VENDOR_ADMIN,
+    UserRole.STORE_ADMIN,
+  )
   async delete(@Param('id') id: string) {
     await this.mediaService.delete(+id);
     return { message: 'Media deleted successfully' };
