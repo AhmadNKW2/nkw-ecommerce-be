@@ -1039,9 +1039,9 @@ export class OrdersService implements OnModuleInit {
     const skip = (page - 1) * limit;
 
     const query = this.ordersRepository
-      .createQueryBuilder('order')
-      .leftJoinAndSelect('order.user', 'user')
-      .leftJoinAndSelect('order.items', 'items')
+      .createQueryBuilder('ord')
+      .leftJoinAndSelect('ord.user', 'user')
+      .leftJoinAndSelect('ord.items', 'items')
       .leftJoinAndSelect('items.product', 'product')
       .leftJoinAndSelect('items.vendor', 'vendor')
       .leftJoinAndSelect('product.productMedia', 'productMedia')
@@ -1049,23 +1049,25 @@ export class OrdersService implements OnModuleInit {
       .skip(skip)
       .take(limit)
       // Keep cancelled orders at the bottom; newest non-cancelled first.
+      // Parentheses prevent TypeORM from parsing the CASE expression as an alias path.
       .orderBy(
-        `CASE WHEN order.status = '${OrderStatus.CANCELLED}' THEN 1 ELSE 0 END`,
+        `(CASE WHEN ord.status = :cancelledStatus THEN 1 ELSE 0 END)`,
         'ASC',
       )
-      .addOrderBy('order.createdAt', 'DESC');
+      .addOrderBy('ord.createdAt', 'DESC')
+      .setParameter('cancelledStatus', OrderStatus.CANCELLED);
 
     if (status) {
-      query.andWhere('order.status = :status', { status });
+      query.andWhere('ord.status = :status', { status });
     }
 
     if (userId) {
-      query.andWhere('order.userId = :userId', { userId });
+      query.andWhere('ord.userId = :userId', { userId });
     }
 
     if (search) {
       query.andWhere(
-        '(CAST(order.id AS TEXT) LIKE :search OR user.email ILIKE :search OR user.firstName ILIKE :search)',
+        '(CAST(ord.id AS TEXT) LIKE :search OR user.email ILIKE :search OR user.firstName ILIKE :search)',
         { search: `%${search}%` },
       );
     }
