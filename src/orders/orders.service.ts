@@ -1048,7 +1048,12 @@ export class OrdersService implements OnModuleInit {
       .leftJoinAndSelect('productMedia.media', 'media')
       .skip(skip)
       .take(limit)
-      .orderBy('order.createdAt', 'DESC');
+      // Keep cancelled orders at the bottom; newest non-cancelled first.
+      .orderBy(
+        `CASE WHEN order.status = '${OrderStatus.CANCELLED}' THEN 1 ELSE 0 END`,
+        'ASC',
+      )
+      .addOrderBy('order.createdAt', 'DESC');
 
     if (status) {
       query.andWhere('order.status = :status', { status });
