@@ -18,10 +18,11 @@ describe('product-search-fields', () => {
     expect(fields.indexOf('name_ar_norm')).toBeLessThan(fields.indexOf('name_ar'));
   });
 
-  it('keeps query_by and query_by_weights aligned for autocomplete', () => {
-    const fields = AUTOCOMPLETE_SEARCH_QUERY_BY.split(',');
-    const weights = AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS.split(',');
-    expect(fields.length).toBe(weights.length);
+  it('keeps autocomplete query fields identical to full search', () => {
+    expect(AUTOCOMPLETE_SEARCH_QUERY_BY).toBe(PRODUCT_SEARCH_QUERY_BY);
+    expect(AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS).toBe(
+      PRODUCT_SEARCH_QUERY_BY_WEIGHTS,
+    );
   });
 
   it('gives *_norm Arabic fields higher weight than display Arabic fields', () => {

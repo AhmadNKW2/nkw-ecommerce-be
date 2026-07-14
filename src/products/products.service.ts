@@ -2202,24 +2202,13 @@ export class ProductsService {
       baseQuery.andWhere('product.sku = :sku', { sku });
     }
 
-    // Search by id (numeric), name, sku, or descriptions
+    // Search by name/descriptions. Exact id/sku matches are handled by
+    // SearchService (full query must equal id or sku exactly).
     if (search) {
-      const trimmedSearch = search.trim();
-      const numericSearch = /^\d+$/.test(trimmedSearch)
-        ? Number(trimmedSearch)
-        : null;
-
-      if (numericSearch !== null && Number.isSafeInteger(numericSearch)) {
-        baseQuery.andWhere(
-          '(product.id = :exactId OR product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.sku ILIKE :search OR product.short_description_en ILIKE :search OR product.long_description_en ILIKE :search OR product.original_vendor_category_name ILIKE :search OR CAST(product.original_vendor_categories AS text) ILIKE :search)',
-          { search: `%${search}%`, exactId: numericSearch },
-        );
-      } else {
-        baseQuery.andWhere(
-          '(product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.sku ILIKE :search OR product.short_description_en ILIKE :search OR product.long_description_en ILIKE :search OR product.original_vendor_category_name ILIKE :search OR CAST(product.original_vendor_categories AS text) ILIKE :search)',
-          { search: `%${search}%` },
-        );
-      }
+      baseQuery.andWhere(
+        '(product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.short_description_en ILIKE :search OR product.long_description_en ILIKE :search OR product.original_vendor_category_name ILIKE :search OR CAST(product.original_vendor_categories AS text) ILIKE :search)',
+        { search: `%${search}%` },
+      );
     }
 
     // Count (fast because there are no row-exploding joins)
@@ -3486,24 +3475,12 @@ export class ProductsService {
       });
     }
 
-    // Search by id (numeric), name, sku
+    // Search by name only. Exact id/sku matches are handled by SearchService.
     if (search) {
-      const trimmedSearch = search.trim();
-      const numericSearch = /^\d+$/.test(trimmedSearch)
-        ? Number(trimmedSearch)
-        : null;
-
-      if (numericSearch !== null && Number.isSafeInteger(numericSearch)) {
-        queryBuilder.andWhere(
-          '(product.id = :exactId OR product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.sku ILIKE :search)',
-          { search: `%${search}%`, exactId: numericSearch },
-        );
-      } else {
-        queryBuilder.andWhere(
-          '(product.name_en ILIKE :search OR product.name_ar ILIKE :search OR product.sku ILIKE :search)',
-          { search: `%${search}%` },
-        );
-      }
+      queryBuilder.andWhere(
+        '(product.name_en ILIKE :search OR product.name_ar ILIKE :search)',
+        { search: `%${search}%` },
+      );
     }
 
     // Sorting

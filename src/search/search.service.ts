@@ -31,8 +31,6 @@ import { AutocompleteResponseDto } from './dto/search-response.dto';
 import type { SearchParams } from 'typesense/lib/Typesense/Documents';
 import { TypesenseService } from '../typesense/typesense.service';
 import {
-  AUTOCOMPLETE_SEARCH_QUERY_BY,
-  AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS,
   PRODUCT_CARD_QUERY_BY,
   PRODUCT_ID_LOOKUP_QUERY_BY,
   PRODUCT_SEARCH_QUERY_BY,
@@ -54,9 +52,9 @@ import {
   type QueryVariantSegment,
 } from './term-concept-lexicon.service';
 
-// Matches current production behavior (previously hardcoded at two call sites:
-// buildTypesenseFilterBy and autocompleteWithTypesense). Change only with
-// product-team sign-off — review-status visibility is a pending decision.
+// Matches current production behavior (previously hardcoded in
+// buildTypesenseFilterBy). Change only with product-team sign-off —
+// review-status visibility is a pending decision.
 const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
 
 // Field priority for relevance ranking: name (title) highest, short
@@ -65,8 +63,6 @@ const SEARCHABLE_STATUSES = ['active', 'updated', 'review'];
 // legacy documents until reindex. See product-search-fields.ts.
 const PRODUCT_QUERY_BY = PRODUCT_SEARCH_QUERY_BY;
 const PRODUCT_QUERY_BY_WEIGHTS = PRODUCT_SEARCH_QUERY_BY_WEIGHTS;
-const AUTOCOMPLETE_QUERY_BY = AUTOCOMPLETE_SEARCH_QUERY_BY;
-const AUTOCOMPLETE_QUERY_BY_WEIGHTS = AUTOCOMPLETE_SEARCH_QUERY_BY_WEIGHTS;
 const SEARCH_TYPO_TOKENS_MIN_LENGTH = 4;
 
 type ExpansionTierKey =
@@ -345,6 +341,142 @@ export class SearchService implements OnModuleInit {
   private isWildcardBrowseQuery(dto: SearchQueryDto): boolean {
     const q = typeof dto.q === 'string' ? dto.q.trim() : '';
     return !q || q === '*';
+  }
+
+  /**
+   * Exact id/sku lookup only when the full query is a single token that looks
+   * like an identifier (digits and/or SKU separators). Partial SKU matches
+   * must not surface products; plain name words skip this path.
+   */
+  private getExactIdentifierQuery(q?: string): string | null {
+    if (typeof q !== 'string') {
+      return null;
+    }
+
+    const trimmed = q.trim();
+    if (!trimmed || trimmed === '*' || /\s/.test(trimmed)) {
+      return null;
+    }
+
+    // IDs are numeric; SKUs typically include digits and/or -/_ separators.
+    if (!/^\d+$/.test(trimmed) && !/[\d_-]/.test(trimmed)) {
+      return null;
+    }
+
+    return trimmed;
+  }
+
+  private async findExactIdentifierProductId(
+    rawQuery: string,
+    dto: SearchQueryDto,
+    isAdmin: boolean,
+  ): Promise<number | null> {
+    const baseFilter = this.buildFilterDto(
+      { ...dto, q: undefined } as SearchQueryDto,
+      isAdmin,
+    );
+
+    if (/^\d+$/.test(rawQuery)) {
+      const id = Number(rawQuery);
+      if (Number.isSafeInteger(id) && id > 0) {
+        const byId = await this.productsService.findAll(
+          {
+            ...baseFilter,
+            page: 1,
+            limit: 1,
+            ids: [id],
+            search: undefined,
+            sku: undefined,
+            skipCount: true,
+            knownTotal: 1,
+          } as FindAllProductsOptions,
+          isAdmin,
+        );
+        const matched = byId.data?.[0];
+        if (matched && Number(matched.id) === id) {
+          return id;
+        }
+      }
+    }
+
+    const bySku = await this.productsService.findAll(
+      {
+        ...baseFilter,
+        page: 1,
+        limit: 1,
+        sku: rawQuery,
+        search: undefined,
+        ids: undefined,
+        skipCount: true,
+        knownTotal: 1,
+      } as FindAllProductsOptions,
+      isAdmin,
+    );
+    const skuMatch = bySku.data?.[0];
+    if (
+      skuMatch &&
+      typeof skuMatch.sku === 'string' &&
+      skuMatch.sku === rawQuery
+    ) {
+      return Number(skuMatch.id);
+    }
+
+    return null;
+  }
+
+  private async buildExactIdentifierSearchResponse(
+    productId: number,
+    dto: SearchQueryDto,
+    isAdmin: boolean,
+    fullResponse: boolean,
+  ): Promise<any> {
+    const perPage = (dto as any).per_page ?? (dto as any).limit ?? 20;
+    const page = dto.page ?? 1;
+    const startOffset = (page - 1) * perPage;
+
+    if (startOffset > 0) {
+      return {
+        data: [],
+        meta: {
+          total: 1,
+          page,
+          limit: perPage,
+          totalPages: 1,
+        },
+        facets: [],
+        search_time_ms: 0,
+      };
+    }
+
+    const result = await this.productsService.findAll(
+      {
+        ...this.buildFilterDto({ ...dto, q: undefined } as SearchQueryDto, isAdmin),
+        page: 1,
+        limit: 1,
+        ids: [productId],
+        search: undefined,
+        sku: undefined,
+        skipCount: true,
+        knownTotal: 1,
+      } as FindAllProductsOptions,
+      isAdmin,
+    );
+
+    const found = Array.isArray(result.data) && result.data.length > 0;
+
+    return {
+      data: found
+        ? this.mapSearchResults(result.data, [productId], fullResponse)
+        : [],
+      meta: {
+        total: found ? 1 : 0,
+        page,
+        limit: perPage,
+        totalPages: found ? 1 : 0,
+      },
+      facets: [],
+      search_time_ms: 0,
+    };
   }
 
   private shouldUseRandomBrowseSort(dto: SearchQueryDto, isAdmin = false): boolean {
@@ -3284,63 +3416,17 @@ export class SearchService implements OnModuleInit {
     return response;
   }
 
-  private async autocompleteWithTypesense(
-    dto: AutocompleteQueryDto,
-    isAdmin: boolean,
-  ): Promise<AutocompleteResponseDto> {
-    const filterBy = isAdmin
-      ? undefined
-      : `visible:=true && status:=[${SEARCHABLE_STATUSES.join(',')}] && is_out_of_stock:=false`;
-
-    const result = await this.typesenseService.search({
-      q: normalizeSearchQuery(dto.q),
-      query_by: AUTOCOMPLETE_QUERY_BY,
-      query_by_weights: AUTOCOMPLETE_QUERY_BY_WEIGHTS,
-      text_match_type: 'max_weight',
-      prioritize_token_position: true,
-      ...(filterBy ? { filter_by: filterBy } : {}),
-      // Must lead with relevance, same as the main search path — sorting by
-      // created_at_ts alone (as this used to) ignores how well the query
-      // actually matched and surfaces recently-added, loosely-matching
-      // products ahead of exact/early-position matches.
-      sort_by: '_text_match:desc,created_at_ts:desc',
-      page: 1,
-      per_page: dto.per_page ?? 8,
-    });
-
-    const hits = Array.isArray(result.hits) ? result.hits : [];
-    const productIds = hits
-      .map((hit: any) => Number(hit?.document?.id))
-      .filter((id) => Number.isInteger(id) && id > 0);
-    const imageUrlsByProductId =
-      await this.productsService.findPrimaryImageUrlsByProductIds(productIds);
-
-    return {
-      suggestions: hits
-        .map((hit: any) => {
-          const productId = Number(hit?.document?.id);
-          if (!Number.isInteger(productId) || productId <= 0 || !hit?.document) {
-            return null;
-          }
-
-          const card = this.mapTypesenseDocumentToSearchCard(
-            hit.document,
-            imageUrlsByProductId.get(productId),
-          );
-
-          return {
-            id: String(card.id),
-            slug: card.slug,
-            name_en: card.name_en,
-            name_ar: card.name_ar,
-            image: card.images?.[0],
-            price_min: card.sale_price ?? card.price,
-          };
-        })
-        .filter((suggestion): suggestion is NonNullable<typeof suggestion> =>
-          Boolean(suggestion),
-        ),
-    };
+  private mapSearchCardsToAutocompleteSuggestions(
+    cards: any[],
+  ): AutocompleteResponseDto['suggestions'] {
+    return cards.map((product: any) => ({
+      id: String(product.id),
+      slug: product.slug,
+      name_en: product.name_en,
+      name_ar: product.name_ar,
+      image: product.images?.[0],
+      price_min: product.sale_price ?? product.price,
+    }));
   }
 
   private logTypesenseFallback(params: {
@@ -3376,6 +3462,40 @@ export class SearchService implements OnModuleInit {
       this.searchProvider === 'typesense' &&
       this.typesenseService.isEnabled() &&
       !hasUnsupportedFilters;
+
+    const exactIdentifierQuery = this.getExactIdentifierQuery(dto.q);
+    if (exactIdentifierQuery) {
+      const exactProductId = await this.findExactIdentifierProductId(
+        exactIdentifierQuery,
+        preparedDto,
+        isAdmin,
+      );
+      if (exactProductId != null) {
+        const exactResponse = await this.buildExactIdentifierSearchResponse(
+          exactProductId,
+          preparedDto,
+          isAdmin,
+          fullResponse,
+        );
+        if (debugSearchEnabled) {
+          await this.writeSearchDebugLog({
+            kind: 'search',
+            provider: 'exact-identifier',
+            query: exactIdentifierQuery,
+            page: preparedDto.page ?? 1,
+            limit:
+              (preparedDto as any).per_page ?? (preparedDto as any).limit ?? 20,
+            expansion_applied: false,
+            reason: 'exact_id_or_sku_match',
+            response_total: exactResponse.meta?.total,
+            response_count: Array.isArray(exactResponse.data)
+              ? exactResponse.data.length
+              : 0,
+          });
+        }
+        return exactResponse;
+      }
+    }
 
     // The cache key's query text must match what will actually be searched.
     // This only matters for the non-random-browse Typesense path, since
@@ -3504,6 +3624,7 @@ export class SearchService implements OnModuleInit {
     dto: AutocompleteQueryDto,
     isAdmin = false,
   ): Promise<AutocompleteResponseDto> {
+    const perPage = dto.per_page ?? 8;
     const willUseTypesense =
       this.searchProvider === 'typesense' && this.typesenseService.isEnabled();
     // Same reasoning as search(): only normalize the cache key's query text
@@ -3511,51 +3632,30 @@ export class SearchService implements OnModuleInit {
     const cacheQ = willUseTypesense ? normalizeSearchQuery(dto.q) : dto.q;
     const cacheKey = await this.searchCacheService.buildCacheKey(
       'autocomplete',
-      `${cacheQ}:${dto.per_page}`,
+      `${cacheQ}:${perPage}`,
     );
     const cached =
       await this.cacheManager.get<AutocompleteResponseDto>(cacheKey);
     if (cached) return cached;
 
-    let response: AutocompleteResponseDto | null = null;
-
-    if (willUseTypesense) {
-      try {
-        response = await this.autocompleteWithTypesense(dto, isAdmin);
-      } catch (error) {
-        this.logTypesenseFallback({
-          path: 'autocomplete',
-          error,
-          query: dto.q,
-        });
-      }
-    }
-
-    if (!response) {
-      const perPage = dto.per_page ?? 8;
-      const result = await this.productsService.findAll({
+    // Reuse the full search pipeline (fields, typos, expansion, exact id/sku)
+    // so dropdown suggestions match the first page of /search for the same q.
+    const searchResult = await this.search(
+      {
+        q: dto.q,
         page: 1,
-        limit: perPage,
-        search: dto.q,
-        in_stock: isAdmin ? undefined : true,
-        visible: isAdmin ? undefined : true,
-        sortBy: ProductSortBy.CREATED_AT,
-        sortOrder: SortOrder.DESC,
-      }, isAdmin);
+        per_page: perPage,
+        include_facets: false,
+      } as SearchQueryDto,
+      isAdmin,
+      false,
+    );
 
-      response = {
-        suggestions: this.mapProductsToSearchCards(result.data ?? []).map((product: any) => {
-          return {
-            id: String(product.id),
-            slug: product.slug,
-            name_en: product.name_en,
-            name_ar: product.name_ar,
-            image: product.images?.[0],
-            price_min: product.sale_price ?? product.price,
-          };
-        }),
-      };
-    }
+    const response: AutocompleteResponseDto = {
+      suggestions: this.mapSearchCardsToAutocompleteSuggestions(
+        Array.isArray(searchResult?.data) ? searchResult.data : [],
+      ),
+    };
 
     await this.cacheManager.set(cacheKey, response, 60 * 1000);
     return response;

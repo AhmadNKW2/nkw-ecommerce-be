@@ -1,6 +1,6 @@
 import { SearchService } from './search.service';
 import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
-import { PRODUCT_SEARCH_QUERY_BY_WEIGHTS } from '../typesense/product-search-fields';
+import { PRODUCT_SEARCH_QUERY_BY, PRODUCT_SEARCH_QUERY_BY_WEIGHTS } from '../typesense/product-search-fields';
 
 function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: Array<{ id: number; slug: string }> = []) {
   const typesenseSearch = jest.fn().mockResolvedValue(searchResult);
@@ -88,7 +88,7 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
     expect(params.query_by).toContain('long_description_en');
     expect(params.query_by).toContain('name_ar');
     expect(params.query_by).toContain('name_en');
-    expect(params.query_by).toContain('sku');
+    expect(params.query_by).not.toContain('sku');
   });
 
   it('applies default SEARCHABLE_STATUSES filter for admin search too', async () => {
@@ -276,7 +276,7 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     expect(params.sort_by).toBe('_text_match:desc,created_at_ts:desc');
   });
 
-  it('sends explicit query_by_weights on the autocomplete call matching the name > sku > slug priority', async () => {
+  it('uses the same Typesense query fields for autocomplete as full search', async () => {
     const { service, typesenseSearch } = makeService();
     const dto: AutocompleteQueryDto = { q: 'tab' } as AutocompleteQueryDto;
 
@@ -287,8 +287,118 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     const weights = params.query_by_weights.split(',').map(Number);
     const weightOf = (fieldName: string) => weights[fields.indexOf(fieldName)];
 
-    expect(weightOf('name_en')).toBeGreaterThan(weightOf('sku'));
-    expect(weightOf('sku')).toBeGreaterThan(weightOf('slug'));
+    expect(params.query_by).toBe(PRODUCT_SEARCH_QUERY_BY);
+    expect(params.query_by_weights).toBe(PRODUCT_SEARCH_QUERY_BY_WEIGHTS);
+    expect(fields).not.toContain('sku');
+    expect(fields).toContain('short_description_en');
+    expect(weightOf('name_en')).toBeGreaterThan(weightOf('slug'));
+  });
+
+  it('returns the same product ids as the first page of search', async () => {
+    const hits = [
+      { document: { id: 11, name_en: 'A', name_ar: 'A', price: 1, is_out_of_stock: false } },
+      { document: { id: 22, name_en: 'B', name_ar: 'B', price: 2, is_out_of_stock: false } },
+      { document: { id: 33, name_en: 'C', name_ar: 'C', price: 3, is_out_of_stock: false } },
+    ];
+    const { service } = makeService({ hits, found: 3 });
+
+    const [searchResponse, autocompleteResponse] = await Promise.all([
+      service.search({ q: 'tab', page: 1, per_page: 8 } as SearchQueryDto, false, false),
+      service.autocomplete({ q: 'tab', per_page: 8 } as AutocompleteQueryDto, false),
+    ]);
+
+    expect(autocompleteResponse.suggestions.map((item) => item.id)).toEqual(
+      (searchResponse.data ?? []).map((item: { id: string }) => String(item.id)),
+    );
+  });
+
+  it('returns only the exact id match and skips Typesense fuzzy search', async () => {
+    const { service, typesenseSearch, productsService } = makeService();
+    productsService.findAll = jest
+      .fn()
+      .mockResolvedValueOnce({
+        data: [{ id: 4899, sku: 'OTHER', name_en: 'By Id', name_ar: 'By Id' }],
+        meta: { total: 1 },
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 4899,
+            sku: 'OTHER',
+            name_en: 'By Id',
+            name_ar: 'By Id',
+            price: 10,
+            quantity: 1,
+            is_out_of_stock: false,
+            media: [],
+          },
+        ],
+        meta: { total: 1 },
+      });
+
+    const response = await service.search({ q: '4899' } as SearchQueryDto, false, false);
+
+    expect(typesenseSearch).not.toHaveBeenCalled();
+    expect(response.meta.total).toBe(1);
+    expect(response.data).toHaveLength(1);
+    expect(response.data[0].id).toBe('4899');
+  });
+
+  it('returns only the exact sku match and skips Typesense fuzzy search', async () => {
+    const { service, typesenseSearch, productsService } = makeService();
+    productsService.findAll = jest
+      .fn()
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 77,
+            sku: 'EXACT-SKU-77',
+            name_en: 'By Sku',
+            name_ar: 'By Sku',
+          },
+        ],
+        meta: { total: 1 },
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 77,
+            sku: 'EXACT-SKU-77',
+            name_en: 'By Sku',
+            name_ar: 'By Sku',
+            price: 20,
+            quantity: 2,
+            is_out_of_stock: false,
+            media: [],
+          },
+        ],
+        meta: { total: 1 },
+      });
+
+    const response = await service.search(
+      { q: 'EXACT-SKU-77' } as SearchQueryDto,
+      false,
+      false,
+    );
+
+    expect(typesenseSearch).not.toHaveBeenCalled();
+    expect(response.meta.total).toBe(1);
+    expect(response.data).toHaveLength(1);
+    expect(response.data[0].id).toBe('77');
+  });
+
+  it('does not treat partial sku-like queries as exact identifier matches', async () => {
+    const { service, typesenseSearch, productsService } = makeService();
+    productsService.findAll = jest.fn().mockResolvedValue({ data: [], meta: {} });
+
+    await service.search({ q: 'EXACT-SKU' } as SearchQueryDto, false, false);
+
+    // Exact lookup runs once (sku miss), then Typesense handles fuzzy name search.
+    expect(productsService.findAll).toHaveBeenCalled();
+    expect(typesenseSearch).toHaveBeenCalled();
+    const params = typesenseSearch.mock.calls[0][0];
+    expect(params.q).toBe('EXACT-SKU');
+    expect(params.query_by).not.toContain('sku');
   });
 
   it('still routes the random-browse (wildcard) path through Typesense, and applies the same relevance params', async () => {
@@ -357,7 +467,9 @@ describe('SearchService — cache key normalization', () => {
     await service.autocomplete({ q: 'أحمد' } as AutocompleteQueryDto, false);
     await service.autocomplete({ q: 'احمد' } as AutocompleteQueryDto, false);
 
-    expect(setKeys[0]).toBe(setKeys[1]);
+    const autocompleteKeys = setKeys.filter((key) => key.startsWith('autocomplete:'));
+    expect(autocompleteKeys).toHaveLength(2);
+    expect(autocompleteKeys[0]).toBe(autocompleteKeys[1]);
   });
 
   it('keeps distinct autocomplete cache entries for different raw queries when falling back to DB', async () => {
@@ -373,7 +485,11 @@ describe('SearchService — cache key normalization', () => {
     await service.autocomplete({ q: 'أحمد' } as AutocompleteQueryDto, false);
     await service.autocomplete({ q: 'احمد' } as AutocompleteQueryDto, false);
 
-    expect(setKeys[0]).not.toBe(setKeys[1]);
+    const autocompleteKeys = setKeys.filter((key) => key.startsWith('autocomplete:'));
+    expect(autocompleteKeys).toHaveLength(2);
+    // DB path uses raw ILIKE against unnormalized columns, so these two
+    // different raw queries must NOT share a cache entry.
+    expect(autocompleteKeys[0]).not.toBe(autocompleteKeys[1]);
   });
 });
 
