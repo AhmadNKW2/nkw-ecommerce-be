@@ -25,6 +25,11 @@ class UpdateOrderItemEntry {
   @IsNumber()
   @Min(0)
   cost?: number;
+
+  /** Optional vendor override for this line item. */
+  @IsOptional()
+  @IsNumber()
+  vendorId?: number;
 }
 
 export class UpdateOrderDto {
@@ -59,7 +64,7 @@ export class UpdateOrderDto {
   @IsDateString()
   orderDate?: string;
 
-  /** Update per-line price/cost without changing the linked product. */
+  /** Update per-line price/cost/vendor without changing the linked product. */
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

@@ -32,6 +32,7 @@ import { resolveWalletPayment } from './utils/wallet-payment.util';
 import { SettingsService } from '../settings/settings.service';
 import { calculateOrderShippingAmount } from '../settings/delivery-fee.util';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
+import { Vendor } from '../vendors/entities/vendor.entity';
 
 // ... imports
 
@@ -576,10 +577,24 @@ export class OrdersService implements OnModuleInit {
         const itemTotal = unitPrice * itemDto.quantity;
         subtotalAmount += itemTotal;
 
+        const vendorId =
+          itemDto.vendorId !== undefined && itemDto.vendorId !== null
+            ? Number(itemDto.vendorId)
+            : product.vendor_id ?? null;
+
+        if (vendorId != null) {
+          const vendor = await queryRunner.manager.findOne(Vendor, {
+            where: { id: vendorId },
+          });
+          if (!vendor) {
+            throw new NotFoundException(`Vendor #${vendorId} not found`);
+          }
+        }
+
         orderItemsToCreate.push({
           product,
           variantId: itemDto.variantId ?? null,
-          vendorId: product.vendor_id,
+          vendorId,
           quantity: itemDto.quantity,
           price: unitPrice,
           cost: itemDto.cost ?? product.cost ?? 0,
@@ -723,6 +738,17 @@ export class OrdersService implements OnModuleInit {
         if (entry.cost !== undefined) {
           item.cost = entry.cost;
         }
+        if (entry.vendorId !== undefined) {
+          if (entry.vendorId !== null) {
+            const vendor = await this.dataSource.manager.findOne(Vendor, {
+              where: { id: entry.vendorId },
+            });
+            if (!vendor) {
+              throw new NotFoundException(`Vendor #${entry.vendorId} not found`);
+            }
+          }
+          item.vendorId = entry.vendorId;
+        }
 
         toSave.push(item);
         subtotalAmount += Number(item.price) * item.quantity;
@@ -796,6 +822,7 @@ export class OrdersService implements OnModuleInit {
           product: {
             productMedia: { media: true },
           },
+          vendor: true,
         },
         user: true,
         statusHistory: true,
@@ -832,6 +859,7 @@ export class OrdersService implements OnModuleInit {
       .leftJoinAndSelect('order.user', 'user')
       .leftJoinAndSelect('order.items', 'items')
       .leftJoinAndSelect('items.product', 'product')
+      .leftJoinAndSelect('items.vendor', 'vendor')
       .leftJoinAndSelect('product.productMedia', 'productMedia')
       .leftJoinAndSelect('productMedia.media', 'media')
       .skip(skip)

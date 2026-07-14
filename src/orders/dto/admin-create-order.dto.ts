@@ -36,6 +36,11 @@ class AdminOrderItemDto {
   @IsNumber()
   @Min(0)
   cost?: number;
+
+  /** Optional vendor override; defaults to the product's vendor. */
+  @IsOptional()
+  @IsNumber()
+  vendorId?: number;
 }
 
 export class AdminCreateOrderDto {
