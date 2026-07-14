@@ -1086,6 +1086,70 @@ export class OrdersService implements OnModuleInit {
     };
   }
 
+  /**
+   * Aggregate admin dashboard stats across all matching orders (not page-scoped).
+   * Revenue/profit are based on delivered orders only:
+   * - revenue = Σ(price × quantity)
+   * - profit  = Σ((price − cost) × quantity)
+   */
+  async getAdminStats(filterDto: FilterOrderDto) {
+    const { search, userId } = filterDto;
+
+    const applySharedFilters = (
+      qb: ReturnType<Repository<Order>['createQueryBuilder']>,
+      alias = 'ord',
+    ) => {
+      if (userId) {
+        qb.andWhere(`${alias}.userId = :userId`, { userId });
+      }
+      if (search) {
+        qb.leftJoin(`${alias}.user`, 'statsUser').andWhere(
+          `(CAST(${alias}.id AS TEXT) LIKE :search OR statsUser.email ILIKE :search OR statsUser.firstName ILIKE :search)`,
+          { search: `%${search}%` },
+        );
+      }
+      return qb;
+    };
+
+    const statusCounts = await applySharedFilters(
+      this.ordersRepository
+        .createQueryBuilder('ord')
+        .select('ord.status', 'status')
+        .addSelect('COUNT(ord.id)', 'count')
+        .groupBy('ord.status'),
+    ).getRawMany<{ status: string; count: string }>();
+
+    const countsByStatus = Object.fromEntries(
+      statusCounts.map((row) => [row.status, Number(row.count) || 0]),
+    ) as Record<string, number>;
+
+    const financials = await applySharedFilters(
+      this.ordersRepository
+        .createQueryBuilder('ord')
+        .innerJoin('ord.items', 'items')
+        .where('ord.status = :deliveredStatus', {
+          deliveredStatus: OrderStatus.DELIVERED,
+        })
+        .select(
+          'COALESCE(SUM(CAST(items.price AS decimal) * items.quantity), 0)',
+          'revenue',
+        )
+        .addSelect(
+          'COALESCE(SUM((CAST(items.price AS decimal) - COALESCE(CAST(items.cost AS decimal), 0)) * items.quantity), 0)',
+          'profit',
+        ),
+    ).getRawOne<{ revenue: string; profit: string }>();
+
+    return {
+      pendingCount: countsByStatus[OrderStatus.PENDING] || 0,
+      deliveredCount: countsByStatus[OrderStatus.DELIVERED] || 0,
+      cancelledCount: countsByStatus[OrderStatus.CANCELLED] || 0,
+      refundedCount: countsByStatus[OrderStatus.REFUNDED] || 0,
+      revenue: Number(financials?.revenue ?? 0),
+      profit: Number(financials?.profit ?? 0),
+    };
+  }
+
   async cancel(id: number, userId: number) {
     const order = await this.findOne(id);
     if (order.userId !== userId) {

@@ -46,6 +46,13 @@ export class OrdersController {
     return this.ordersService.findAllAdmin(filterDto);
   }
 
+  @Get('admin/stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  getAdminStats(@Query() filterDto: FilterOrderDto) {
+    return this.ordersService.getAdminStats(filterDto);
+  }
+
   @Get()
   @UseGuards(JwtAuthGuard)
   findAll(@Request() req) {
