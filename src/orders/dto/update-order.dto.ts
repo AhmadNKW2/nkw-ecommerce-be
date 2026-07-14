@@ -12,38 +12,46 @@ import { Type } from 'class-transformer';
 import { OrderStatus, PaymentMethod } from '../entities/order.entity';
 import { AddressDto } from './create-order.dto';
 
-class UpdateOrderItemEntry {
+/** Exported so ValidationPipe whitelist metadata is preserved for nested items. */
+export class UpdateOrderItemEntry {
   /** Existing line item id. Omit when adding a new product to the order. */
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   itemId?: number;
 
   /** Required when adding a new line (no itemId). Optional when updating an existing line. */
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   productId?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   variantId?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(1)
   quantity?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   price?: number;
 
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   @Min(0)
   cost?: number;
 
   /** Optional vendor override for this line item. */
   @IsOptional()
+  @Type(() => Number)
   @IsNumber()
   vendorId?: number;
 }

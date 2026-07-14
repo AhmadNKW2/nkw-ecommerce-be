@@ -910,8 +910,8 @@ export class OrdersService implements OnModuleInit {
           const created = queryRunner.manager.create(OrderItem, {
             orderId,
             productId: entry.productId,
-            variantId: entry.variantId ?? null,
-            vendorId,
+            variantId: entry.variantId,
+            vendorId: vendorId ?? undefined,
             quantity,
             price: unitPrice,
             cost: unitCost,
