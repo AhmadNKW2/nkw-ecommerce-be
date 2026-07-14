@@ -1046,16 +1046,16 @@ export class OrdersService implements OnModuleInit {
       .leftJoinAndSelect('items.vendor', 'vendor')
       .leftJoinAndSelect('product.productMedia', 'productMedia')
       .leftJoinAndSelect('productMedia.media', 'media')
-      .skip(skip)
-      .take(limit)
-      // Keep cancelled orders at the bottom; newest non-cancelled first.
-      // Parentheses prevent TypeORM from parsing the CASE expression as an alias path.
-      .orderBy(
-        `(CASE WHEN ord.status = :cancelledStatus THEN 1 ELSE 0 END)`,
-        'ASC',
+      // Select a sort key (no "." in the orderBy name — TypeORM treats pre-dot text as an alias).
+      .addSelect(
+        `CASE WHEN ord.status = :cancelledStatus THEN 1 ELSE 0 END`,
+        'cancelled_sort_key',
       )
+      .setParameter('cancelledStatus', OrderStatus.CANCELLED)
+      .orderBy('cancelled_sort_key', 'ASC')
       .addOrderBy('ord.createdAt', 'DESC')
-      .setParameter('cancelledStatus', OrderStatus.CANCELLED);
+      .skip(skip)
+      .take(limit);
 
     if (status) {
       query.andWhere('ord.status = :status', { status });
