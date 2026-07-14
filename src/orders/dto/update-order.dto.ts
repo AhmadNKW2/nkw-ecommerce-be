@@ -13,8 +13,24 @@ import { OrderStatus, PaymentMethod } from '../entities/order.entity';
 import { AddressDto } from './create-order.dto';
 
 class UpdateOrderItemEntry {
+  /** Existing line item id. Omit when adding a new product to the order. */
+  @IsOptional()
   @IsNumber()
-  itemId: number;
+  itemId?: number;
+
+  /** Required when adding a new line (no itemId). Optional when updating an existing line. */
+  @IsOptional()
+  @IsNumber()
+  productId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  variantId?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  quantity?: number;
 
   @IsOptional()
   @IsNumber()
@@ -64,7 +80,12 @@ export class UpdateOrderDto {
   @IsDateString()
   orderDate?: string;
 
-  /** Update per-line price/cost/vendor without changing the linked product. */
+  /**
+   * Full desired line-item list for the order.
+   * - Entries with `itemId` update that line (qty/price/cost/vendor/product).
+   * - Entries without `itemId` add a new line (`productId` + `quantity` required).
+   * - Existing lines omitted from the list are removed.
+   */
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })

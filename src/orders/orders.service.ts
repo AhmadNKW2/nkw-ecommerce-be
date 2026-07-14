@@ -718,59 +718,13 @@ export class OrdersService implements OnModuleInit {
       fieldsToUpdate.paymentMethod = dto.paymentMethod;
     }
 
-    if (dto.items?.length) {
-      const itemMap = new Map(existingOrder.items.map((i) => [i.id, i]));
-      const toSave: OrderItem[] = [];
-      let subtotalAmount = 0;
-
-      for (const entry of dto.items) {
-        const item = itemMap.get(entry.itemId);
-        if (!item) {
-          throw new NotFoundException(
-            `Order item #${entry.itemId} not found in order #${id}`,
-          );
-        }
-
-        if (entry.price !== undefined) {
-          item.price = entry.price;
-          item.totalPrice = entry.price * item.quantity;
-        }
-        if (entry.cost !== undefined) {
-          item.cost = entry.cost;
-        }
-        if (entry.vendorId !== undefined) {
-          if (entry.vendorId !== null) {
-            const vendor = await this.dataSource.manager.findOne(Vendor, {
-              where: { id: entry.vendorId },
-            });
-            if (!vendor) {
-              throw new NotFoundException(`Vendor #${entry.vendorId} not found`);
-            }
-          }
-          item.vendorId = entry.vendorId;
-        }
-
-        toSave.push(item);
-        subtotalAmount += Number(item.price) * item.quantity;
-      }
-
-      await this.orderItemsRepository.save(toSave);
-
-      const shippingAmount =
-        dto.shippingAmount !== undefined
-          ? Number(dto.shippingAmount)
-          : Number(existingOrder.shippingAmount);
-      const discountAmount =
-        dto.discountAmount !== undefined
-          ? Number(dto.discountAmount)
-          : Number(existingOrder.discountAmount);
-      const taxAmount = Number(existingOrder.taxAmount ?? 0);
-
-      fieldsToUpdate.subtotalAmount = subtotalAmount;
-      fieldsToUpdate.shippingAmount = shippingAmount;
-      fieldsToUpdate.discountAmount = discountAmount;
-      fieldsToUpdate.totalAmount =
-        subtotalAmount + taxAmount + shippingAmount - discountAmount;
+    if (dto.items !== undefined) {
+      const itemSync = await this.syncOrderItems(id, existingOrder, dto.items, {
+        shippingAmount: dto.shippingAmount,
+        discountAmount: dto.discountAmount,
+        status: dto.status,
+      });
+      Object.assign(fieldsToUpdate, itemSync);
     } else if (
       dto.shippingAmount !== undefined ||
       dto.discountAmount !== undefined
@@ -797,6 +751,236 @@ export class OrdersService implements OnModuleInit {
     }
 
     return this.findOne(id);
+  }
+
+  /**
+   * Replace the order's line items with the desired list from an admin update.
+   * Adjusts product stock for active (non-cancelled/refunded) orders.
+   */
+  private async syncOrderItems(
+    orderId: number,
+    existingOrder: Order,
+    entries: NonNullable<UpdateOrderDto['items']>,
+    amounts: {
+      shippingAmount?: number;
+      discountAmount?: number;
+      status?: OrderStatus;
+    },
+  ): Promise<Record<string, number>> {
+    if (!entries.length) {
+      throw new BadRequestException('Order must have at least one item');
+    }
+
+    const effectiveStatus = amounts.status ?? existingOrder.status;
+    const shouldAdjustStock =
+      effectiveStatus !== OrderStatus.CANCELLED &&
+      effectiveStatus !== OrderStatus.REFUNDED;
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const existingItems = await queryRunner.manager.find(OrderItem, {
+        where: { orderId },
+      });
+      const existingById = new Map(existingItems.map((item) => [item.id, item]));
+      const keptIds = new Set<number>();
+      const stockDelta = new Map<number, number>();
+
+      const bumpStock = (productId: number | null | undefined, delta: number) => {
+        if (!shouldAdjustStock || productId == null || delta === 0) return;
+        stockDelta.set(productId, (stockDelta.get(productId) || 0) + delta);
+      };
+
+      const ensureVendor = async (vendorId: number | null | undefined) => {
+        if (vendorId == null) return;
+        const vendor = await queryRunner.manager.findOne(Vendor, {
+          where: { id: vendorId },
+        });
+        if (!vendor) {
+          throw new NotFoundException(`Vendor #${vendorId} not found`);
+        }
+      };
+
+      const loadProduct = async (productId: number) => {
+        const product = await queryRunner.manager.findOne(Product, {
+          where: { id: productId },
+        });
+        if (!product) {
+          throw new NotFoundException(`Product #${productId} not found`);
+        }
+        return product;
+      };
+
+      const toSave: OrderItem[] = [];
+      let subtotalAmount = 0;
+
+      for (const entry of entries) {
+        if (entry.itemId != null) {
+          const item = existingById.get(entry.itemId);
+          if (!item) {
+            throw new NotFoundException(
+              `Order item #${entry.itemId} not found in order #${orderId}`,
+            );
+          }
+          keptIds.add(item.id);
+
+          const previousProductId = item.productId;
+          const previousQuantity = item.quantity;
+          const nextProductId = entry.productId ?? item.productId;
+          const nextQuantity = entry.quantity ?? item.quantity;
+
+          if (!nextProductId) {
+            throw new BadRequestException(
+              `Product is required for order item #${entry.itemId}`,
+            );
+          }
+          if (nextQuantity < 1) {
+            throw new BadRequestException(
+              `Quantity must be at least 1 for order item #${entry.itemId}`,
+            );
+          }
+
+          let productSnapshot = item.productSnapshot;
+          if (nextProductId !== previousProductId) {
+            const product = await loadProduct(nextProductId);
+            productSnapshot = {
+              name_en: product.name_en,
+              name_ar: product.name_ar,
+              sku: product.sku,
+            };
+            if (entry.vendorId === undefined && item.vendorId == null) {
+              item.vendorId = product.vendor_id ?? null;
+            }
+            bumpStock(previousProductId, previousQuantity);
+            bumpStock(nextProductId, -nextQuantity);
+          } else if (nextQuantity !== previousQuantity) {
+            bumpStock(previousProductId, previousQuantity - nextQuantity);
+          }
+
+          if (entry.price !== undefined) {
+            item.price = entry.price;
+          }
+          if (entry.cost !== undefined) {
+            item.cost = entry.cost;
+          }
+          if (entry.vendorId !== undefined) {
+            await ensureVendor(entry.vendorId);
+            item.vendorId = entry.vendorId;
+          }
+          if (entry.variantId !== undefined) {
+            item.variantId = entry.variantId;
+          }
+
+          item.productId = nextProductId;
+          item.quantity = nextQuantity;
+          item.productSnapshot = productSnapshot;
+          item.totalPrice = Number(item.price) * nextQuantity;
+          toSave.push(item);
+          subtotalAmount += Number(item.price) * nextQuantity;
+        } else {
+          if (entry.productId == null) {
+            throw new BadRequestException(
+              'productId is required when adding a new order item',
+            );
+          }
+          const quantity = entry.quantity ?? 1;
+          if (quantity < 1) {
+            throw new BadRequestException('Quantity must be at least 1');
+          }
+
+          const product = await loadProduct(entry.productId);
+          const unitPrice =
+            entry.price != null
+              ? Number(entry.price)
+              : product.sale_price !== null && Number(product.sale_price) > 0
+                ? Number(product.sale_price)
+                : Number(product.price);
+          const unitCost =
+            entry.cost != null ? Number(entry.cost) : Number(product.cost ?? 0);
+          const vendorId =
+            entry.vendorId !== undefined
+              ? entry.vendorId
+              : (product.vendor_id ?? null);
+          await ensureVendor(vendorId);
+
+          bumpStock(entry.productId, -quantity);
+
+          const created = queryRunner.manager.create(OrderItem, {
+            orderId,
+            productId: entry.productId,
+            variantId: entry.variantId ?? null,
+            vendorId,
+            quantity,
+            price: unitPrice,
+            cost: unitCost,
+            totalPrice: unitPrice * quantity,
+            productSnapshot: {
+              name_en: product.name_en,
+              name_ar: product.name_ar,
+              sku: product.sku,
+            },
+          });
+          toSave.push(created);
+          subtotalAmount += unitPrice * quantity;
+        }
+      }
+
+      for (const existing of existingItems) {
+        if (!keptIds.has(existing.id)) {
+          bumpStock(existing.productId, existing.quantity);
+          await queryRunner.manager.delete(OrderItem, { id: existing.id });
+        }
+      }
+
+      const productIds = [...stockDelta.keys()].sort((a, b) => a - b);
+      for (const productId of productIds) {
+        const delta = stockDelta.get(productId) || 0;
+        const product = await queryRunner.manager.findOne(Product, {
+          where: { id: productId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!product) {
+          throw new NotFoundException(`Product #${productId} not found`);
+        }
+        const nextQty = Number(product.quantity ?? 0) + delta;
+        if (nextQty < 0) {
+          throw new BadRequestException(
+            `Insufficient stock for product ${product.name_en}`,
+          );
+        }
+        product.quantity = nextQty;
+        product.is_out_of_stock = nextQty === 0;
+        await queryRunner.manager.save(Product, product);
+      }
+
+      await queryRunner.manager.save(OrderItem, toSave);
+
+      const shippingAmount =
+        amounts.shippingAmount !== undefined
+          ? Number(amounts.shippingAmount)
+          : Number(existingOrder.shippingAmount);
+      const discountAmount =
+        amounts.discountAmount !== undefined
+          ? Number(amounts.discountAmount)
+          : Number(existingOrder.discountAmount);
+      const taxAmount = Number(existingOrder.taxAmount ?? 0);
+
+      await queryRunner.commitTransaction();
+
+      return {
+        subtotalAmount,
+        shippingAmount,
+        discountAmount,
+        totalAmount: subtotalAmount + taxAmount + shippingAmount - discountAmount,
+      };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   /**
