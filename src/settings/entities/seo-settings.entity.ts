@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import type { ShippingDeliveryRule } from '../shipping-delivery-rule';
 
 @Entity('seo_settings')
 export class SeoSettings {
@@ -126,95 +127,63 @@ export class SeoSettings {
   @Column({ type: 'int', default: 10 })
   low_stock_threshold: number;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ type: 'boolean', default: false })
   shipping_rules_enabled: boolean;
 
   @Column({ type: 'int', default: 14 })
   shipping_cutoff_hour: number;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'Order by {time} (Sun–Thu)',
-  })
-  shipping_rule_1_when_en: string;
+  /** Dynamic delivery rules evaluated on the storefront (Amman time). */
+  @Column({ type: 'jsonb', default: () => "'[]'" })
+  shipping_rules: ShippingDeliveryRule[];
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'اطلب قبل {time} (الأحد–الخميس)',
-  })
-  shipping_rule_1_when_ar: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_1_when_en: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'Arrives tomorrow',
-  })
-  shipping_rule_1_arrives_en: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_1_when_ar: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'يصل غداً',
-  })
-  shipping_rule_1_arrives_ar: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_1_arrives_en: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'Order after {time} (Sun–Wed)',
-  })
-  shipping_rule_2_when_en: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_1_arrives_ar: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'اطلب بعد {time} (الأحد–الأربعاء)',
-  })
-  shipping_rule_2_when_ar: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_2_when_en: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'Arrives in 2 days',
-  })
-  shipping_rule_2_arrives_en: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_2_when_ar: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'يصل خلال يومين',
-  })
-  shipping_rule_2_arrives_ar: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_2_arrives_en: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'Order Thu after cutoff, Fri, or Sat',
-  })
-  shipping_rule_3_when_en: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_2_arrives_ar: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'اطلب بعد الموعد يوم الخميس أو الجمعة أو السبت',
-  })
-  shipping_rule_3_when_ar: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_3_when_en: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'Arrives Sunday',
-  })
-  shipping_rule_3_arrives_en: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_3_when_ar: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    default: 'يصل يوم الأحد',
-  })
-  shipping_rule_3_arrives_ar: string;
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_3_arrives_en: string | null;
+
+  /** @deprecated Kept for DB compatibility; unused by admin/storefront. */
+  @Column({ type: 'varchar', length: 255, default: '', nullable: true })
+  shipping_rule_3_arrives_ar: string | null;
 
   @CreateDateColumn()
   created_at: Date;

@@ -620,14 +620,15 @@ export class SettingsService implements OnModuleInit {
 
       const shippingRuleColumns: Array<{
         name: string;
-        type: 'boolean' | 'int' | 'varchar';
+        type: 'boolean' | 'int' | 'varchar' | 'jsonb';
         length?: string;
+        isNullable?: boolean;
         default?: string | boolean | number;
       }> = [
         {
           name: 'shipping_rules_enabled',
           type: 'boolean',
-          default: true,
+          default: false,
         },
         {
           name: 'shipping_cutoff_hour',
@@ -635,76 +636,93 @@ export class SettingsService implements OnModuleInit {
           default: 14,
         },
         {
+          name: 'shipping_rules',
+          type: 'jsonb',
+          default: `'[]'`,
+        },
+        {
           name: 'shipping_rule_1_when_en',
           type: 'varchar',
           length: '255',
-          default: `'Order by {time} (Sun–Thu)'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_1_when_ar',
           type: 'varchar',
           length: '255',
-          default: `'اطلب قبل {time} (الأحد–الخميس)'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_1_arrives_en',
           type: 'varchar',
           length: '255',
-          default: `'Arrives tomorrow'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_1_arrives_ar',
           type: 'varchar',
           length: '255',
-          default: `'يصل غداً'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_2_when_en',
           type: 'varchar',
           length: '255',
-          default: `'Order after {time} (Sun–Wed)'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_2_when_ar',
           type: 'varchar',
           length: '255',
-          default: `'اطلب بعد {time} (الأحد–الأربعاء)'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_2_arrives_en',
           type: 'varchar',
           length: '255',
-          default: `'Arrives in 2 days'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_2_arrives_ar',
           type: 'varchar',
           length: '255',
-          default: `'يصل خلال يومين'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_3_when_en',
           type: 'varchar',
           length: '255',
-          default: `'Order Thu after cutoff, Fri, or Sat'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_3_when_ar',
           type: 'varchar',
           length: '255',
-          default: `'اطلب بعد الموعد يوم الخميس أو الجمعة أو السبت'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_3_arrives_en',
           type: 'varchar',
           length: '255',
-          default: `'Arrives Sunday'`,
+          isNullable: true,
+          default: `''`,
         },
         {
           name: 'shipping_rule_3_arrives_ar',
           type: 'varchar',
           length: '255',
-          default: `'يصل يوم الأحد'`,
+          isNullable: true,
+          default: `''`,
         },
       ];
 
@@ -715,6 +733,7 @@ export class SettingsService implements OnModuleInit {
               name: column.name,
               type: column.type,
               ...(column.length ? { length: column.length } : {}),
+              ...(column.isNullable ? { isNullable: true } : {}),
               ...(column.default !== undefined ? { default: column.default } : {}),
             }),
           );

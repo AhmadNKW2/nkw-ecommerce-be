@@ -1,6 +1,12 @@
+import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
   IsEmail,
+  IsIn,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
@@ -9,9 +15,42 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 const HEX_COLOR_PATTERN = /^#([0-9A-Fa-f]{6})$/;
+
+export class ShippingDeliveryRuleDto {
+  @IsString()
+  @MaxLength(64)
+  id: string;
+
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(7)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  days: number[];
+
+  @IsIn(['before', 'after', 'any'])
+  cutoffMode: 'before' | 'after' | 'any';
+
+  @IsIn(['offset_days', 'next_weekday'])
+  arrivalMode: 'offset_days' | 'next_weekday';
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(14)
+  arrivalOffsetDays?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  arrivalWeekday?: number;
+}
 
 export class UpdateSeoSettingsDto {
   @IsOptional()
@@ -174,62 +213,8 @@ export class UpdateSeoSettingsDto {
   shipping_cutoff_hour?: number;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_1_when_en?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_1_when_ar?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_1_arrives_en?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_1_arrives_ar?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_2_when_en?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_2_when_ar?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_2_arrives_en?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_2_arrives_ar?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_3_when_en?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_3_when_ar?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_3_arrives_en?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(255)
-  shipping_rule_3_arrives_ar?: string;
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ShippingDeliveryRuleDto)
+  shipping_rules?: ShippingDeliveryRuleDto[];
 }
