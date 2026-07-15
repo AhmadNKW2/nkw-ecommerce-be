@@ -618,6 +618,109 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      const shippingRuleColumns: Array<{
+        name: string;
+        type: 'boolean' | 'int' | 'varchar';
+        length?: string;
+        default?: string | boolean | number;
+      }> = [
+        {
+          name: 'shipping_rules_enabled',
+          type: 'boolean',
+          default: true,
+        },
+        {
+          name: 'shipping_cutoff_hour',
+          type: 'int',
+          default: 14,
+        },
+        {
+          name: 'shipping_rule_1_when_en',
+          type: 'varchar',
+          length: '255',
+          default: `'Order by {time} (Sun–Thu)'`,
+        },
+        {
+          name: 'shipping_rule_1_when_ar',
+          type: 'varchar',
+          length: '255',
+          default: `'اطلب قبل {time} (الأحد–الخميس)'`,
+        },
+        {
+          name: 'shipping_rule_1_arrives_en',
+          type: 'varchar',
+          length: '255',
+          default: `'Arrives tomorrow'`,
+        },
+        {
+          name: 'shipping_rule_1_arrives_ar',
+          type: 'varchar',
+          length: '255',
+          default: `'يصل غداً'`,
+        },
+        {
+          name: 'shipping_rule_2_when_en',
+          type: 'varchar',
+          length: '255',
+          default: `'Order after {time} (Sun–Wed)'`,
+        },
+        {
+          name: 'shipping_rule_2_when_ar',
+          type: 'varchar',
+          length: '255',
+          default: `'اطلب بعد {time} (الأحد–الأربعاء)'`,
+        },
+        {
+          name: 'shipping_rule_2_arrives_en',
+          type: 'varchar',
+          length: '255',
+          default: `'Arrives in 2 days'`,
+        },
+        {
+          name: 'shipping_rule_2_arrives_ar',
+          type: 'varchar',
+          length: '255',
+          default: `'يصل خلال يومين'`,
+        },
+        {
+          name: 'shipping_rule_3_when_en',
+          type: 'varchar',
+          length: '255',
+          default: `'Order Thu after cutoff, Fri, or Sat'`,
+        },
+        {
+          name: 'shipping_rule_3_when_ar',
+          type: 'varchar',
+          length: '255',
+          default: `'اطلب بعد الموعد يوم الخميس أو الجمعة أو السبت'`,
+        },
+        {
+          name: 'shipping_rule_3_arrives_en',
+          type: 'varchar',
+          length: '255',
+          default: `'Arrives Sunday'`,
+        },
+        {
+          name: 'shipping_rule_3_arrives_ar',
+          type: 'varchar',
+          length: '255',
+          default: `'يصل يوم الأحد'`,
+        },
+      ];
+
+      for (const column of shippingRuleColumns) {
+        if (!(await queryRunner.hasColumn('seo_settings', column.name))) {
+          missingColumns.push(
+            new TableColumn({
+              name: column.name,
+              type: column.type,
+              ...(column.length ? { length: column.length } : {}),
+              ...(column.default !== undefined ? { default: column.default } : {}),
+            }),
+          );
+        }
+      }
+
       if (!(await queryRunner.hasColumn('seo_settings', 'site_logo'))) {
         missingColumns.push(
           new TableColumn({

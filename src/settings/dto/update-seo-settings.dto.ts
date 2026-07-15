@@ -6,6 +6,7 @@ import {
   IsString,
   IsUrl,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -161,4 +162,74 @@ export class UpdateSeoSettingsDto {
   @IsNumber()
   @Min(0)
   low_stock_threshold?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  shipping_rules_enabled?: boolean;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(23)
+  shipping_cutoff_hour?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_1_when_en?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_1_when_ar?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_1_arrives_en?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_1_arrives_ar?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_2_when_en?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_2_when_ar?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_2_arrives_en?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_2_arrives_ar?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_3_when_en?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_3_when_ar?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_3_arrives_en?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  shipping_rule_3_arrives_ar?: string;
 }
