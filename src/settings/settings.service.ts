@@ -44,7 +44,7 @@ import { createSitePopupSettingsTableDefinition } from './site-popup-settings.ta
 
 @Injectable()
 export class SettingsService implements OnModuleInit {
-  private static readonly SEO_SETTINGS_CACHE_KEY = 'settings:seo';
+  private static readonly SEO_SETTINGS_CACHE_KEY = 'settings:seo:v2-shipping-rules';
   private static readonly FEATURE_TOGGLES_CACHE_KEY = 'settings:features';
 
   private schemaInitialized = false;
@@ -71,20 +71,29 @@ export class SettingsService implements OnModuleInit {
     await this.ensureSchemaReady();
   }
 
+  private normalizeSeoSettings(settings: SeoSettings): SeoSettings {
+    if (!Array.isArray(settings.shipping_rules)) {
+      settings.shipping_rules = [];
+    }
+    return settings;
+  }
+
   async getSeoSettings(): Promise<SeoSettings> {
     if (this.seoSettingsCache) {
-      return this.seoSettingsCache;
+      return this.normalizeSeoSettings(this.seoSettingsCache);
     }
 
     const cached = await this.cacheManager.get<SeoSettings>(
       SettingsService.SEO_SETTINGS_CACHE_KEY,
     );
     if (cached) {
-      this.seoSettingsCache = cached;
-      return cached;
+      this.seoSettingsCache = this.normalizeSeoSettings(cached);
+      return this.seoSettingsCache;
     }
 
-    const settings = await this.loadSeoSettingsFromDatabase();
+    const settings = this.normalizeSeoSettings(
+      await this.loadSeoSettingsFromDatabase(),
+    );
     this.seoSettingsCache = settings;
     await this.cacheManager.set(
       SettingsService.SEO_SETTINGS_CACHE_KEY,
