@@ -223,7 +223,7 @@ export class AnalyticsVisitorsService {
     // Backfill visitor stubs for any admin devices that were registered before
     // we started creating visitor rows on register.
     for (const browserKey of adminKeys) {
-      const exists = await this.visitorsRepo.exist({
+      const exists = await this.visitorsRepo.exists({
         where: { browser_key: browserKey },
       });
       if (exists) continue;
