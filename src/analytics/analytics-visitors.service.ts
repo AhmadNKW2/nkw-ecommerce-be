@@ -159,9 +159,13 @@ export class AnalyticsVisitorsService {
   }
 
   async listVisitors(query: ListVisitorsDto) {
+    const audience = query.audience === 'admins' ? 'admins' : 'visitors';
+    if (audience === 'admins') {
+      return this.listAdminAudience(query);
+    }
+
     const page = query.page || 1;
     const limit = query.limit || 20;
-    const audience = query.audience === 'admins' ? 'admins' : 'visitors';
     const adminKeyToUserId =
       await this.adminClientDevicesService.getAdminUserIdByBrowserKey();
     const adminKeys = [...adminKeyToUserId.keys()];
@@ -172,21 +176,7 @@ export class AnalyticsVisitorsService {
       .skip((page - 1) * limit)
       .take(limit);
 
-    if (audience === 'admins') {
-      if (!adminKeys.length) {
-        return {
-          data: [],
-          meta: {
-            total: 0,
-            page,
-            limit,
-            totalPages: 1,
-            audience,
-          },
-        };
-      }
-      qb.andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
-    } else if (adminKeys.length) {
+    if (adminKeys.length) {
       qb.andWhere('visitor.browser_key NOT IN (:...adminKeys)', { adminKeys });
     }
 
@@ -203,7 +193,77 @@ export class AnalyticsVisitorsService {
       const term = query.search.trim();
       if (/^\d+$/.test(term)) {
         qb.andWhere('visitor.id = :id', { id: Number(term) });
-      } else if (audience === 'admins') {
+      } else {
+        qb.andWhere('visitor.last_path ILIKE :path', { path: `%${term}%` });
+      }
+    }
+
+    const [rows, total] = await qb.getManyAndCount();
+    return this.mapVisitorListRows(rows, total, page, limit, 'visitors', new Map());
+  }
+
+  /**
+   * Admins tab: every registered admin device (from admin_client_devices),
+   * with its analytics visitor row (created on register if missing).
+   */
+  private async listAdminAudience(query: ListVisitorsDto) {
+    const page = query.page || 1;
+    const limit = query.limit || 20;
+    const adminKeyToUserId =
+      await this.adminClientDevicesService.getAdminUserIdByBrowserKey();
+    const adminKeys = [...adminKeyToUserId.keys()];
+
+    if (!adminKeys.length) {
+      return {
+        data: [],
+        meta: { total: 0, page, limit, totalPages: 1, audience: 'admins' as const },
+      };
+    }
+
+    // Backfill visitor stubs for any admin devices that were registered before
+    // we started creating visitor rows on register.
+    for (const browserKey of adminKeys) {
+      const exists = await this.visitorsRepo.exist({
+        where: { browser_key: browserKey },
+      });
+      if (exists) continue;
+      const adminUserId = adminKeyToUserId.get(browserKey);
+      const now = new Date();
+      await this.visitorsRepo.save(
+        this.visitorsRepo.create({
+          browser_key: browserKey,
+          user_id: adminUserId ?? null,
+          user_agent: null,
+          last_path: '/admin-dashboard',
+          event_count: 0,
+          session_count: 0,
+          first_seen_at: now,
+          last_seen_at: now,
+        }),
+      );
+    }
+
+    const qb = this.visitorsRepo
+      .createQueryBuilder('visitor')
+      .orderBy('visitor.last_seen_at', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
+
+    if (query.startDate && query.endDate) {
+      const start = new Date(`${query.startDate}T00:00:00.000Z`);
+      const end = new Date(`${query.endDate}T23:59:59.999Z`);
+      qb.andWhere('visitor.last_seen_at BETWEEN :start AND :end', {
+        start,
+        end,
+      });
+    }
+
+    if (query.search?.trim()) {
+      const term = query.search.trim();
+      if (/^\d+$/.test(term)) {
+        qb.andWhere('visitor.id = :id', { id: Number(term) });
+      } else {
         qb.andWhere(
           `(visitor.last_path ILIKE :path OR visitor.browser_key IN (
             SELECT d.browser_key FROM admin_client_devices d
@@ -214,20 +274,32 @@ export class AnalyticsVisitorsService {
           ))`,
           { path: `%${term}%`, adminTerm: `%${term}%` },
         );
-      } else {
-        qb.andWhere('visitor.last_path ILIKE :path', { path: `%${term}%` });
       }
     }
 
     const [rows, total] = await qb.getManyAndCount();
-    const adminInfoByBrowserKey =
-      audience === 'admins'
-        ? await this.resolveAdminInfoByBrowserKeys(
-            rows.map((row) => row.browser_key),
-            adminKeyToUserId,
-          )
-        : new Map<string, AdminVisitorInfo>();
+    const adminInfoByBrowserKey = await this.resolveAdminInfoByBrowserKeys(
+      rows.map((row) => row.browser_key),
+      adminKeyToUserId,
+    );
+    return this.mapVisitorListRows(
+      rows,
+      total,
+      page,
+      limit,
+      'admins',
+      adminInfoByBrowserKey,
+    );
+  }
 
+  private async mapVisitorListRows(
+    rows: AnalyticsVisitor[],
+    total: number,
+    page: number,
+    limit: number,
+    audience: 'visitors' | 'admins',
+    adminInfoByBrowserKey: Map<string, AdminVisitorInfo>,
+  ) {
     const visitorIds = rows.map((row) => row.id);
     const sessions =
       visitorIds.length === 0

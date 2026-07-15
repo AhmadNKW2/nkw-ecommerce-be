@@ -58,12 +58,38 @@ export class AdminClientDevicesService {
     await this.devicesRepo.save(device);
     this.invalidateCache();
 
+    // Ensure a visitor row exists so Admins tab can show Client # immediately
+    // (admin dashboard itself does not send storefront collect events).
+    let visitor = await this.visitorsRepo.findOne({
+      where: { browser_key: browserKey },
+    });
+    if (!visitor) {
+      visitor = await this.visitorsRepo.save(
+        this.visitorsRepo.create({
+          browser_key: browserKey,
+          user_id: adminUserId,
+          user_agent: userAgent,
+          last_path: source === 'admin_fe' ? '/admin-dashboard' : null,
+          event_count: 0,
+          session_count: 0,
+          first_seen_at: now,
+          last_seen_at: now,
+        }),
+      );
+    } else {
+      visitor.user_id = visitor.user_id ?? adminUserId;
+      if (userAgent) visitor.user_agent = userAgent;
+      if (now > visitor.last_seen_at) visitor.last_seen_at = now;
+      await this.visitorsRepo.save(visitor);
+    }
+
     return {
       id: device.id,
       browserKey: device.browser_key,
       adminUserId: device.admin_user_id,
       source: device.source,
       reused,
+      visitorId: visitor.id,
       purgedVisitors: 0,
     };
   }
