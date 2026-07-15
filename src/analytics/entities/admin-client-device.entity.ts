@@ -23,6 +23,14 @@ export class AdminClientDevice {
   @Column({ type: 'varchar', length: 32, default: 'admin_fe' })
   source: string;
 
+  /** Admin-chosen label, e.g. "Office Chrome" / "Home laptop". */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  device_name: string | null;
+
+  /** Parsed from user agent: Desktop | Mobile | Tablet | Unknown */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  device_type: string | null;
+
   @Column({ type: 'text', nullable: true })
   user_agent: string | null;
 

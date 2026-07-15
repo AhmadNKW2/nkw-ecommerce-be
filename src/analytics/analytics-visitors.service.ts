@@ -13,6 +13,10 @@ type AdminVisitorInfo = {
   userId: number;
   email: string;
   name: string;
+  deviceId: number | null;
+  deviceName: string | null;
+  deviceType: string | null;
+  source: string | null;
 };
 
 @Injectable()
@@ -271,6 +275,7 @@ export class AnalyticsVisitorsService {
             WHERE u.email ILIKE :adminTerm
                OR u."firstName" ILIKE :adminTerm
                OR u."lastName" ILIKE :adminTerm
+               OR d.device_name ILIKE :adminTerm
           ))`,
           { path: `%${term}%`, adminTerm: `%${term}%` },
         );
@@ -433,23 +438,34 @@ export class AnalyticsVisitorsService {
       if (userId) userIds.add(userId);
     }
 
-    if (!userIds.size) return result;
+    const devices =
+      await this.adminClientDevicesService.getDevicesByBrowserKeys(browserKeys);
 
-    const users = await this.usersRepo.find({
-      where: { id: In([...userIds]) },
-      select: { id: true, email: true, firstName: true, lastName: true },
-    });
+    if (!userIds.size && !devices.size) return result;
+
+    const users = userIds.size
+      ? await this.usersRepo.find({
+          where: { id: In([...userIds]) },
+          select: { id: true, email: true, firstName: true, lastName: true },
+        })
+      : [];
     const usersById = new Map(users.map((user) => [user.id, user]));
 
     for (const key of browserKeys) {
       const userId = adminKeyToUserId.get(key);
-      if (!userId) continue;
-      const user = usersById.get(userId);
-      if (!user) continue;
+      const device = devices.get(key);
+      const user = userId ? usersById.get(userId) : null;
+      if (!user && !device) continue;
       result.set(key, {
-        userId: user.id,
-        email: user.email,
-        name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email,
+        userId: user?.id ?? device?.adminUserId ?? 0,
+        email: user?.email || '',
+        name: user
+          ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email
+          : 'Admin',
+        deviceId: device?.deviceId ?? null,
+        deviceName: device?.deviceName ?? null,
+        deviceType: device?.deviceType ?? null,
+        source: device?.source ?? null,
       });
     }
 

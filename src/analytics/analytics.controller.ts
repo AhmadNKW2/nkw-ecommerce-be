@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Req,
@@ -21,6 +22,7 @@ import { AnalyticsQueryDto } from './dto/analytics-query.dto';
 import { CollectAnalyticsDto } from './dto/collect-analytics.dto';
 import { ListVisitorsDto } from './dto/list-visitors.dto';
 import { RegisterAdminClientDto } from './dto/register-admin-client.dto';
+import { UpdateAdminClientDeviceDto } from './dto/update-admin-client-device.dto';
 
 @Controller('analytics')
 export class AnalyticsController {
@@ -71,6 +73,17 @@ export class AnalyticsController {
   @RequireAdminAccess('analytics')
   listAdminClients() {
     return this.adminClientDevicesService.listForAdmin();
+  }
+
+  @Patch('admin-clients/:id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN)
+  @RequireAdminAccess('analytics')
+  renameAdminClient(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateAdminClientDeviceDto,
+  ) {
+    return this.adminClientDevicesService.renameDevice(id, dto.deviceName);
   }
 
   @Get('overview')
