@@ -7,7 +7,6 @@ import { AnalyticsEvent } from './entities/analytics-event.entity';
 import { CollectAnalyticsDto } from './dto/collect-analytics.dto';
 import { ListVisitorsDto } from './dto/list-visitors.dto';
 import { AdminClientDevicesService } from './admin-client-devices.service';
-import { SettingsService } from '../settings/settings.service';
 import { User } from '../users/entities/user.entity';
 
 type AdminVisitorInfo = {
@@ -28,12 +27,10 @@ export class AnalyticsVisitorsService {
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly adminClientDevicesService: AdminClientDevicesService,
-    private readonly settingsService: SettingsService,
   ) {}
 
   async collect(dto: CollectAnalyticsDto) {
-    // Admin devices are still collected so journeys exist when
-    // "show admin visitors" is enabled. Visibility is controlled at list/detail.
+    // Admin devices are collected too; Visitors vs Admins tabs filter visibility.
     const now = new Date();
     const events = dto.events
       .map((event) => ({
@@ -164,7 +161,7 @@ export class AnalyticsVisitorsService {
   async listVisitors(query: ListVisitorsDto) {
     const page = query.page || 1;
     const limit = query.limit || 20;
-    const showAdminVisitors = await this.isShowAdminVisitorsEnabled();
+    const audience = query.audience === 'admins' ? 'admins' : 'visitors';
     const adminKeyToUserId =
       await this.adminClientDevicesService.getAdminUserIdByBrowserKey();
     const adminKeys = [...adminKeyToUserId.keys()];
@@ -175,7 +172,21 @@ export class AnalyticsVisitorsService {
       .skip((page - 1) * limit)
       .take(limit);
 
-    if (!showAdminVisitors && adminKeys.length) {
+    if (audience === 'admins') {
+      if (!adminKeys.length) {
+        return {
+          data: [],
+          meta: {
+            total: 0,
+            page,
+            limit,
+            totalPages: 1,
+            audience,
+          },
+        };
+      }
+      qb.andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
+    } else if (adminKeys.length) {
       qb.andWhere('visitor.browser_key NOT IN (:...adminKeys)', { adminKeys });
     }
 
@@ -192,7 +203,7 @@ export class AnalyticsVisitorsService {
       const term = query.search.trim();
       if (/^\d+$/.test(term)) {
         qb.andWhere('visitor.id = :id', { id: Number(term) });
-      } else if (showAdminVisitors) {
+      } else if (audience === 'admins') {
         qb.andWhere(
           `(visitor.last_path ILIKE :path OR visitor.browser_key IN (
             SELECT d.browser_key FROM admin_client_devices d
@@ -209,12 +220,13 @@ export class AnalyticsVisitorsService {
     }
 
     const [rows, total] = await qb.getManyAndCount();
-    const adminInfoByBrowserKey = showAdminVisitors
-      ? await this.resolveAdminInfoByBrowserKeys(
-          rows.map((row) => row.browser_key),
-          adminKeyToUserId,
-        )
-      : new Map<string, AdminVisitorInfo>();
+    const adminInfoByBrowserKey =
+      audience === 'admins'
+        ? await this.resolveAdminInfoByBrowserKeys(
+            rows.map((row) => row.browser_key),
+            adminKeyToUserId,
+          )
+        : new Map<string, AdminVisitorInfo>();
 
     const visitorIds = rows.map((row) => row.id);
     const sessions =
@@ -247,7 +259,7 @@ export class AnalyticsVisitorsService {
           firstSeenAt: visitor.first_seen_at,
           lastSeenAt: visitor.last_seen_at,
           userAgent: visitor.user_agent,
-          isAdmin: Boolean(admin),
+          isAdmin: Boolean(admin) || audience === 'admins',
           admin,
         };
       }),
@@ -256,7 +268,7 @@ export class AnalyticsVisitorsService {
         page,
         limit,
         totalPages: Math.max(1, Math.ceil(total / limit)),
-        showAdminVisitors,
+        audience,
       },
     };
   }
@@ -267,21 +279,12 @@ export class AnalyticsVisitorsService {
       throw new NotFoundException(`Visitor #${id} not found`);
     }
 
-    const showAdminVisitors = await this.isShowAdminVisitorsEnabled();
-    const isAdmin = await this.adminClientDevicesService.isAdminBrowserKey(
-      visitor.browser_key,
+    const adminKeyToUserId =
+      await this.adminClientDevicesService.getAdminUserIdByBrowserKey();
+    const adminInfoByBrowserKey = await this.resolveAdminInfoByBrowserKeys(
+      [visitor.browser_key],
+      adminKeyToUserId,
     );
-
-    if (isAdmin && !showAdminVisitors) {
-      throw new NotFoundException(`Visitor #${id} not found`);
-    }
-
-    const adminInfoByBrowserKey = showAdminVisitors
-      ? await this.resolveAdminInfoByBrowserKeys(
-          [visitor.browser_key],
-          await this.adminClientDevicesService.getAdminUserIdByBrowserKey(),
-        )
-      : new Map<string, AdminVisitorInfo>();
     const admin = adminInfoByBrowserKey.get(visitor.browser_key) || null;
 
     const sessions = await this.sessionsRepo.find({
@@ -344,11 +347,6 @@ export class AnalyticsVisitorsService {
     await this.visitorsRepo.delete({ id });
 
     return { success: true, id };
-  }
-
-  private async isShowAdminVisitorsEnabled(): Promise<boolean> {
-    const toggles = await this.settingsService.getProductFieldToggles();
-    return Boolean(toggles.show_admin_visitors_enabled);
   }
 
   private async resolveAdminInfoByBrowserKeys(

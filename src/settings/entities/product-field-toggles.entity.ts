@@ -63,10 +63,6 @@ export class ProductFieldToggles {
   @Column({ type: 'boolean', default: true })
   popup_enabled: boolean;
 
-  /** When true, admin-marked browsers appear in Analytics → Visitors with email/name. */
-  @Column({ type: 'boolean', default: false })
-  show_admin_visitors_enabled: boolean;
-
   // Appearance-only toggles — admin dashboard UI only; BE ignores them.
   @Column({ type: 'boolean', default: true })
   reference_link_visible_admin: boolean;

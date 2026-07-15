@@ -1,5 +1,13 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class ListVisitorsDto {
   @IsOptional()
@@ -28,4 +36,9 @@ export class ListVisitorsDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  /** visitors = non-admin only; admins = admin-marked browsers only */
+  @IsOptional()
+  @IsIn(['visitors', 'admins'])
+  audience?: 'visitors' | 'admins' = 'visitors';
 }

@@ -95,11 +95,6 @@ export function createProductFieldTogglesTableDefinition() {
         default: true,
       },
       {
-        name: 'show_admin_visitors_enabled',
-        type: 'boolean',
-        default: false,
-      },
-      {
         name: 'reference_link_visible_admin',
         type: 'boolean',
         default: true,
