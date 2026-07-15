@@ -19,6 +19,7 @@ import { UpdateSpecificationValueDto } from './dto/update-specification-value.dt
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { ApiQuery } from '@nestjs/swagger';
 
 @Controller('specifications')
@@ -28,6 +29,7 @@ export class SpecificationsController {
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('specifications')
   create(@Body() createSpecificationDto: CreateSpecificationDto) {
     return this.specificationsService.create(createSpecificationDto);
   }
@@ -44,6 +46,7 @@ export class SpecificationsController {
   @Put('reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('specifications')
   reorderSpecifications(@Body() reorderDto: ReorderSpecificationsDto) {
     return this.specificationsService.reorderSpecifications(reorderDto);
   }
@@ -56,6 +59,7 @@ export class SpecificationsController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('specifications')
   update(
     @Param('id') id: string,
     @Body() updateSpecificationDto: UpdateSpecificationDto,
@@ -66,6 +70,7 @@ export class SpecificationsController {
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('specifications')
   remove(@Param('id') id: string) {
     return this.specificationsService.remove(+id);
   }
@@ -73,6 +78,7 @@ export class SpecificationsController {
   @Post(':id/values')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('specifications')
   addValue(
     @Param('id') id: string,
     @Body()
@@ -89,6 +95,7 @@ export class SpecificationsController {
   @Put(':id/values/reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('specifications')
   reorderSpecificationValues(
     @Param('id') id: string,
     @Body() reorderDto: ReorderSpecificationValuesDto,
@@ -99,6 +106,7 @@ export class SpecificationsController {
   @Patch('values/:valueId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('specifications')
   updateValue(
     @Param('valueId') valueId: string,
     @Body() updateDto: UpdateSpecificationValueDto,
@@ -109,6 +117,7 @@ export class SpecificationsController {
   @Delete('values/:valueId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('specifications')
   removeValue(@Param('valueId') valueId: string) {
     return this.specificationsService.removeValue(+valueId);
   }

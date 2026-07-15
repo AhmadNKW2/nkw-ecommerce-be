@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
@@ -31,6 +32,7 @@ export class SettingsController {
   @Patch('seo')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   updateSeoSettings(@Body() updateSeoSettingsDto: UpdateSeoSettingsDto) {
     return this.settingsService.updateSeoSettings(updateSeoSettingsDto);
   }
@@ -43,6 +45,7 @@ export class SettingsController {
   @Patch('features')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   updateFeatureToggles(
     @Body() updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
   ) {
@@ -59,6 +62,7 @@ export class SettingsController {
   @Patch('product-fields')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   updateProductFieldToggles(
     @Body() updateProductFieldTogglesDto: UpdateProductFieldTogglesDto,
   ) {
@@ -75,6 +79,7 @@ export class SettingsController {
   @Patch('popup')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   updateSitePopupSettings(@Body() updateSitePopupSettingsDto: UpdateSitePopupSettingsDto) {
     return this.settingsService.updateSitePopupSettings(updateSitePopupSettingsDto);
   }
@@ -82,6 +87,7 @@ export class SettingsController {
   @Get('pricing-rules')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   getProductPriceRules() {
     return this.settingsService.getProductPriceRules();
   }
@@ -89,6 +95,7 @@ export class SettingsController {
   @Post('pricing-rules')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   createProductPriceRule(@Body() dto: CreateProductPriceRuleDto) {
     return this.settingsService.createProductPriceRule(dto);
   }
@@ -96,6 +103,7 @@ export class SettingsController {
   @Patch('pricing-rules/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   updateProductPriceRule(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateProductPriceRuleDto,
@@ -106,6 +114,7 @@ export class SettingsController {
   @Delete('pricing-rules/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   deleteProductPriceRule(@Param('id', ParseIntPipe) id: number) {
     return this.settingsService.deleteProductPriceRule(id);
   }
@@ -113,6 +122,7 @@ export class SettingsController {
   @Post('pricing-rules/reprice-existing')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
   repriceExistingProducts() {
     return this.settingsService.repriceExistingProductsByFixedPercentage();
   }

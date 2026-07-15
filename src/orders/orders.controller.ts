@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { UserRole, Roles } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { OrderStatus } from './entities/order.entity';
 
 @Controller('orders')
@@ -35,6 +36,7 @@ export class OrdersController {
   @Post('admin')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   createByAdmin(@Body() dto: AdminCreateOrderDto) {
     return this.ordersService.createByAdmin(dto);
   }
@@ -42,6 +44,7 @@ export class OrdersController {
   @Get('admin')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   findAllAdmin(@Query() filterDto: FilterOrderDto) {
     return this.ordersService.findAllAdmin(filterDto);
   }
@@ -49,6 +52,7 @@ export class OrdersController {
   @Get('admin/stats')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   getAdminStats(@Query() filterDto: FilterOrderDto) {
     return this.ordersService.getAdminStats(filterDto);
   }
@@ -74,6 +78,7 @@ export class OrdersController {
   @Patch(':id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   updateStatus(@Param('id') id: string, @Body('status') status: OrderStatus) {
     return this.ordersService.updateStatus(+id, status);
   }
@@ -81,6 +86,7 @@ export class OrdersController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   update(@Param('id') id: string, @Body() dto: UpdateOrderDto) {
     return this.ordersService.update(+id, dto);
   }
@@ -88,6 +94,7 @@ export class OrdersController {
   @Patch(':id/items/cost')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   updateItemsCost(
     @Param('id') id: string,
     @Body() dto: UpdateOrderItemsCostDto,
@@ -98,6 +105,7 @@ export class OrdersController {
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
   remove(@Param('id') id: string) {
     return this.ordersService.remove(+id);
   }

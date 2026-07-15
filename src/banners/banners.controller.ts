@@ -24,6 +24,7 @@ import { UpdateBannerDto } from './dto/update-banner.dto';
 import { FilterBannerDto } from './dto/filter-banner.dto';
 import { ReorderBannersDto } from './dto/reorder-banners.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { imageFileFilter } from '../common/utils/file-upload.util';
 import { R2StorageService } from '../common/services/r2-storage.service';
@@ -40,6 +41,7 @@ export class BannersController {
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('banners')
   @UseInterceptors(
     FileInterceptor('image', {
       storage: memoryStorage(),
@@ -75,6 +77,7 @@ export class BannersController {
   @Patch(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('banners')
   @UseInterceptors(
     FileInterceptor('image', {
       storage: memoryStorage(),
@@ -98,6 +101,7 @@ export class BannersController {
   @Delete(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('banners')
   remove(@Param('id') id: string) {
     return this.bannersService.remove(+id);
   }
@@ -107,6 +111,7 @@ export class BannersController {
   @Post('reorder')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('banners')
   reorder(@Body() dto: ReorderBannersDto) {
     return this.bannersService.reorder(dto);
   }

@@ -40,6 +40,7 @@ import { FilterProductDto } from '../products/dto/filter-product.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { imageFileFilter } from '../common/utils/file-upload.helper';
 import { R2StorageService } from '../common/services/r2-storage.service';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
@@ -66,6 +67,7 @@ export class VendorsController {
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   @UseInterceptors(
     FileInterceptor('logo', {
       storage: memoryStorage(),
@@ -97,6 +99,7 @@ export class VendorsController {
   @Get('archive/list')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('archived')
   findArchived() {
     return this.vendorsService.findArchived();
   }
@@ -104,6 +107,7 @@ export class VendorsController {
   @Post(':id/categories')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   createCategory(
     @Param('id', ParseIntPipe) id: number,
     @Body() createVendorCategoryDto: CreateVendorCategoryDto,
@@ -222,6 +226,7 @@ export class VendorsController {
   @Put(':id/categories/tree')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   @ApiExtraModels(ReplaceVendorCategoriesTreeDto)
   @ApiOperation({
     summary: 'Replace the full vendor category tree in one payload',
@@ -369,6 +374,7 @@ export class VendorsController {
   @Patch(':id/categories/:categoryId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   updateCategory(
     @Param('id', ParseIntPipe) id: number,
     @Param('categoryId', ParseIntPipe) categoryId: number,
@@ -384,6 +390,7 @@ export class VendorsController {
   @Delete(':id/categories/:categoryId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   removeCategory(
     @Param('id', ParseIntPipe) id: number,
     @Param('categoryId', ParseIntPipe) categoryId: number,
@@ -422,6 +429,7 @@ export class VendorsController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   @UseInterceptors(
     FileInterceptor('logo', {
       storage: memoryStorage(),
@@ -451,6 +459,7 @@ export class VendorsController {
   @Post(':id/archive')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   archive(@Param('id') id: string, @Req() req: any) {
     return this.vendorsService.archive(+id, req.user.id);
   }
@@ -458,6 +467,7 @@ export class VendorsController {
   @Post(':id/restore')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('archived')
   restore(@Param('id') id: string, @Body() restoreDto?: RestoreVendorDto) {
     return this.vendorsService.restore(+id, restoreDto);
   }
@@ -465,6 +475,7 @@ export class VendorsController {
   @Delete(':id/permanent')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('archived')
   permanentDelete(
     @Param('id') id: string,
     @Body() options?: PermanentDeleteVendorDto,
@@ -475,6 +486,7 @@ export class VendorsController {
   @Put('reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   reorder(@Body() dto: ReorderVendorsDto) {
     return this.vendorsService.reorder(dto);
   }
@@ -485,6 +497,7 @@ export class VendorsController {
   @Post(':id/products')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   assignProducts(
     @Param('id') id: string,
     @Body() dto: AssignProductsToVendorDto,
@@ -496,6 +509,7 @@ export class VendorsController {
   @Delete(':id/products')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('vendors')
   removeProducts(
     @Param('id') id: string,
     @Body() dto: AssignProductsToVendorDto,

@@ -19,6 +19,7 @@ import { UpdateAttributeValueDto } from './dto/update-attribute-value.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { ApiQuery } from '@nestjs/swagger';
 
 @Controller('attributes')
@@ -28,6 +29,7 @@ export class AttributesController {
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('attributes')
   create(@Body() createAttributeDto: CreateAttributeDto) {
     return this.attributesService.create(createAttributeDto);
   }
@@ -44,6 +46,7 @@ export class AttributesController {
   @Put('reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('attributes')
   reorderAttributes(@Body() reorderDto: ReorderAttributesDto) {
     return this.attributesService.reorderAttributes(reorderDto);
   }
@@ -56,6 +59,7 @@ export class AttributesController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('attributes')
   update(
     @Param('id') id: string,
     @Body() updateAttributeDto: UpdateAttributeDto,
@@ -66,6 +70,7 @@ export class AttributesController {
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('attributes')
   remove(@Param('id') id: string) {
     return this.attributesService.remove(+id);
   }
@@ -73,6 +78,7 @@ export class AttributesController {
   @Post(':id/values')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('attributes')
   addValue(
     @Param('id') id: string,
     @Body()
@@ -89,6 +95,7 @@ export class AttributesController {
   @Put(':id/values/reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('attributes')
   reorderAttributeValues(
     @Param('id') id: string,
     @Body() reorderDto: ReorderAttributeValuesDto,
@@ -99,6 +106,7 @@ export class AttributesController {
   @Patch('values/:valueId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('attributes')
   updateValue(
     @Param('valueId') valueId: string,
     @Body() updateDto: UpdateAttributeValueDto,
@@ -109,6 +117,7 @@ export class AttributesController {
   @Delete('values/:valueId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('attributes')
   removeValue(@Param('valueId') valueId: string) {
     return this.attributesService.removeValue(+valueId);
   }

@@ -13,6 +13,9 @@ import {
 import { IsString, IsNotEmpty } from 'class-validator';
 import { TagsService } from './tags.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 
 class CreateTagDto {
   @IsString()
@@ -20,7 +23,9 @@ class CreateTagDto {
   name: string;
 }
 
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+@RequireAdminAccess('settings')
 @Controller('admin/tags')
 export class AdminTagsController {
   constructor(private readonly tagsService: TagsService) {}

@@ -47,6 +47,7 @@ import { FilterCategoryUrlDto } from './dto/filter-category-url.dto';
 import { ReorderCategoriesDto } from './dto/reorder-categories.dto';
 import { AssignProductsToCategoryDto } from './dto/assign-products.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
 import { shouldReturnAdminEntityDetail } from '../common/utils/catalog-access.util';
@@ -82,6 +83,7 @@ export class CategoriesController {
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
   @UseInterceptors(
     FileInterceptor('image', {
       storage: memoryStorage(),
@@ -113,6 +115,7 @@ export class CategoriesController {
   @Patch(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
   @UseInterceptors(
     FileInterceptor('image', {
       storage: memoryStorage(),
@@ -151,6 +154,7 @@ export class CategoriesController {
   @Get('archive/list')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('archived')
   findArchived(@Body() filterDto?: FilterCategoryDto) {
     return this.categoriesService.findArchived(filterDto);
   }
@@ -160,6 +164,7 @@ export class CategoriesController {
   @Post('urls')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...CATEGORY_URL_MANAGER_ROLES)
+  @RequireAdminAccess('categories')
   @ApiOperation({ summary: 'Create a category URL mapping' })
   @ApiBody({
     type: CreateCategoryUrlDto,
@@ -214,6 +219,7 @@ export class CategoriesController {
   @Patch('urls/:urlId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...CATEGORY_URL_MANAGER_ROLES)
+  @RequireAdminAccess('categories')
   @ApiOperation({ summary: 'Update a category URL mapping' })
   @ApiParam({ name: 'urlId', example: 12 })
   @ApiBody({
@@ -258,6 +264,7 @@ export class CategoriesController {
   @Delete('urls/:urlId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...CATEGORY_URL_MANAGER_ROLES)
+  @RequireAdminAccess('categories')
   @ApiOperation({ summary: 'Delete a category URL mapping' })
   @ApiParam({ name: 'urlId', example: 12 })
   @ApiNotFoundResponse({
@@ -320,6 +327,7 @@ export class CategoriesController {
   @Post(':id/archive')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
   archive(@Param('id') id: number, @Request() req) {
     return this.categoriesService.archive(id, req.user.id);
   }
@@ -328,6 +336,7 @@ export class CategoriesController {
   @Post(':id/restore')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('archived')
   restore(@Param('id') id: number, @Body() restoreDto: RestoreCategoryDto) {
     return this.categoriesService.restore(id, restoreDto);
   }
@@ -336,6 +345,7 @@ export class CategoriesController {
   @Delete(':id/permanent')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('archived')
   permanentDelete(
     @Param('id') id: number,
     @Body() options?: PermanentDeleteCategoryDto,
@@ -347,6 +357,7 @@ export class CategoriesController {
   @Put('reorder')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
   reorder(@Body() dto: ReorderCategoriesDto) {
     return this.categoriesService.reorder(dto.categories);
   }
@@ -357,6 +368,7 @@ export class CategoriesController {
   @Post(':id/products')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
   assignProducts(
     @Param('id') id: number,
     @Body() dto: AssignProductsToCategoryDto,
@@ -368,6 +380,7 @@ export class CategoriesController {
   @Delete(':id/products')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
   removeProducts(
     @Param('id') id: number,
     @Body() dto: AssignProductsToCategoryDto,

@@ -12,6 +12,8 @@ import { Note } from './entities/note.entity';
 import { FilterNoteDto } from './dto/filter-note.dto';
 import { hydrateProductMedia } from '../products/utils/product-media.util';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
+import { hasAdminAccess } from '../users/utils/admin-access.util';
+import { UserRole } from '../users/entities/user.entity';
 
 @Injectable()
 export class NotesService {
@@ -20,6 +22,21 @@ export class NotesService {
     private readonly notesRepository: Repository<Note>,
     private readonly adminNotificationsService: AdminNotificationsService,
   ) {}
+
+  private canManageAllNotes(user: any): boolean {
+    if (!user?.role) {
+      return false;
+    }
+
+    if (
+      user.role !== UserRole.ADMIN &&
+      user.role !== UserRole.CONSTANT_TOKEN_ADMIN
+    ) {
+      return false;
+    }
+
+    return hasAdminAccess(user, 'notes');
+  }
 
   async create(user: any, createNoteDto: CreateNoteDto): Promise<Note> {
     const userId = user?.id || null;
@@ -38,7 +55,7 @@ export class NotesService {
 
   async findAll(user: any, filterDto: FilterNoteDto) {
     const userId = user?.id || null;
-    const isAdmin = user?.role === 'admin';
+    const isAdmin = this.canManageAllNotes(user);
 
     const { page = 1, per_page = 10 } = filterDto;
     const skip = (page - 1) * per_page;
@@ -86,7 +103,7 @@ export class NotesService {
 
   async findByProduct(user: any, productId: number, filterDto: FilterNoteDto) {
     const userId = user?.id || null;
-    const isAdmin = user?.role === 'admin';
+    const isAdmin = this.canManageAllNotes(user);
 
     const { page = 1, per_page = 10 } = filterDto;
     const skip = (page - 1) * per_page;
@@ -136,7 +153,7 @@ export class NotesService {
 
   async findOne(user: any, id: number): Promise<Note> {
     const userId = user?.id || null;
-    const isAdmin = user?.role === 'admin';
+    const isAdmin = this.canManageAllNotes(user);
 
     const note = await this.notesRepository.findOne({
       where: { id },

@@ -43,6 +43,7 @@ import { SyncImportedPricingDto } from './dto/sync-imported-pricing.dto';
 import { SyncLinkedProductsDto } from './dto/sync-linked-products.dto';
 import { MergeDuplicateReferenceSlugsDto } from './dto/merge-duplicate-reference-slugs.dto';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { RestoreProductDto } from './dto/restore-product.dto';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
@@ -80,6 +81,7 @@ export class ProductsController {
   @Get('import-jobs/:jobId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({
     summary: 'Poll the status of a background product import or re-import job',
   })
@@ -98,6 +100,7 @@ export class ProductsController {
   @Sse('import-jobs/:jobId/stream')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({
     summary: 'Stream the status of a background product import or re-import job via SSE',
   })
@@ -122,6 +125,7 @@ export class ProductsController {
   @Post('import-payload')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({
     summary: 'Import a raw product payload and create a product through the AI enrichment flow',
   })
@@ -264,6 +268,7 @@ export class ProductsController {
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Create a product' })
   @ApiBody({
     type: CreateProductDto,
@@ -355,6 +360,7 @@ export class ProductsController {
   @Patch('bulk-status')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Bulk update product workflow status' })
   bulkUpdateProductStatus(@Body() dto: BulkUpdateProductStatusDto) {
     return this.productsService.bulkUpdateProductStatus(dto);
@@ -363,6 +369,7 @@ export class ProductsController {
   @Put('linked-products')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Sync a linked products group' })
   syncLinkedProducts(@Body() dto: SyncLinkedProductsDto) {
     return this.productsService.syncProductsGroup(dto.product_ids);
@@ -562,6 +569,7 @@ export class ProductsController {
   @Post('merge-duplicate-reference-slugs')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('products')
   @ApiOperation({
     summary:
       'Merge products that share the same vendor and reference_slug, keeping the lowest product ID',
@@ -606,6 +614,7 @@ export class ProductsController {
   @Put(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Replace a product' })
   @ApiBody({
     type: UpdateProductDto,
@@ -717,6 +726,7 @@ export class ProductsController {
   @Patch(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Partially update a product' })
   @ApiBody({
     type: PatchProductDto,
@@ -819,6 +829,7 @@ export class ProductsController {
   @Post(':id/archive')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   archive(@Param('id') id: string, @Req() req: any) {
     return this.productsService.archive(+id, req.user.id);
   }
@@ -826,6 +837,7 @@ export class ProductsController {
   @Post(':id/restore')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('archived')
   restore(@Param('id') id: string, @Body() dto: RestoreProductDto) {
     return this.productsService.restore(+id, dto.newCategoryId);
   }
@@ -833,6 +845,7 @@ export class ProductsController {
   @Get('archive/list')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('archived')
   findArchived(@Query() filterDto: FilterProductDto) {
     return this.productsService.findArchived(filterDto);
   }
@@ -840,6 +853,7 @@ export class ProductsController {
   @Delete('review/permanent')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('products')
   @ApiOperation({
     summary: 'Permanently delete review products by category and vendor',
   })
@@ -881,6 +895,7 @@ export class ProductsController {
   @Post('review/reimport-ai')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Re-import review products by category and vendor using their stored input_json payloads',
@@ -930,6 +945,7 @@ export class ProductsController {
   @Get('import-pricing/audit')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('product_pricing')
   @ApiOperation({
     summary:
       'Audit imported-product pricing by recomputing prices from product_input_jsons.input_json',
@@ -948,6 +964,7 @@ export class ProductsController {
   @Post('import-pricing/sync')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('product_pricing')
   @ApiOperation({
     summary:
       'Dry-run or sync imported-product pricing from product_input_jsons.input_json for selected product ids',
@@ -960,6 +977,7 @@ export class ProductsController {
   @Post(':id/reimport-ai')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary:
@@ -978,6 +996,7 @@ export class ProductsController {
   @Delete(':id/permanent')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('archived')
   permanentDelete(@Param('id') id: string) {
     return this.productsService.permanentDelete(+id);
   }
@@ -987,6 +1006,7 @@ export class ProductsController {
   @Post('assign/category/:categoryId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   assignToCategory(
     @Param('categoryId') categoryId: string,
     @Body() dto: AssignProductsDto,
@@ -1000,6 +1020,7 @@ export class ProductsController {
   @Delete('assign/category/:categoryId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   removeFromCategory(
     @Param('categoryId') categoryId: string,
     @Body() dto: AssignProductsDto,
@@ -1013,6 +1034,7 @@ export class ProductsController {
   @Post('assign/vendor/:vendorId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   assignToVendor(
     @Param('vendorId') vendorId: string,
     @Body() dto: AssignProductsDto,
@@ -1026,6 +1048,7 @@ export class ProductsController {
   @Delete('assign/vendor/:vendorId')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   removeFromVendor(
     @Param('vendorId') vendorId: string,
     @Body() dto: AssignProductsDto,
@@ -1045,6 +1068,7 @@ export class ProductsController {
   @Get(':id/tags')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   getProductTags(@Param('id', ParseIntPipe) id: number) {
     return this.productsService.getProductTags(id);
   }
@@ -1058,6 +1082,7 @@ export class ProductsController {
   @Put(':id/tags')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   setProductTags(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: SetProductTagsDto,
@@ -1073,6 +1098,7 @@ export class ProductsController {
   @Post(':id/tags')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   addProductTag(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: AddProductTagDto,
@@ -1088,6 +1114,7 @@ export class ProductsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(...PRODUCTS_MANAGER_ROLES)
+  @RequireAdminAccess('products')
   removeProductTag(
     @Param('id', ParseIntPipe) id: number,
     @Param('tagId', ParseIntPipe) tagId: number,

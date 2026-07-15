@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { UserRole } from '../entities/user.entity';
 import {
   ADMIN_ACCESS_KEYS,
@@ -12,6 +13,21 @@ type UserWithAccess = {
   role: UserRole;
   adminAccess?: AdminAccess | null;
 };
+
+const ADMIN_STAFF_ROLES: ReadonlySet<UserRole> = new Set([
+  UserRole.ADMIN,
+  UserRole.CONSTANT_TOKEN_ADMIN,
+  UserRole.CATALOG_MANAGER,
+  UserRole.VENDOR_ADMIN,
+  UserRole.STORE_ADMIN,
+]);
+
+export function isAdminStaffRole(role: UserRole | string | undefined | null): boolean {
+  if (!role) {
+    return false;
+  }
+  return ADMIN_STAFF_ROLES.has(role as UserRole);
+}
 
 function getDefaultAccessForRole(role: UserRole): AdminAccess {
   if (role === UserRole.CATALOG_MANAGER) {
@@ -67,6 +83,56 @@ export function hasAdminAccess(
   key: AdminAccessKey,
 ): boolean {
   return resolveAdminAccess(user)[key];
+}
+
+export function assertAdminAccess(
+  user: UserWithAccess | null | undefined,
+  key: AdminAccessKey,
+  options?: { catalogManagerBypass?: boolean },
+): void {
+  if (!user) {
+    throw new ForbiddenException(
+      "You don't have permission to perform this action",
+    );
+  }
+
+  if (
+    options?.catalogManagerBypass &&
+    user.role === UserRole.CATALOG_MANAGER
+  ) {
+    return;
+  }
+
+  if (!hasAdminAccess(user, key)) {
+    throw new ForbiddenException(
+      "You don't have permission to perform this action",
+    );
+  }
+}
+
+/** Require customers and/or admins access based on the roles being managed. */
+export function assertUsersManagementAccess(
+  user: UserWithAccess | null | undefined,
+  roles?: Array<UserRole | string> | null,
+): void {
+  if (!user) {
+    throw new ForbiddenException(
+      "You don't have permission to perform this action",
+    );
+  }
+
+  const roleList = roles?.filter(Boolean) as UserRole[] | undefined;
+  const touchesStaff =
+    !roleList?.length || roleList.some((role) => isAdminStaffRole(role));
+  const touchesCustomers =
+    !roleList?.length || roleList.some((role) => role === UserRole.USER);
+
+  if (touchesStaff) {
+    assertAdminAccess(user, 'admins');
+  }
+  if (touchesCustomers) {
+    assertAdminAccess(user, 'customers');
+  }
 }
 
 export function stripProductPricingFields<T extends object>(dto: T): T {

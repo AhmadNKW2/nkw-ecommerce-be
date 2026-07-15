@@ -31,6 +31,7 @@ import { TypesenseModule } from './typesense/typesense.module';
 import { AdminNotificationsModule } from './admin-notifications/admin-notifications.module';
 import { TermsModule } from './terms/terms.module';
 import { AppCacheModule } from './common/cache/app-cache.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { AppCacheModule } from './common/cache/app-cache.module';
     TypesenseModule,
     AdminNotificationsModule,
     TermsModule,
+    AnalyticsModule,
   ],
 })
 export class AppModule implements NestModule {

@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   Query,
+  Request,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import {
@@ -38,6 +39,11 @@ import {
   UserResponseDto,
   UserSummaryResponseDto,
 } from './dto/user-response.dto';
+import {
+  assertAdminAccess,
+  assertUsersManagementAccess,
+  isAdminStaffRole,
+} from './utils/admin-access.util';
 
 @ApiTags('Users')
 @ApiBearerAuth('bearer')
@@ -100,7 +106,10 @@ export class UsersController {
     description: 'Email already exists.',
     type: ApiErrorResponseDto,
   })
-  async create(@Body() createUserDto: CreateUserDto) {
+  async create(@Request() req, @Body() createUserDto: CreateUserDto) {
+    assertUsersManagementAccess(req.user, [
+      createUserDto.role || UserRole.USER,
+    ]);
     const user = await this.usersService.create(createUserDto);
     return this.usersService.sanitizeUser(user);
   }
@@ -121,7 +130,8 @@ export class UsersController {
     description: 'Invalid query parameters.',
     type: ApiErrorResponseDto,
   })
-  findAll(@Query() filterDto: FilterUserDto) {
+  findAll(@Request() req, @Query() filterDto: FilterUserDto) {
+    assertUsersManagementAccess(req.user, filterDto.roles);
     return this.usersService.findAll(filterDto);
   }
 
@@ -140,7 +150,12 @@ export class UsersController {
     description: 'User not found.',
     type: ApiErrorResponseDto,
   })
-  findOne(@Param('id') id: number) {
+  async findOne(@Request() req, @Param('id') id: number) {
+    const target = await this.usersService.findOneById(id);
+    assertAdminAccess(
+      req.user,
+      isAdminStaffRole(target.role) ? 'admins' : 'customers',
+    );
     return this.usersService.findOne(id);
   }
 
@@ -183,7 +198,20 @@ export class UsersController {
     description: 'User not found.',
     type: ApiErrorResponseDto,
   })
-  async update(@Param('id') id: number, @Body() updateUserDto: UpdateUserDto) {
+  async update(
+    @Request() req,
+    @Param('id') id: number,
+    @Body() updateUserDto: UpdateUserDto,
+  ) {
+    const target = await this.usersService.findOneById(id);
+    const rolesToCheck = [
+      target.role,
+      ...(updateUserDto.role ? [updateUserDto.role] : []),
+    ];
+    assertUsersManagementAccess(req.user, rolesToCheck);
+    if (updateUserDto.adminAccess !== undefined) {
+      assertAdminAccess(req.user, 'admins');
+    }
     const user = await this.usersService.update(id, updateUserDto);
     return this.usersService.sanitizeUser(user);
   }
@@ -202,7 +230,12 @@ export class UsersController {
     description: 'User not found.',
     type: ApiErrorResponseDto,
   })
-  remove(@Param('id') id: number) {
+  async remove(@Request() req, @Param('id') id: number) {
+    const target = await this.usersService.findOneById(id);
+    assertAdminAccess(
+      req.user,
+      isAdminStaffRole(target.role) ? 'admins' : 'customers',
+    );
     return this.usersService.remove(id);
   }
 }

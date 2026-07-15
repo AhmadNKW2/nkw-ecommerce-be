@@ -1688,6 +1688,7 @@ export class ProductsService {
         role: user?.role,
         authSource: user?.authSource,
         vendorId: user?.vendorId ?? null,
+        adminAccess: user?.adminAccess ?? null,
       };
 
       if (isSimplifiedProductCreator(creatorContext)) {
@@ -1701,7 +1702,7 @@ export class ProductsService {
         }
       }
 
-      if (user && !hasAdminAccess(user as any, 'product_pricing') && !isSimplifiedProductCreator(creatorContext)) {
+      if (user && !hasAdminAccess(user as any, 'product_pricing')) {
         dto = stripProductPricingFields(dto);
       }
       // Validate categories exist and are active

@@ -19,6 +19,7 @@ import { UpdateCashbackRuleDto } from './dto/update-cashback-rule.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 
 @Controller('wallet')
 @UseGuards(JwtAuthGuard)
@@ -30,6 +31,7 @@ export class WalletController {
   @Post('cashback-rules')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('cashback_rules')
   createRule(@Body() dto: CreateCashbackRuleDto) {
     return this.walletService.createCashbackRule(dto);
   }
@@ -37,6 +39,7 @@ export class WalletController {
   @Get('cashback-rules')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('cashback_rules')
   listRules() {
     return this.walletService.findAllCashbackRules();
   }
@@ -44,6 +47,7 @@ export class WalletController {
   @Patch('cashback-rules/:id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('cashback_rules')
   updateRule(@Param('id') id: string, @Body() dto: UpdateCashbackRuleDto) {
     return this.walletService.updateCashbackRule(+id, dto);
   }
@@ -51,6 +55,7 @@ export class WalletController {
   @Delete('cashback-rules/:id')
   @UseGuards(RolesGuard)
   @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('cashback_rules')
   deleteRule(@Param('id') id: string) {
     return this.walletService.deleteCashbackRule(+id);
   }

@@ -19,6 +19,7 @@ import { CreateTermGroupDto } from './dto/create-term-group.dto';
 import { UpdateTermGroupDto } from './dto/update-term-group.dto';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { Observable } from 'rxjs';
 
 @Controller('terms')
@@ -28,6 +29,7 @@ export class TermsController {
   constructor(private readonly termsService: TermsService) {}
 
   @Get()
+  @RequireAdminAccess('concepts')
   listTermGroups(
     @Query('page') page?: string,
     @Query('per_page') perPage?: string,
@@ -41,68 +43,81 @@ export class TermsController {
   }
 
   @Get('coverage')
+  @RequireAdminAccess('concepts')
   getConceptCoverage() {
     return this.termsService.getConceptCoverage();
   }
 
   @Post()
+  @RequireAdminAccess('concepts')
   createTermGroup(@Body() dto: CreateTermGroupDto) {
     return this.termsService.createTermGroup(dto);
   }
 
   @Post('generate')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   startTermsGeneration(@Body() dto: GenerateTermsDto) {
     return this.termsService.startTermsGeneration(dto);
   }
 
   @Post('clear-concepts')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   clearAllConcepts() {
     return this.termsService.clearAllConcepts();
   }
 
   // Backward compatibility with previous frontend route.
   @Post('clear')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   clearAllTermsLegacy() {
     return this.termsService.clearAllConcepts();
   }
 
   @Get('jobs/:jobId')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   getTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.getTermsGenerationJob(jobId);
   }
 
   @Sse('jobs/:jobId/stream')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   streamTermsGenerationJob(@Param('jobId') jobId: string): Observable<MessageEvent> {
     this.termsService.getTermsGenerationJob(jobId);
     return this.termsService.streamTermsGenerationJob(jobId);
   }
 
   @Post('jobs/:jobId/cancel')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   cancelTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.cancelTermsGenerationJob(jobId);
   }
 
   @Post('jobs/:jobId/pause')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   pauseTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.pauseTermsGenerationJob(jobId);
   }
 
   @Post('jobs/:jobId/resume')
+  @RequireAdminAccess('settings', { catalogManagerBypass: true })
   resumeTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.resumeTermsGenerationJob(jobId);
   }
 
   @Get(':id')
+  @RequireAdminAccess('concepts')
   getTermGroup(@Param('id', ParseIntPipe) id: number) {
     return this.termsService.getTermGroup(id);
   }
 
   @Patch(':id')
+  @RequireAdminAccess('concepts')
   updateTermGroup(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateTermGroupDto) {
     return this.termsService.updateTermGroup(id, dto);
   }
 
   @Delete(':id')
+  @RequireAdminAccess('concepts')
   deleteTermGroup(@Param('id', ParseIntPipe) id: number) {
     return this.termsService.deleteTermGroup(id);
   }

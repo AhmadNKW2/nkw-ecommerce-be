@@ -1,6 +1,7 @@
 import { Controller, Get, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { SearchCacheService } from './search-cache.service';
 import { TypesenseBackfillService } from '../typesense/typesense-backfill.service';
@@ -8,6 +9,7 @@ import { TypesenseBackfillService } from '../typesense/typesense-backfill.servic
 @Controller('admin/search')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
+@RequireAdminAccess('settings')
 export class AdminSearchController {
   constructor(
     private readonly searchCacheService: SearchCacheService,

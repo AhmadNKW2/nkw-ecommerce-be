@@ -16,6 +16,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { MediaService } from './media.service';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { mediaFileFilter, documentFileFilter } from '../common/utils/file-upload.helper';
 
@@ -44,6 +45,7 @@ export class MediaController {
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )
+  @RequireAdminAccess('products')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -74,6 +76,7 @@ export class MediaController {
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )
+  @RequireAdminAccess('products')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
@@ -130,6 +133,7 @@ export class MediaController {
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )
+  @RequireAdminAccess('products')
   async delete(@Param('id') id: string) {
     await this.mediaService.delete(+id);
     return { message: 'Media deleted successfully' };

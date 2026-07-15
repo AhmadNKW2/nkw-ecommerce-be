@@ -14,12 +14,43 @@ export const ADMIN_ACCESS_KEYS = [
   'notes',
   'concepts',
   'archived',
+  'analytics',
   'settings',
   'admins',
+  'product_form_basic',
+  'product_form_attributes',
+  'product_form_specifications',
+  'product_form_stock',
+  'product_form_weight_dimensions',
+  'product_form_media',
+  'product_form_attachments',
 ] as const;
 
 export type AdminAccessKey = (typeof ADMIN_ACCESS_KEYS)[number];
 export type AdminAccess = Record<AdminAccessKey, boolean>;
+
+export const PRODUCT_FORM_ACCESS_KEYS = [
+  'product_form_basic',
+  'product_form_attributes',
+  'product_form_specifications',
+  'product_form_stock',
+  'product_pricing',
+  'product_form_weight_dimensions',
+  'product_form_media',
+  'product_form_attachments',
+] as const;
+
+export type ProductFormAccessKey = (typeof PRODUCT_FORM_ACCESS_KEYS)[number];
+
+const ALL_PRODUCT_FORM_STEPS_ON = {
+  product_form_basic: true,
+  product_form_attributes: true,
+  product_form_specifications: true,
+  product_form_stock: true,
+  product_form_weight_dimensions: true,
+  product_form_media: true,
+  product_form_attachments: true,
+} as const;
 
 export const DEFAULT_ADMIN_ACCESS: AdminAccess = {
   products: true,
@@ -37,8 +68,10 @@ export const DEFAULT_ADMIN_ACCESS: AdminAccess = {
   notes: true,
   concepts: true,
   archived: true,
+  analytics: true,
   settings: true,
   admins: true,
+  ...ALL_PRODUCT_FORM_STEPS_ON,
 };
 
 export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
@@ -57,8 +90,10 @@ export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
   notes: false,
   concepts: true,
   archived: false,
+  analytics: false,
   settings: false,
   admins: false,
+  ...ALL_PRODUCT_FORM_STEPS_ON,
 };
 
 export const DEFAULT_VENDOR_PORTAL_ACCESS: AdminAccess = {
@@ -77,6 +112,14 @@ export const DEFAULT_VENDOR_PORTAL_ACCESS: AdminAccess = {
   notes: false,
   concepts: false,
   archived: false,
+  analytics: false,
   settings: false,
   admins: false,
+  product_form_basic: true,
+  product_form_attributes: false,
+  product_form_specifications: false,
+  product_form_stock: false,
+  product_form_weight_dimensions: false,
+  product_form_media: true,
+  product_form_attachments: false,
 };

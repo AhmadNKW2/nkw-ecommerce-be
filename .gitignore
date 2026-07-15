@@ -66,3 +66,8 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Apple private keys
 keys/
 *.p8
+
+# Google Analytics service account keys
+secrets/
+**/ga4-service-account*.json
+**/ordonsooq-*-*.json

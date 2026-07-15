@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
+import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CreatePartnerDto } from './dto/create-partner.dto';
 import { FilterPartnerDto } from './dto/filter-partner.dto';
@@ -20,6 +21,7 @@ import { PartnersService } from './partners.service';
 @Controller('partners')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN)
+@RequireAdminAccess('partners')
 export class PartnersController {
   constructor(private readonly partnersService: PartnersService) {}
 
