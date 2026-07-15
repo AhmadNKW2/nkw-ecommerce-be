@@ -15,4 +15,9 @@ export class RegisterAdminClientDto {
   @IsString()
   @MaxLength(512)
   userAgent?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  deviceModel?: string;
 }

@@ -9,12 +9,14 @@ import { DataSource, In, Repository } from 'typeorm';
 import { AdminClientDevice } from './entities/admin-client-device.entity';
 import { AnalyticsVisitor } from './entities/analytics-visitor.entity';
 import { RegisterAdminClientDto } from './dto/register-admin-client.dto';
+import { parseDeviceInfo } from './device-info';
 
 export type AdminDeviceLookup = {
   deviceId: number;
   adminUserId: number;
   deviceName: string | null;
   deviceType: string | null;
+  deviceModel: string | null;
   source: string;
   userAgent: string | null;
 };
@@ -50,6 +52,10 @@ export class AdminClientDevicesService implements OnModuleInit {
         ALTER TABLE admin_client_devices
           ADD COLUMN IF NOT EXISTS device_type varchar(32)
       `);
+      await this.dataSource.query(`
+        ALTER TABLE admin_client_devices
+          ADD COLUMN IF NOT EXISTS device_model varchar(120)
+      `);
       this.schemaReady = true;
     } catch {
       this.schemaReady = true;
@@ -57,21 +63,7 @@ export class AdminClientDevicesService implements OnModuleInit {
   }
 
   static parseDeviceType(userAgent: string | null | undefined): string {
-    if (!userAgent) return 'Unknown';
-    const ua = userAgent.toLowerCase();
-    if (
-      /ipad|tablet|kindle|silk|playbook|(android(?!.*mobile))/.test(ua)
-    ) {
-      return 'Tablet';
-    }
-    if (
-      /mobi|iphone|ipod|android.*mobile|windows phone|blackberry|opera mini|iemobile/.test(
-        ua,
-      )
-    ) {
-      return 'Mobile';
-    }
-    return 'Desktop';
+    return parseDeviceInfo(userAgent).type;
   }
 
   /**
@@ -88,7 +80,9 @@ export class AdminClientDevicesService implements OnModuleInit {
     const now = new Date();
     const source = (dto.source || 'admin_fe').slice(0, 32);
     const userAgent = dto.userAgent?.slice(0, 512) || null;
-    const deviceType = AdminClientDevicesService.parseDeviceType(userAgent);
+    const parsed = parseDeviceInfo(userAgent, dto.deviceModel);
+    const deviceType = parsed.type;
+    const deviceModel = parsed.model;
 
     let device = await this.devicesRepo.findOne({
       where: { browser_key: browserKey },
@@ -103,6 +97,7 @@ export class AdminClientDevicesService implements OnModuleInit {
         source,
         user_agent: userAgent,
         device_type: deviceType,
+        device_model: deviceModel,
         device_name: null,
         first_seen_at: now,
         last_seen_at: now,
@@ -113,6 +108,11 @@ export class AdminClientDevicesService implements OnModuleInit {
       if (userAgent) {
         device.user_agent = userAgent;
         device.device_type = deviceType;
+      }
+      if (deviceModel) {
+        device.device_model = deviceModel;
+      } else if (userAgent && !device.device_model) {
+        device.device_model = parseDeviceInfo(userAgent).model;
       }
       device.last_seen_at = now;
     }
@@ -129,6 +129,8 @@ export class AdminClientDevicesService implements OnModuleInit {
           browser_key: browserKey,
           user_id: adminUserId,
           user_agent: userAgent,
+          device_type: deviceType,
+          device_model: deviceModel,
           last_path: source === 'admin_fe' ? '/admin-dashboard' : null,
           event_count: 0,
           session_count: 0,
@@ -137,9 +139,12 @@ export class AdminClientDevicesService implements OnModuleInit {
         }),
       );
     } else {
+      // Do not bump visitor.last_seen_at here — that is analytics activity only.
+      // Otherwise opening the admin panel makes "Last seen" newer than any session.
       visitor.user_id = visitor.user_id ?? adminUserId;
       if (userAgent) visitor.user_agent = userAgent;
-      if (now > visitor.last_seen_at) visitor.last_seen_at = now;
+      if (deviceType) visitor.device_type = deviceType;
+      if (deviceModel) visitor.device_model = deviceModel;
       await this.visitorsRepo.save(visitor);
     }
 
@@ -150,6 +155,7 @@ export class AdminClientDevicesService implements OnModuleInit {
       source: device.source,
       deviceName: device.device_name,
       deviceType: device.device_type,
+      deviceModel: device.device_model,
       reused,
       visitorId: visitor.id,
       purgedVisitors: 0,
@@ -177,6 +183,7 @@ export class AdminClientDevicesService implements OnModuleInit {
       browserKey: device.browser_key,
       deviceName: device.device_name,
       deviceType: device.device_type,
+      deviceModel: device.device_model,
       source: device.source,
     };
   }
@@ -222,6 +229,7 @@ export class AdminClientDevicesService implements OnModuleInit {
       source: row.source,
       deviceName: row.device_name,
       deviceType: row.device_type,
+      deviceModel: row.device_model,
       userAgent: row.user_agent,
       firstSeenAt: row.first_seen_at,
       lastSeenAt: row.last_seen_at,
@@ -250,6 +258,14 @@ export class AdminClientDevicesService implements OnModuleInit {
     return visitorIds.filter((id) => allowed.has(id));
   }
 
+  /** Remove admin-device mark for a browser key (used when deleting a client). */
+  async unregisterBrowserKey(browserKey: string): Promise<boolean> {
+    await this.ensureSchema();
+    const result = await this.devicesRepo.delete({ browser_key: browserKey });
+    this.invalidateCache();
+    return (result.affected ?? 0) > 0;
+  }
+
   private async ensureCache() {
     const now = Date.now();
     if (
@@ -268,19 +284,21 @@ export class AdminClientDevicesService implements OnModuleInit {
       rows.map((row) => [row.browser_key, row.admin_user_id]),
     );
     this.cachedDevicesByKey = new Map(
-      rows.map((row) => [
-        row.browser_key,
-        {
-          deviceId: row.id,
-          adminUserId: row.admin_user_id,
-          deviceName: row.device_name,
-          deviceType:
-            row.device_type ||
-            AdminClientDevicesService.parseDeviceType(row.user_agent),
-          source: row.source,
-          userAgent: row.user_agent,
-        },
-      ]),
+      rows.map((row) => {
+        const parsed = parseDeviceInfo(row.user_agent, row.device_model);
+        return [
+          row.browser_key,
+          {
+            deviceId: row.id,
+            adminUserId: row.admin_user_id,
+            deviceName: row.device_name,
+            deviceType: row.device_type || parsed.type,
+            deviceModel: row.device_model || parsed.model,
+            source: row.source,
+            userAgent: row.user_agent,
+          },
+        ];
+      }),
     );
     this.cacheExpiresAt = now + 30_000;
   }

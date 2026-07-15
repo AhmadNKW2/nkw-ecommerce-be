@@ -31,6 +31,10 @@ export class AdminClientDevice {
   @Column({ type: 'varchar', length: 32, nullable: true })
   device_type: string | null;
 
+  /** Specific model when known, e.g. "Galaxy S24 Ultra" or "SM-S928B". */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  device_model: string | null;
+
   @Column({ type: 'text', nullable: true })
   user_agent: string | null;
 

@@ -25,6 +25,14 @@ export class AnalyticsVisitor {
   @Column({ type: 'text', nullable: true })
   user_agent: string | null;
 
+  /** Desktop | Mobile | Tablet | Unknown */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  device_type: string | null;
+
+  /** e.g. Galaxy S24 Ultra — from Client Hints / UA when available */
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  device_model: string | null;
+
   @Column({ type: 'varchar', length: 512, nullable: true })
   last_path: string | null;
 

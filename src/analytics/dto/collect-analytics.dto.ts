@@ -52,6 +52,12 @@ export class CollectAnalyticsDto {
   @MaxLength(512)
   userAgent?: string;
 
+  /** High-entropy Client Hint model when browser provides it (e.g. SM-S928B). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  deviceModel?: string;
+
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(40)

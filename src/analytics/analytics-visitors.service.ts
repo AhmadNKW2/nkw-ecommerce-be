@@ -1,12 +1,13 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { AnalyticsVisitor } from './entities/analytics-visitor.entity';
 import { AnalyticsSession } from './entities/analytics-session.entity';
 import { AnalyticsEvent } from './entities/analytics-event.entity';
 import { CollectAnalyticsDto } from './dto/collect-analytics.dto';
 import { ListVisitorsDto } from './dto/list-visitors.dto';
 import { AdminClientDevicesService } from './admin-client-devices.service';
+import { parseDeviceInfo } from './device-info';
 import { User } from '../users/entities/user.entity';
 
 type AdminVisitorInfo = {
@@ -16,11 +17,14 @@ type AdminVisitorInfo = {
   deviceId: number | null;
   deviceName: string | null;
   deviceType: string | null;
+  deviceModel: string | null;
   source: string | null;
 };
 
 @Injectable()
-export class AnalyticsVisitorsService {
+export class AnalyticsVisitorsService implements OnModuleInit {
+  private schemaReady = false;
+
   constructor(
     @InjectRepository(AnalyticsVisitor)
     private readonly visitorsRepo: Repository<AnalyticsVisitor>,
@@ -31,9 +35,32 @@ export class AnalyticsVisitorsService {
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly adminClientDevicesService: AdminClientDevicesService,
+    private readonly dataSource: DataSource,
   ) {}
 
+  async onModuleInit() {
+    await this.ensureSchema();
+  }
+
+  private async ensureSchema() {
+    if (this.schemaReady) return;
+    try {
+      await this.dataSource.query(`
+        ALTER TABLE analytics_visitors
+          ADD COLUMN IF NOT EXISTS device_type varchar(32)
+      `);
+      await this.dataSource.query(`
+        ALTER TABLE analytics_visitors
+          ADD COLUMN IF NOT EXISTS device_model varchar(120)
+      `);
+      this.schemaReady = true;
+    } catch {
+      this.schemaReady = true;
+    }
+  }
+
   async collect(dto: CollectAnalyticsDto) {
+    await this.ensureSchema();
     // Admin devices are collected too; Visitors vs Admins tabs filter visibility.
     const now = new Date();
     const events = dto.events
@@ -49,6 +76,9 @@ export class AnalyticsVisitorsService {
       return { accepted: 0 };
     }
 
+    const userAgent = dto.userAgent?.slice(0, 512) || null;
+    const parsed = parseDeviceInfo(userAgent, dto.deviceModel);
+
     let visitor = await this.visitorsRepo.findOne({
       where: { browser_key: dto.browserKey },
     });
@@ -60,7 +90,9 @@ export class AnalyticsVisitorsService {
       visitor = this.visitorsRepo.create({
         browser_key: dto.browserKey,
         user_id: dto.userId ?? null,
-        user_agent: dto.userAgent?.slice(0, 512) || null,
+        user_agent: userAgent,
+        device_type: parsed.type,
+        device_model: parsed.model,
         last_path: latestPath,
         event_count: 0,
         session_count: 0,
@@ -70,8 +102,14 @@ export class AnalyticsVisitorsService {
       visitor = await this.visitorsRepo.save(visitor);
     } else {
       visitor.user_id = dto.userId ?? visitor.user_id;
-      if (dto.userAgent) {
-        visitor.user_agent = dto.userAgent.slice(0, 512);
+      if (userAgent) {
+        visitor.user_agent = userAgent;
+        visitor.device_type = parsed.type;
+      }
+      if (parsed.model) {
+        visitor.device_model = parsed.model;
+      } else if (userAgent && !visitor.device_model) {
+        visitor.device_model = parseDeviceInfo(userAgent).model;
       }
       if (latestPath) {
         visitor.last_path = latestPath;
@@ -156,7 +194,9 @@ export class AnalyticsVisitorsService {
     await this.sessionsRepo.save(session);
 
     visitor.event_count += events.length;
-    visitor.last_seen_at = session.last_seen_at;
+    if (session.last_seen_at > visitor.last_seen_at) {
+      visitor.last_seen_at = session.last_seen_at;
+    }
     await this.visitorsRepo.save(visitor);
 
     return { accepted: events.length, visitorId: visitor.id, sessionId: session.id };
@@ -176,7 +216,12 @@ export class AnalyticsVisitorsService {
 
     const qb = this.visitorsRepo
       .createQueryBuilder('visitor')
-      .orderBy('visitor.last_seen_at', 'DESC')
+      .orderBy(
+        `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
+        'DESC',
+        'NULLS LAST',
+      )
+      .addOrderBy('visitor.last_seen_at', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
 
@@ -207,8 +252,9 @@ export class AnalyticsVisitorsService {
   }
 
   /**
-   * Admins tab: every registered admin device (from admin_client_devices),
-   * with its analytics visitor row (created on register if missing).
+   * Admins tab: registered admin devices that have real analytics activity.
+   * Empty stubs from dashboard heartbeat alone are omitted so delete stays gone
+   * until that browser browses the storefront again.
    */
   private async listAdminAudience(query: ListVisitorsDto) {
     const page = query.page || 1;
@@ -224,43 +270,29 @@ export class AnalyticsVisitorsService {
       };
     }
 
-    // Backfill visitor stubs for any admin devices that were registered before
-    // we started creating visitor rows on register.
-    for (const browserKey of adminKeys) {
-      const exists = await this.visitorsRepo.exists({
-        where: { browser_key: browserKey },
-      });
-      if (exists) continue;
-      const adminUserId = adminKeyToUserId.get(browserKey);
-      const now = new Date();
-      await this.visitorsRepo.save(
-        this.visitorsRepo.create({
-          browser_key: browserKey,
-          user_id: adminUserId ?? null,
-          user_agent: null,
-          last_path: '/admin-dashboard',
-          event_count: 0,
-          session_count: 0,
-          first_seen_at: now,
-          last_seen_at: now,
-        }),
-      );
-    }
-
     const qb = this.visitorsRepo
       .createQueryBuilder('visitor')
-      .orderBy('visitor.last_seen_at', 'DESC')
+      .orderBy(
+        `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
+        'DESC',
+        'NULLS LAST',
+      )
+      .addOrderBy('visitor.last_seen_at', 'DESC')
       .skip((page - 1) * limit)
       .take(limit)
-      .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
+      .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys })
+      .andWhere('(visitor.event_count > 0 OR visitor.session_count > 0)');
 
     if (query.startDate && query.endDate) {
       const start = new Date(`${query.startDate}T00:00:00.000Z`);
       const end = new Date(`${query.endDate}T23:59:59.999Z`);
-      qb.andWhere('visitor.last_seen_at BETWEEN :start AND :end', {
-        start,
-        end,
-      });
+      qb.andWhere(
+        `COALESCE(
+          (SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id),
+          visitor.last_seen_at
+        ) BETWEEN :start AND :end`,
+        { start, end },
+      );
     }
 
     if (query.search?.trim()) {
@@ -315,17 +347,30 @@ export class AnalyticsVisitorsService {
             .getMany();
 
     const durationByVisitor = new Map<number, number>();
+    const activityLastSeenByVisitor = new Map<number, Date>();
     for (const session of sessions) {
       durationByVisitor.set(
         session.visitor_id,
         (durationByVisitor.get(session.visitor_id) || 0) +
           (session.duration_seconds || 0),
       );
+      const prev = activityLastSeenByVisitor.get(session.visitor_id);
+      if (!prev || session.last_seen_at > prev) {
+        activityLastSeenByVisitor.set(session.visitor_id, session.last_seen_at);
+      }
     }
 
     return {
       data: rows.map((visitor) => {
         const admin = adminInfoByBrowserKey.get(visitor.browser_key) || null;
+        // Prefer real session activity over inflated visitor.last_seen_at
+        // (e.g. from older admin-panel heartbeats).
+        const resolvedLastSeen =
+          activityLastSeenByVisitor.get(visitor.id) ?? visitor.last_seen_at;
+        const parsed = parseDeviceInfo(
+          visitor.user_agent,
+          visitor.device_model || admin?.deviceModel,
+        );
         return {
           id: visitor.id,
           userId: visitor.user_id,
@@ -334,8 +379,11 @@ export class AnalyticsVisitorsService {
           sessionCount: visitor.session_count,
           totalDurationSeconds: durationByVisitor.get(visitor.id) || 0,
           firstSeenAt: visitor.first_seen_at,
-          lastSeenAt: visitor.last_seen_at,
+          lastSeenAt: resolvedLastSeen,
           userAgent: visitor.user_agent,
+          deviceType: admin?.deviceType || visitor.device_type || parsed.type,
+          deviceModel: admin?.deviceModel || visitor.device_model || parsed.model,
+          deviceLabel: parsed.label,
           isAdmin: Boolean(admin) || audience === 'admins',
           admin,
         };
@@ -380,6 +428,16 @@ export class AnalyticsVisitorsService {
       0,
     );
 
+    const activityLastSeen = sessions.reduce<Date | null>((max, session) => {
+      if (!max || session.last_seen_at > max) return session.last_seen_at;
+      return max;
+    }, null);
+
+    const parsed = parseDeviceInfo(
+      visitor.user_agent,
+      visitor.device_model || admin?.deviceModel,
+    );
+
     return {
       id: visitor.id,
       userId: visitor.user_id,
@@ -388,8 +446,11 @@ export class AnalyticsVisitorsService {
       sessionCount: visitor.session_count,
       totalDurationSeconds,
       firstSeenAt: visitor.first_seen_at,
-      lastSeenAt: visitor.last_seen_at,
+      lastSeenAt: activityLastSeen ?? visitor.last_seen_at,
       userAgent: visitor.user_agent,
+      deviceType: admin?.deviceType || visitor.device_type || parsed.type,
+      deviceModel: admin?.deviceModel || visitor.device_model || parsed.model,
+      deviceLabel: parsed.label,
       isAdmin: Boolean(admin),
       admin,
       sessions: sessions.map((session) => ({
@@ -419,11 +480,16 @@ export class AnalyticsVisitorsService {
       throw new NotFoundException(`Visitor #${id} not found`);
     }
 
+    const browserKey = visitor.browser_key;
+
     await this.eventsRepo.delete({ visitor_id: id });
     await this.sessionsRepo.delete({ visitor_id: id });
     await this.visitorsRepo.delete({ id });
+    // Unregister admin device so list backfill / re-register does not
+    // immediately recreate an empty Client # for the same browser key.
+    await this.adminClientDevicesService.unregisterBrowserKey(browserKey);
 
-    return { success: true, id };
+    return { success: true, id, browserKey };
   }
 
   private async resolveAdminInfoByBrowserKeys(
@@ -465,6 +531,7 @@ export class AnalyticsVisitorsService {
         deviceId: device?.deviceId ?? null,
         deviceName: device?.deviceName ?? null,
         deviceType: device?.deviceType ?? null,
+        deviceModel: device?.deviceModel ?? null,
         source: device?.source ?? null,
       });
     }
