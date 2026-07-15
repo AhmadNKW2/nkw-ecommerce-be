@@ -140,7 +140,7 @@ export class AnalyticsService {
       // Use REST transport (`fallback: true`). gRPC can fail with a misleading
       // SERVICE_DISABLED error against this service account/project combo.
       if (credentialsJson) {
-        const parsed = JSON.parse(credentialsJson) as Record<string, unknown>;
+        const parsed = this.parseCredentialsJson(credentialsJson);
         this.client = new BetaAnalyticsDataClient({
           credentials: parsed as any,
           fallback: true,
@@ -232,37 +232,45 @@ export class AnalyticsService {
     endDate: string,
   ) {
     try {
-      const [response] = await client.runReport({
-        property,
-        dateRanges: [{ startDate, endDate }],
-        metrics: [
-          { name: 'activeUsers' },
-          { name: 'newUsers' },
-          { name: 'sessions' },
-          { name: 'screenPageViews' },
-          { name: 'engagedSessions' },
-          { name: 'bounceRate' },
-          { name: 'averageSessionDuration' },
-          { name: 'engagementRate' },
-          { name: 'eventCount' },
-          { name: 'conversions' },
-          { name: 'totalRevenue' },
-        ],
-      });
+      // GA4 allows at most 10 metrics per request.
+      const [[primary], [secondary]] = await Promise.all([
+        client.runReport({
+          property,
+          dateRanges: [{ startDate, endDate }],
+          metrics: [
+            { name: 'activeUsers' },
+            { name: 'newUsers' },
+            { name: 'sessions' },
+            { name: 'screenPageViews' },
+            { name: 'engagedSessions' },
+            { name: 'bounceRate' },
+            { name: 'averageSessionDuration' },
+            { name: 'engagementRate' },
+            { name: 'eventCount' },
+            { name: 'conversions' },
+          ],
+        }),
+        client.runReport({
+          property,
+          dateRanges: [{ startDate, endDate }],
+          metrics: [{ name: 'totalRevenue' }],
+        }),
+      ]);
 
-      const values = response.rows?.[0]?.metricValues || [];
+      const primaryValues = primary.rows?.[0]?.metricValues || [];
+      const secondaryValues = secondary.rows?.[0]?.metricValues || [];
       return {
-        activeUsers: this.toNumber(values[0]?.value),
-        newUsers: this.toNumber(values[1]?.value),
-        sessions: this.toNumber(values[2]?.value),
-        pageViews: this.toNumber(values[3]?.value),
-        engagedSessions: this.toNumber(values[4]?.value),
-        bounceRate: this.toNumber(values[5]?.value),
-        averageSessionDuration: this.toNumber(values[6]?.value),
-        engagementRate: this.toNumber(values[7]?.value),
-        eventCount: this.toNumber(values[8]?.value),
-        conversions: this.toNumber(values[9]?.value),
-        totalRevenue: this.toNumber(values[10]?.value),
+        activeUsers: this.toNumber(primaryValues[0]?.value),
+        newUsers: this.toNumber(primaryValues[1]?.value),
+        sessions: this.toNumber(primaryValues[2]?.value),
+        pageViews: this.toNumber(primaryValues[3]?.value),
+        engagedSessions: this.toNumber(primaryValues[4]?.value),
+        bounceRate: this.toNumber(primaryValues[5]?.value),
+        averageSessionDuration: this.toNumber(primaryValues[6]?.value),
+        engagementRate: this.toNumber(primaryValues[7]?.value),
+        eventCount: this.toNumber(primaryValues[8]?.value),
+        conversions: this.toNumber(primaryValues[9]?.value),
+        totalRevenue: this.toNumber(secondaryValues[0]?.value),
       };
     } catch (error) {
       this.logger.error('GA4 totals report failed', error as Error);
@@ -429,24 +437,57 @@ export class AnalyticsService {
     return next;
   }
 
+  private parseCredentialsJson(
+    credentialsJson: string,
+  ): Record<string, unknown> {
+    const parsed = JSON.parse(credentialsJson) as Record<string, unknown>;
+    if (typeof parsed.private_key === 'string') {
+      // Railway / env paste sometimes keeps literal "\n" sequences.
+      parsed.private_key = parsed.private_key.replace(/\\n/g, '\n');
+    }
+    return parsed;
+  }
+
   private gaErrorMessage(error: unknown, fallback: string): string {
     const message =
       error && typeof error === 'object' && 'message' in error
         ? String((error as { message?: unknown }).message || '')
         : '';
+
+    let detail = message;
+    try {
+      const nested = JSON.parse(message) as {
+        error?: { message?: string; status?: string };
+      };
+      if (nested?.error?.message) {
+        detail = nested.error.message;
+      }
+    } catch {
+      // message is not JSON
+    }
+
     if (
-      message.includes('has not been used') ||
-      message.includes('SERVICE_DISABLED') ||
-      message.includes('it is disabled')
+      detail.includes('has not been used') ||
+      detail.includes('SERVICE_DISABLED') ||
+      detail.includes('it is disabled')
     ) {
       return 'Google Analytics Data API is disabled for this GCP project. Enable it in Google Cloud Console, wait a few minutes, then retry.';
     }
-    if (message.includes('PERMISSION_DENIED')) {
+    if (
+      detail.includes('PERMISSION_DENIED') ||
+      detail.includes('permission')
+    ) {
       return 'GA4 permission denied. Ensure the service account is a Viewer on this property.';
     }
-    if (message.includes('INVALID_ARGUMENT')) {
-      return 'Invalid GA4 request. Check property ID and date range.';
+    if (detail.includes('limited to 10 metrics')) {
+      return 'GA4 metric limit exceeded. Please retry after redeploy.';
     }
-    return fallback;
+    if (
+      detail.includes('INVALID_ARGUMENT') ||
+      message.includes('INVALID_ARGUMENT')
+    ) {
+      return `Invalid GA4 request: ${detail.slice(0, 180)}`;
+    }
+    return detail ? detail.slice(0, 240) : fallback;
   }
 }
