@@ -152,6 +152,7 @@ describe('SettingsService', () => {
     expect(result).toEqual({
       id: 1,
       site_name_en: 'Storefront',
+      shipping_rules: [],
     });
   });
 
@@ -170,7 +171,44 @@ describe('SettingsService', () => {
     expect(queryRunner.createTable).not.toHaveBeenCalled();
     expect(seoSettingsRepository.create).not.toHaveBeenCalled();
     expect(seoSettingsRepository.save).not.toHaveBeenCalled();
-    expect(result).toBe(existingSettings);
+    expect(result).toEqual({
+      ...existingSettings,
+      shipping_rules: [],
+    });
+    expect(cacheManager.set).toHaveBeenCalledWith(
+      'settings:seo:v2-shipping-rules',
+      expect.objectContaining({ id: 7 }),
+      30_000,
+    );
+  });
+
+  it('write-through caches fresh SEO settings after update and clears legacy keys', async () => {
+    const existingSettings = {
+      id: 1,
+      site_name_en: 'Storefront',
+      shipping_cutoff_hour: 20,
+      shipping_rules: [],
+    };
+    const savedSettings = {
+      ...existingSettings,
+      shipping_cutoff_hour: 23,
+    };
+
+    seoSettingsRepository.findOne.mockResolvedValue(existingSettings);
+    seoSettingsRepository.save.mockResolvedValue(savedSettings);
+
+    const result = await service.updateSeoSettings({
+      shipping_cutoff_hour: 23,
+    });
+
+    expect(result.shipping_cutoff_hour).toBe(23);
+    expect(cacheManager.del).toHaveBeenCalledWith('settings:seo:v2-shipping-rules');
+    expect(cacheManager.del).toHaveBeenCalledWith('settings:seo');
+    expect(cacheManager.set).toHaveBeenCalledWith(
+      'settings:seo:v2-shipping-rules',
+      expect.objectContaining({ shipping_cutoff_hour: 23 }),
+      30_000,
+    );
   });
 
   it('overwrites vendor original prices from the current catalog values and reprices all existing products by 1%', async () => {

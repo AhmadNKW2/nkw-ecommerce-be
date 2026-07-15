@@ -45,12 +45,20 @@ import { createSitePopupSettingsTableDefinition } from './site-popup-settings.ta
 @Injectable()
 export class SettingsService implements OnModuleInit {
   private static readonly SEO_SETTINGS_CACHE_KEY = 'settings:seo:v2-shipping-rules';
+  /** Legacy Redis keys from older deploys — always clear these on write. */
+  private static readonly SEO_SETTINGS_LEGACY_CACHE_KEYS = [
+    'settings:seo',
+    'keyv:settings:seo',
+  ] as const;
   private static readonly FEATURE_TOGGLES_CACHE_KEY = 'settings:features';
+  /**
+   * Short TTL safety net. Never use 0 (forever): if invalidation fails, stale
+   * shipping/cutoff settings would stick until process restart.
+   */
+  private static readonly SETTINGS_CACHE_TTL_MS = 30_000;
 
   private schemaInitialized = false;
   private schemaInitPromise: Promise<void> | null = null;
-  private seoSettingsCache: SeoSettings | null = null;
-  private featureTogglesCache: ProductFieldToggles | null = null;
 
   constructor(
     @InjectRepository(SeoSettings)
@@ -78,28 +86,35 @@ export class SettingsService implements OnModuleInit {
     return settings;
   }
 
-  async getSeoSettings(): Promise<SeoSettings> {
-    if (this.seoSettingsCache) {
-      return this.normalizeSeoSettings(this.seoSettingsCache);
-    }
+  private async writeSeoSettingsCache(settings: SeoSettings): Promise<void> {
+    await this.cacheManager.set(
+      SettingsService.SEO_SETTINGS_CACHE_KEY,
+      settings,
+      SettingsService.SETTINGS_CACHE_TTL_MS,
+    );
+  }
 
+  private async invalidateSeoSettingsCache(): Promise<void> {
+    await Promise.all([
+      this.cacheManager.del(SettingsService.SEO_SETTINGS_CACHE_KEY),
+      ...SettingsService.SEO_SETTINGS_LEGACY_CACHE_KEYS.map((key) =>
+        this.cacheManager.del(key),
+      ),
+    ]);
+  }
+
+  async getSeoSettings(): Promise<SeoSettings> {
     const cached = await this.cacheManager.get<SeoSettings>(
       SettingsService.SEO_SETTINGS_CACHE_KEY,
     );
     if (cached) {
-      this.seoSettingsCache = this.normalizeSeoSettings(cached);
-      return this.seoSettingsCache;
+      return this.normalizeSeoSettings(cached);
     }
 
     const settings = this.normalizeSeoSettings(
       await this.loadSeoSettingsFromDatabase(),
     );
-    this.seoSettingsCache = settings;
-    await this.cacheManager.set(
-      SettingsService.SEO_SETTINGS_CACHE_KEY,
-      settings,
-      0,
-    );
+    await this.writeSeoSettingsCache(settings);
 
     return settings;
   }
@@ -120,9 +135,13 @@ export class SettingsService implements OnModuleInit {
 
     Object.assign(settings, normalizedPatch);
 
-    const savedSettings = await this.seoSettingsRepository.save(settings);
-    this.seoSettingsCache = null;
-    await this.cacheManager.del(SettingsService.SEO_SETTINGS_CACHE_KEY);
+    const savedSettings = this.normalizeSeoSettings(
+      await this.seoSettingsRepository.save(settings),
+    );
+    // Drop any stale entry, then write-through the fresh row so readers never
+    // keep an old cutoff/rules payload if `del` alone is flaky on Redis.
+    await this.invalidateSeoSettingsCache();
+    await this.writeSeoSettingsCache(savedSettings);
 
     return savedSettings;
   }
@@ -144,15 +163,10 @@ export class SettingsService implements OnModuleInit {
   }
 
   async getProductFieldToggles(): Promise<ProductFieldToggles> {
-    if (this.featureTogglesCache) {
-      return this.featureTogglesCache;
-    }
-
     const cached = await this.cacheManager.get<ProductFieldToggles>(
       SettingsService.FEATURE_TOGGLES_CACHE_KEY,
     );
     if (cached) {
-      this.featureTogglesCache = cached;
       return cached;
     }
 
@@ -169,11 +183,10 @@ export class SettingsService implements OnModuleInit {
         this.productFieldTogglesRepository.create({}),
       ));
 
-    this.featureTogglesCache = toggles;
     await this.cacheManager.set(
       SettingsService.FEATURE_TOGGLES_CACHE_KEY,
       toggles,
-      0,
+      SettingsService.SETTINGS_CACHE_TTL_MS,
     );
 
     return toggles;
@@ -187,8 +200,12 @@ export class SettingsService implements OnModuleInit {
     Object.assign(toggles, updateProductFieldTogglesDto);
 
     const savedToggles = await this.productFieldTogglesRepository.save(toggles);
-    this.featureTogglesCache = null;
     await this.cacheManager.del(SettingsService.FEATURE_TOGGLES_CACHE_KEY);
+    await this.cacheManager.set(
+      SettingsService.FEATURE_TOGGLES_CACHE_KEY,
+      savedToggles,
+      SettingsService.SETTINGS_CACHE_TTL_MS,
+    );
 
     return savedToggles;
   }
