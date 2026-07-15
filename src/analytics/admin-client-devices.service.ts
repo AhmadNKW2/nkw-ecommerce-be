@@ -105,14 +105,31 @@ export class AdminClientDevicesService implements OnModuleInit {
     } else {
       device.admin_user_id = adminUserId;
       device.source = source;
-      if (userAgent) {
+      // Do not flip Desktop ↔ Mobile on the same client id (e.g. Chrome DevTools
+      // device mode). Keep a stable fingerprint once we know it.
+      const previousType = device.device_type;
+      const typeConflict =
+        previousType &&
+        previousType !== 'Unknown' &&
+        deviceType !== 'Unknown' &&
+        previousType !== deviceType;
+
+      if (userAgent && !typeConflict) {
         device.user_agent = userAgent;
         device.device_type = deviceType;
+      } else if (!device.device_type && deviceType) {
+        device.device_type = deviceType;
       }
-      if (deviceModel) {
-        device.device_model = deviceModel;
-      } else if (userAgent && !device.device_model) {
-        device.device_model = parseDeviceInfo(userAgent).model;
+
+      if (!typeConflict) {
+        if (deviceModel) {
+          device.device_model = deviceType === 'Desktop' ? null : deviceModel;
+        } else if (userAgent && !device.device_model && deviceType !== 'Desktop') {
+          device.device_model = parseDeviceInfo(userAgent).model;
+        }
+      }
+      if (deviceType === 'Desktop') {
+        device.device_model = null;
       }
       device.last_seen_at = now;
     }

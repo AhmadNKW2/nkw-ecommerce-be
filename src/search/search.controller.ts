@@ -1,4 +1,13 @@
-import { Controller, Get, Query, UseGuards, Req, Res, UnauthorizedException } from '@nestjs/common';
+import {
+  Controller,
+  ForbiddenException,
+  Get,
+  Query,
+  UseGuards,
+  Req,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { SearchService } from './search.service';
 import { SearchQueryDto, AutocompleteQueryDto } from './dto/search-query.dto';
 import {
@@ -26,6 +35,13 @@ export class SearchController {
     const isAdminUser = isCatalogAdminUser(req.user);
 
     if (query.is_admin === true && !isAdminUser) {
+      // Authenticated but wrong role → 403 (do not trigger client session logout).
+      // Missing/invalid auth → 401.
+      if (req.user) {
+        throw new ForbiddenException(
+          "You don't have permission to perform this action",
+        );
+      }
       throw new UnauthorizedException(
         'Admin authentication is required for admin search',
       );

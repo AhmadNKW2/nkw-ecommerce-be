@@ -98,6 +98,11 @@ export class Order {
   @Column({ nullable: true })
   trackingNumber: string;
 
+  /** Storefront analytics client id (`ordonsooq_browser_key`). */
+  @Index('idx_orders_browser_key')
+  @Column({ name: 'browser_key', type: 'varchar', length: 64, nullable: true })
+  browserKey: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

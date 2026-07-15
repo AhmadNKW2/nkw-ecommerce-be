@@ -12,6 +12,8 @@ import { ProductsModule } from '../products/products.module';
 import { CartModule } from '../cart/cart.module';
 import { SettingsModule } from '../settings/settings.module';
 import { AdminNotificationsModule } from '../admin-notifications/admin-notifications.module';
+import { AnalyticsModule } from '../analytics/analytics.module';
+import { AnalyticsVisitor } from '../analytics/entities/analytics-visitor.entity';
 
 @Module({
   imports: [
@@ -20,6 +22,7 @@ import { AdminNotificationsModule } from '../admin-notifications/admin-notificat
       OrderItem,
       OrderStatusHistory,
       Product,
+      AnalyticsVisitor,
     ]),
     CouponsModule,
     WalletModule,
@@ -27,6 +30,7 @@ import { AdminNotificationsModule } from '../admin-notifications/admin-notificat
     CartModule,
     SettingsModule,
     AdminNotificationsModule,
+    AnalyticsModule,
   ],
   controllers: [OrdersController],
   providers: [OrdersService],

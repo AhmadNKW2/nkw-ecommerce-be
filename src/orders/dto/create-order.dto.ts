@@ -7,6 +7,7 @@ import {
   ValidateNested,
   IsArray,
   Min,
+  MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaymentMethod } from '../entities/order.entity';
@@ -103,4 +104,10 @@ export class CreateOrderDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  /** Analytics browser client id from storefront localStorage/cookie. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  browserKey?: string;
 }

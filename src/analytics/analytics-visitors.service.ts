@@ -252,9 +252,8 @@ export class AnalyticsVisitorsService implements OnModuleInit {
   }
 
   /**
-   * Admins tab: registered admin devices that have real analytics activity.
-   * Empty stubs from dashboard heartbeat alone are omitted so delete stays gone
-   * until that browser browses the storefront again.
+   * Admins tab: every registered admin device (including dashboard-only stubs).
+   * Date range is ignored here so all devices always appear.
    */
   private async listAdminAudience(query: ListVisitorsDto) {
     const page = query.page || 1;
@@ -270,6 +269,28 @@ export class AnalyticsVisitorsService implements OnModuleInit {
       };
     }
 
+    // Ensure every admin device has a visitor row so all devices appear.
+    for (const browserKey of adminKeys) {
+      const exists = await this.visitorsRepo.exists({
+        where: { browser_key: browserKey },
+      });
+      if (exists) continue;
+      const adminUserId = adminKeyToUserId.get(browserKey);
+      const now = new Date();
+      await this.visitorsRepo.save(
+        this.visitorsRepo.create({
+          browser_key: browserKey,
+          user_id: adminUserId ?? null,
+          user_agent: null,
+          last_path: '/admin-dashboard',
+          event_count: 0,
+          session_count: 0,
+          first_seen_at: now,
+          last_seen_at: now,
+        }),
+      );
+    }
+
     const qb = this.visitorsRepo
       .createQueryBuilder('visitor')
       .orderBy(
@@ -280,20 +301,7 @@ export class AnalyticsVisitorsService implements OnModuleInit {
       .addOrderBy('visitor.last_seen_at', 'DESC')
       .skip((page - 1) * limit)
       .take(limit)
-      .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys })
-      .andWhere('(visitor.event_count > 0 OR visitor.session_count > 0)');
-
-    if (query.startDate && query.endDate) {
-      const start = new Date(`${query.startDate}T00:00:00.000Z`);
-      const end = new Date(`${query.endDate}T23:59:59.999Z`);
-      qb.andWhere(
-        `COALESCE(
-          (SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id),
-          visitor.last_seen_at
-        ) BETWEEN :start AND :end`,
-        { start, end },
-      );
-    }
+      .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
 
     if (query.search?.trim()) {
       const term = query.search.trim();
@@ -308,6 +316,8 @@ export class AnalyticsVisitorsService implements OnModuleInit {
                OR u."firstName" ILIKE :adminTerm
                OR u."lastName" ILIKE :adminTerm
                OR d.device_name ILIKE :adminTerm
+               OR d.device_model ILIKE :adminTerm
+               OR d.device_type ILIKE :adminTerm
           ))`,
           { path: `%${term}%`, adminTerm: `%${term}%` },
         );
@@ -371,6 +381,19 @@ export class AnalyticsVisitorsService implements OnModuleInit {
           visitor.user_agent,
           visitor.device_model || admin?.deviceModel,
         );
+        const deviceType =
+          audience === 'admins'
+            ? admin?.deviceType || visitor.device_type || parsed.type
+            : visitor.device_type || admin?.deviceType || parsed.type;
+        const deviceModel =
+          deviceType === 'Desktop'
+            ? null
+            : audience === 'admins'
+              ? admin?.deviceModel || visitor.device_model || parsed.model
+              : visitor.device_model || admin?.deviceModel || parsed.model;
+        const deviceLabel = deviceModel
+          ? `${deviceType} · ${deviceModel}`
+          : deviceType;
         return {
           id: visitor.id,
           userId: visitor.user_id,
@@ -381,9 +404,9 @@ export class AnalyticsVisitorsService implements OnModuleInit {
           firstSeenAt: visitor.first_seen_at,
           lastSeenAt: resolvedLastSeen,
           userAgent: visitor.user_agent,
-          deviceType: admin?.deviceType || visitor.device_type || parsed.type,
-          deviceModel: admin?.deviceModel || visitor.device_model || parsed.model,
-          deviceLabel: parsed.label,
+          deviceType,
+          deviceModel,
+          deviceLabel,
           isAdmin: Boolean(admin) || audience === 'admins',
           admin,
         };

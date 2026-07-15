@@ -6,7 +6,7 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, QueryRunner, TableColumn } from 'typeorm';
+import { Repository, DataSource, QueryRunner, TableColumn, In } from 'typeorm';
 import {
   Order,
   OrderStatus,
@@ -33,8 +33,8 @@ import { SettingsService } from '../settings/settings.service';
 import { calculateOrderShippingAmount } from '../settings/delivery-fee.util';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import { Vendor } from '../vendors/entities/vendor.entity';
-
-// ... imports
+import { AnalyticsVisitor } from '../analytics/entities/analytics-visitor.entity';
+import { AdminClientDevicesService } from '../analytics/admin-client-devices.service';
 
 function getErrorMessage(error: unknown): string | undefined {
   return error instanceof Error ? error.message : undefined;
@@ -75,12 +75,15 @@ export class OrdersService implements OnModuleInit {
     private orderItemsRepository: Repository<OrderItem>,
     @InjectRepository(OrderStatusHistory)
     private orderStatusHistoryRepository: Repository<OrderStatusHistory>,
+    @InjectRepository(AnalyticsVisitor)
+    private analyticsVisitorsRepository: Repository<AnalyticsVisitor>,
     private couponsService: CouponsService,
     private walletService: WalletService,
     private cartService: CartService,
     private productsService: ProductsService,
     private settingsService: SettingsService,
     private adminNotificationsService: AdminNotificationsService,
+    private adminClientDevicesService: AdminClientDevicesService,
     private dataSource: DataSource,
   ) {}
 
@@ -95,6 +98,7 @@ export class OrdersService implements OnModuleInit {
 
     this.ensureSchemaPromise = Promise.all([
       this.ensureWalletPaymentColumnsExist(),
+      this.ensureBrowserKeyColumnExists(),
       this.ensureOrderStatusHistoryTableExists(),
       this.ensureObsoleteOrderStatusesRemoved(),
     ]).then(() => undefined);
@@ -209,6 +213,33 @@ export class OrdersService implements OnModuleInit {
           scale: 2,
           default: 0,
         }),
+      );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureBrowserKeyColumnExists(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (await queryRunner.hasColumn('orders', 'browser_key')) {
+        return;
+      }
+
+      await queryRunner.addColumn(
+        'orders',
+        new TableColumn({
+          name: 'browser_key',
+          type: 'varchar',
+          length: '64',
+          isNullable: true,
+        }),
+      );
+      await queryRunner.query(
+        `CREATE INDEX IF NOT EXISTS idx_orders_browser_key ON orders (browser_key)`,
       );
     } finally {
       await queryRunner.release();
@@ -446,6 +477,7 @@ export class OrdersService implements OnModuleInit {
         paymentMethod: walletPayment.paymentMethod,
         walletAppliedAmount: walletPayment.walletAppliedAmount,
         notes: createOrderDto.notes,
+        browserKey: createOrderDto.browserKey?.trim().slice(0, 64) || null,
       });
 
       const savedOrder = await queryRunner.manager.save(Order, order);
@@ -988,6 +1020,84 @@ export class OrdersService implements OnModuleInit {
    * the productMedia -> media relation chain (loaded via `attachOrderItemImages`
    * relations/joins). Mutates and returns the same order.
    */
+  /**
+   * Attach analytics Client # + admin-device flag from browser_key.
+   * Admin is detected by client id even when the order was placed as guest.
+   */
+  private async attachClientAnalyticsInfo<T extends Order>(
+    order: T,
+  ): Promise<
+    T & {
+      clientId: number | null;
+      isAdminClient: boolean;
+    }
+  > {
+    const browserKey = order.browserKey?.trim() || null;
+    if (!browserKey) {
+      return Object.assign(order, {
+        clientId: null as number | null,
+        isAdminClient: false,
+      });
+    }
+
+    const visitor = await this.analyticsVisitorsRepository.findOne({
+      where: { browser_key: browserKey },
+      select: { id: true },
+    });
+    const isAdminClient =
+      await this.adminClientDevicesService.isAdminBrowserKey(browserKey);
+
+    return Object.assign(order, {
+      clientId: visitor?.id ?? null,
+      isAdminClient,
+    });
+  }
+
+  private async attachClientAnalyticsInfoMany<T extends Order>(
+    orders: T[],
+  ): Promise<
+    Array<
+      T & {
+        clientId: number | null;
+        isAdminClient: boolean;
+      }
+    >
+  > {
+    const keys = [
+      ...new Set(
+        orders
+          .map((order) => order.browserKey?.trim())
+          .filter((key): key is string => Boolean(key)),
+      ),
+    ];
+
+    if (!keys.length) {
+      return orders.map((order) =>
+        Object.assign(order, {
+          clientId: null as number | null,
+          isAdminClient: false,
+        }),
+      );
+    }
+
+    const visitors = await this.analyticsVisitorsRepository.find({
+      where: { browser_key: In(keys) },
+      select: { id: true, browser_key: true },
+    });
+    const visitorIdByKey = new Map(
+      visitors.map((visitor) => [visitor.browser_key, visitor.id]),
+    );
+    const adminKeys = await this.adminClientDevicesService.getAdminBrowserKeys();
+
+    return orders.map((order) => {
+      const key = order.browserKey?.trim() || null;
+      return Object.assign(order, {
+        clientId: key ? visitorIdByKey.get(key) ?? null : null,
+        isAdminClient: key ? adminKeys.has(key) : false,
+      });
+    });
+  }
+
   private attachOrderImages(order: Order): Order {
     order.items?.forEach((item) => {
       if (item.product) {
@@ -1016,7 +1126,7 @@ export class OrdersService implements OnModuleInit {
       },
     });
     if (!order) throw new NotFoundException('Order not found');
-    return this.attachOrderImages(order);
+    return this.attachClientAnalyticsInfo(this.attachOrderImages(order));
   }
 
   async findAll(userId: number) {
@@ -1073,7 +1183,9 @@ export class OrdersService implements OnModuleInit {
     }
 
     const [rawData, total] = await query.getManyAndCount();
-    const data = rawData.map((order) => this.attachOrderImages(order));
+    const data = await this.attachClientAnalyticsInfoMany(
+      rawData.map((order) => this.attachOrderImages(order)),
+    );
 
     return {
       data,
