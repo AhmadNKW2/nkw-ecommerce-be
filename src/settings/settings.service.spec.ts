@@ -186,6 +186,9 @@ describe('SettingsService', () => {
     const existingSettings = {
       id: 1,
       site_name_en: 'Storefront',
+      site_name_ar: 'المتجر',
+      brand_primary: '#00193d',
+      brand_secondary: '#f0bb1c',
       shipping_cutoff_hour: 20,
       shipping_rules: [],
     };
@@ -194,19 +197,36 @@ describe('SettingsService', () => {
       shipping_cutoff_hour: 23,
     };
 
-    seoSettingsRepository.findOne.mockResolvedValue(existingSettings);
+    seoSettingsRepository.findOne
+      .mockResolvedValueOnce(existingSettings)
+      .mockResolvedValueOnce(savedSettings);
     seoSettingsRepository.save.mockResolvedValue(savedSettings);
 
     const result = await service.updateSeoSettings({
       shipping_cutoff_hour: 23,
-    });
+      // Simulate ValidationPipe leaving omitted DTO keys as undefined
+      brand_primary: undefined,
+      brand_secondary: undefined,
+      site_name_en: undefined,
+    } as never);
 
+    expect(seoSettingsRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shipping_cutoff_hour: 23,
+        brand_primary: '#00193d',
+        brand_secondary: '#f0bb1c',
+      }),
+    );
+    expect(result.brand_primary).toBe('#00193d');
     expect(result.shipping_cutoff_hour).toBe(23);
     expect(cacheManager.del).toHaveBeenCalledWith('settings:seo:v2-shipping-rules');
     expect(cacheManager.del).toHaveBeenCalledWith('settings:seo');
     expect(cacheManager.set).toHaveBeenCalledWith(
       'settings:seo:v2-shipping-rules',
-      expect.objectContaining({ shipping_cutoff_hour: 23 }),
+      expect.objectContaining({
+        shipping_cutoff_hour: 23,
+        brand_primary: '#00193d',
+      }),
       30_000,
     );
   });

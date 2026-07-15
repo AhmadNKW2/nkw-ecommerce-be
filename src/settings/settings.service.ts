@@ -122,26 +122,37 @@ export class SettingsService implements OnModuleInit {
   async updateSeoSettings(updateSeoSettingsDto: UpdateSeoSettingsDto) {
     const settings = await this.loadSeoSettingsFromDatabase();
 
+    // ValidationPipe + class-transformer leave every DTO key present as
+    // `undefined` for omitted fields. Filtering is required — otherwise
+    // Object.assign would wipe brand colors / SEO fields on a shipping-only save.
     const normalizedPatch = Object.fromEntries(
-      Object.entries(updateSeoSettingsDto).map(([key, value]) => {
-        if (typeof value !== 'string') {
-          return [key, value];
-        }
+      Object.entries(updateSeoSettingsDto)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]) => {
+          if (typeof value !== 'string') {
+            return [key, value];
+          }
 
-        const trimmedValue = value.trim();
-        return [key, trimmedValue.length > 0 ? trimmedValue : null];
-      }),
+          const trimmedValue = value.trim();
+          return [key, trimmedValue.length > 0 ? trimmedValue : null];
+        }),
     );
 
     Object.assign(settings, normalizedPatch);
 
+    await this.seoSettingsRepository.save(settings);
+
+    // Reload a clean row so the response/cache never carry assigned `undefined`
+    // brand fields from the in-memory entity after a partial patch.
     const savedSettings = this.normalizeSeoSettings(
-      await this.seoSettingsRepository.save(settings),
+      await this.loadSeoSettingsFromDatabase(),
     );
-    // Drop any stale entry, then write-through the fresh row so readers never
-    // keep an old cutoff/rules payload if `del` alone is flaky on Redis.
+    const cachePayload = JSON.parse(
+      JSON.stringify(savedSettings),
+    ) as SeoSettings;
+
     await this.invalidateSeoSettingsCache();
-    await this.writeSeoSettingsCache(savedSettings);
+    await this.writeSeoSettingsCache(cachePayload);
 
     return savedSettings;
   }
