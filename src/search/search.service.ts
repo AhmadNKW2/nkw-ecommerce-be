@@ -46,6 +46,11 @@ import {
   normalizeSearchLocale,
   SEARCH_EXPANSION_VERSION,
 } from './utils/spec-expansion.utils';
+import {
+  isExactTitleMatch,
+  orderIdsByTitleRelevance,
+  TITLE_RELEVANCE_VERSION,
+} from './utils/title-relevance.utils';
 import { SearchCacheService } from './search-cache.service';
 import {
   TermConceptLexiconService,
@@ -747,6 +752,7 @@ export class SearchService implements OnModuleInit {
   ): Promise<string> {
     const payload = JSON.stringify({
       expansionVersion: SEARCH_EXPANSION_VERSION,
+      titleRelevanceVersion: TITLE_RELEVANCE_VERSION,
       q: normalizeSearchQuery(dto.q),
       isAdmin,
       filterBy: filterBy ?? '',
@@ -785,6 +791,236 @@ export class SearchService implements OnModuleInit {
       specifications_values_ids: (dto as any).specifications_values_ids ?? null,
       average_rating_min: dto.average_rating_min ?? null,
       include_facets: dto.include_facets !== false,
+      titleRelevanceVersion: TITLE_RELEVANCE_VERSION,
+    });
+  }
+
+  private shouldApplyTitleRelevanceOrdering(dto: SearchQueryDto): boolean {
+    const rawQuery = typeof dto.q === 'string' ? dto.q.trim() : '';
+    if (!rawQuery || rawQuery === '*') {
+      return false;
+    }
+
+    const sortBy = (dto.sort_by ?? (dto as any).sortBy)?.trim() as
+      | string
+      | undefined;
+    if (!sortBy) {
+      return true;
+    }
+
+    if (
+      sortBy.startsWith('price') ||
+      sortBy.startsWith('price_min') ||
+      sortBy.startsWith('effective_price') ||
+      sortBy.startsWith('rating') ||
+      sortBy.startsWith('average_rating') ||
+      sortBy.startsWith('created_at')
+    ) {
+      return false;
+    }
+
+    return true;
+  }
+
+  private async findExactTitleProductIds(
+    rawQuery: string,
+    filterBy?: string,
+  ): Promise<number[]> {
+    const trimmed = rawQuery.trim().replace(/\s+/g, ' ');
+    if (!trimmed || trimmed === '*') {
+      return [];
+    }
+
+    const normalizedQuery = normalizeSearchQuery(trimmed);
+    const exactIds: number[] = [];
+    const seen = new Set<number>();
+
+    const pushId = (id: number) => {
+      if (!Number.isInteger(id) || id <= 0 || seen.has(id)) return;
+      seen.add(id);
+      exactIds.push(id);
+    };
+
+    try {
+      const result = await this.typesenseService.search({
+        q: normalizedQuery || trimmed,
+        query_by: 'name_en,name_ar_norm,name_ar',
+        query_by_weights: '1,1,1',
+        text_match_type: 'max_weight',
+        prioritize_token_position: true,
+        drop_tokens_threshold: 0,
+        filter_by: filterBy,
+        page: 1,
+        per_page: 50,
+        num_typos: 0,
+        prefix: false,
+        include_fields: 'id,name_en,name_ar,name_ar_norm',
+      });
+
+      for (const hit of Array.isArray(result.hits) ? result.hits : []) {
+        const doc = hit?.document as
+          | {
+              id?: number | string;
+              name_en?: string;
+              name_ar?: string;
+            }
+          | undefined;
+        if (!doc) continue;
+        if (isExactTitleMatch(trimmed, doc.name_en, doc.name_ar)) {
+          pushId(Number(doc.id));
+        }
+      }
+    } catch (error) {
+      this.logger.warn(
+        `[exact-title] Typesense lookup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    if (exactIds.length === 0) {
+      try {
+        const rows = await this.productsRepository
+          .createQueryBuilder('product')
+          .select(['product.id', 'product.name_en', 'product.name_ar'])
+          .where(
+            'product.name_en = :q OR product.name_ar = :q OR product.name_en = :collapsed OR product.name_ar = :collapsed',
+            { q: rawQuery.trim(), collapsed: trimmed },
+          )
+          .andWhere('product.visible = :visible', { visible: true })
+          .andWhere('product.status IN (:...statuses)', {
+            statuses: SEARCHABLE_STATUSES,
+          })
+          .andWhere('product.is_out_of_stock = :oos', { oos: false })
+          .take(20)
+          .getMany();
+
+        for (const row of rows) {
+          if (isExactTitleMatch(trimmed, row.name_en, row.name_ar)) {
+            pushId(Number(row.id));
+          }
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[exact-title] DB lookup failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return exactIds;
+  }
+
+  private async fetchProductTitlesByIds(
+    productIds: number[],
+  ): Promise<Map<number, { name_en?: string | null; name_ar?: string | null }>> {
+    const titlesById = new Map<
+      number,
+      { name_en?: string | null; name_ar?: string | null }
+    >();
+    const uniqueIds = Array.from(
+      new Set(
+        productIds.filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    );
+    if (uniqueIds.length === 0) {
+      return titlesById;
+    }
+
+    for (let i = 0; i < uniqueIds.length; i += this.typesenseIdPageSize) {
+      const chunk = uniqueIds.slice(i, i + this.typesenseIdPageSize);
+      try {
+        const result = await this.typesenseService.search({
+          q: '*',
+          query_by: PRODUCT_CARD_QUERY_BY,
+          filter_by: `id:=[${chunk.join(',')}]`,
+          page: 1,
+          per_page: chunk.length,
+          include_fields: 'id,name_en,name_ar',
+        });
+
+        for (const hit of Array.isArray(result.hits) ? result.hits : []) {
+          const doc = hit?.document as
+            | { id?: number | string; name_en?: string; name_ar?: string }
+            | undefined;
+          if (!doc) continue;
+          const id = Number(doc.id);
+          if (!Number.isInteger(id) || id <= 0) continue;
+          titlesById.set(id, {
+            name_en: doc.name_en,
+            name_ar: doc.name_ar,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[title-relevance] Typesense title hydrate failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    const missingIds = uniqueIds.filter((id) => !titlesById.has(id));
+    if (missingIds.length > 0) {
+      try {
+        const rows = await this.productsRepository.find({
+          where: { id: In(missingIds) },
+          select: { id: true, name_en: true, name_ar: true },
+        });
+        for (const row of rows) {
+          titlesById.set(Number(row.id), {
+            name_en: row.name_en,
+            name_ar: row.name_ar,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `[title-relevance] DB title hydrate failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return titlesById;
+  }
+
+  private async applyTitleRelevanceOrdering(params: {
+    query: string;
+    orderedIds: number[];
+    filterBy?: string;
+    knownTitlesById?: Map<
+      number,
+      { name_en?: string | null; name_ar?: string | null }
+    >;
+  }): Promise<number[]> {
+    const exactTitleIds = await this.findExactTitleProductIds(
+      params.query,
+      params.filterBy,
+    );
+
+    const idsNeedingTitles = Array.from(
+      new Set([...exactTitleIds, ...params.orderedIds]),
+    );
+    const titlesById =
+      params.knownTitlesById && params.knownTitlesById.size > 0
+        ? new Map(params.knownTitlesById)
+        : new Map<number, { name_en?: string | null; name_ar?: string | null }>();
+
+    const missingTitleIds = idsNeedingTitles.filter((id) => !titlesById.has(id));
+    if (missingTitleIds.length > 0) {
+      const fetched = await this.fetchProductTitlesByIds(missingTitleIds);
+      for (const [id, title] of fetched) {
+        titlesById.set(id, title);
+      }
+    }
+
+    return orderIdsByTitleRelevance({
+      query: params.query,
+      orderedIds: params.orderedIds,
+      exactTitleIds,
+      titlesById,
     });
   }
 
@@ -3178,6 +3414,51 @@ export class SearchService implements OnModuleInit {
           expansionQueries: expanded.expansionQueries,
           conceptQueryDebug: expanded.conceptQueryDebug,
         };
+      }
+    }
+
+    if (
+      this.shouldApplyTitleRelevanceOrdering(dto) &&
+      normalizedQuery &&
+      normalizedQuery !== '*'
+    ) {
+      const knownTitlesById = new Map<
+        number,
+        { name_en?: string | null; name_ar?: string | null }
+      >();
+      for (const hit of hits) {
+        const doc = hit?.document;
+        const id = Number(doc?.id);
+        if (!Number.isInteger(id) || id <= 0 || !doc) continue;
+        knownTitlesById.set(id, {
+          name_en: doc.name_en,
+          name_ar: doc.name_ar,
+        });
+      }
+
+      orderedProductIds = await this.applyTitleRelevanceOrdering({
+        query: dto.q?.trim() || normalizedQuery,
+        orderedIds: orderedProductIds,
+        filterBy,
+        knownTitlesById,
+      });
+
+      if (cachedBrandBucketBundle) {
+        cachedBrandBucketBundle.orderedIds = orderedProductIds;
+      }
+
+      // Persist re-ranked IDs so page 2+ does not reuse pre-title-ranking order.
+      if (
+        !debugSearchEnabled &&
+        expansionCacheKey &&
+        orderedProductIds.length > 0 &&
+        cachedBrandBucketBundle
+      ) {
+        await this.cacheManager.set(
+          expansionCacheKey,
+          cachedBrandBucketBundle,
+          this.getExpansionOrderedIdsCacheTtlMs(),
+        );
       }
     }
 

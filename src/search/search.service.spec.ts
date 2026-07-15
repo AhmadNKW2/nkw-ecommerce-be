@@ -27,7 +27,16 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
       Promise.resolve(`${prefix}:${payload}`),
     ),
   };
-  const emptyRepo = { find: jest.fn().mockResolvedValue([]) };
+  const emptyRepo = {
+    find: jest.fn().mockResolvedValue([]),
+    createQueryBuilder: jest.fn(() => ({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    })),
+  };
   const categoriesRepository = {
     find: jest.fn().mockResolvedValue(categoryRows),
   };
@@ -66,7 +75,7 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
 
     await service.search(dto, false, false);
 
-    expect(typesenseSearch).toHaveBeenCalledTimes(1);
+    expect(typesenseSearch).toHaveBeenCalled();
     const params = typesenseSearch.mock.calls[0][0];
     expect(params.filter_by).toContain('status:=[active,updated,review]');
   });
@@ -416,6 +425,97 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     expect(params.prioritize_token_position).toBe(true);
     expect(params.query_by_weights).toBe(PRODUCT_SEARCH_QUERY_BY_WEIGHTS);
     expect(params.text_match_type).toBe('max_weight');
+  });
+
+  it('pins an exact Arabic title match as the first result before other hits', async () => {
+    const exactTitle =
+      'لابتوب ألعاب Lenovo LOQ 15IRX10 AI مقاس 15.6 إنش FHD IPS 144Hz بمعالج Intel Core i7-14700HX وكرت RTX 5060 8GB';
+
+    const typesenseSearch = jest.fn().mockImplementation(async (params: any) => {
+      // Exact-title probe
+      if (
+        params?.include_fields === 'id,name_en,name_ar,name_ar_norm' &&
+        params?.num_typos === 0
+      ) {
+        return {
+          hits: [
+            {
+              document: {
+                id: 99,
+                name_en: '',
+                name_ar: exactTitle,
+                name_ar_norm: exactTitle,
+              },
+            },
+          ],
+          found: 1,
+        };
+      }
+
+      // Title hydrate for ranking
+      if (params?.include_fields === 'id,name_en,name_ar' && params?.q === '*') {
+        return {
+          hits: [
+            {
+              document: {
+                id: 1,
+                name_en: '',
+                name_ar: 'لابتوب ألعاب Lenovo LOQ RTX 4050',
+              },
+            },
+            {
+              document: {
+                id: 99,
+                name_en: '',
+                name_ar: exactTitle,
+              },
+            },
+          ],
+          found: 2,
+        };
+      }
+
+      // Primary search — wrong order on purpose
+      return {
+        hits: [
+          {
+            document: {
+              id: 1,
+              name_en: '',
+              name_ar: 'لابتوب ألعاب Lenovo LOQ RTX 4050',
+              price: 100,
+              is_out_of_stock: false,
+            },
+          },
+          {
+            document: {
+              id: 99,
+              name_en: '',
+              name_ar: exactTitle,
+              price: 200,
+              is_out_of_stock: false,
+            },
+          },
+        ],
+        found: 2,
+      };
+    });
+
+    const { service } = makeService();
+    (service as any).typesenseService.search = typesenseSearch;
+    (service as any).configService.get = jest.fn((key: string, fallback?: string) => {
+      if (key === 'SEARCH_EXPANSION_ENABLED') return 'false';
+      if (key === 'SEARCH_PROVIDER') return 'typesense';
+      return fallback ?? 'typesense';
+    });
+
+    const response = await service.search(
+      { q: exactTitle, page: 1, per_page: 20 } as SearchQueryDto,
+      false,
+      false,
+    );
+
+    expect(response.data[0].id).toBe('99');
   });
 });
 
