@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -94,5 +95,13 @@ export class AnalyticsController {
   @RequireAdminAccess('analytics')
   getVisitor(@Param('id', ParseIntPipe) id: number) {
     return this.analyticsVisitorsService.getVisitor(id);
+  }
+
+  @Delete('visitors/:id')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('analytics')
+  deleteVisitor(@Param('id', ParseIntPipe) id: number) {
+    return this.analyticsVisitorsService.deleteVisitor(id);
   }
 }

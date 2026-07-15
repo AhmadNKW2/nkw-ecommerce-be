@@ -286,4 +286,17 @@ export class AnalyticsVisitorsService {
       })),
     };
   }
+
+  async deleteVisitor(id: number) {
+    const visitor = await this.visitorsRepo.findOne({ where: { id } });
+    if (!visitor) {
+      throw new NotFoundException(`Visitor #${id} not found`);
+    }
+
+    await this.eventsRepo.delete({ visitor_id: id });
+    await this.sessionsRepo.delete({ visitor_id: id });
+    await this.visitorsRepo.delete({ id });
+
+    return { success: true, id };
+  }
 }
