@@ -321,36 +321,38 @@ export class AnalyticsVisitorsService implements OnModuleInit {
   }
 
   /**
-   * Admins tab: every registered admin device (including dashboard-only stubs).
-   * Date range is ignored here so all devices always appear.
+   * Admins tab: one row per admin×client registration.
+   * Same admin can appear on many Client #s; same Client # can appear for many admins.
    */
   private async listAdminAudience(query: ListVisitorsDto) {
     const page = query.page || 1;
     const limit = query.limit || 20;
-    const adminKeyToUserId =
-      await this.adminClientDevicesService.getAdminUserIdByBrowserKey();
-    const adminKeys = [...adminKeyToUserId.keys()];
+    const devices = await this.adminClientDevicesService.listAllDevices();
 
-    if (!adminKeys.length) {
+    if (!devices.length) {
       return {
         data: [],
         meta: { total: 0, page, limit, totalPages: 1, audience: 'admins' as const },
       };
     }
 
-    // Ensure every admin device has a visitor row so all devices appear.
-    for (const browserKey of adminKeys) {
+    const uniqueKeys = [...new Set(devices.map((device) => device.browserKey))];
+
+    // Ensure every admin-linked browser has a visitor row (Client #).
+    for (const browserKey of uniqueKeys) {
       const exists = await this.visitorsRepo.exists({
         where: { browser_key: browserKey },
       });
       if (exists) continue;
-      const adminUserId = adminKeyToUserId.get(browserKey);
+      const device = devices.find((row) => row.browserKey === browserKey);
       const now = new Date();
       await this.visitorsRepo.save(
         this.visitorsRepo.create({
           browser_key: browserKey,
-          user_id: adminUserId ?? null,
-          user_agent: null,
+          user_id: device?.adminUserId ?? null,
+          user_agent: device?.userAgent ?? null,
+          device_type: device?.deviceType ?? null,
+          device_model: device?.deviceModel ?? null,
           last_path: '/admin-dashboard',
           event_count: 0,
           session_count: 0,
@@ -360,48 +362,226 @@ export class AnalyticsVisitorsService implements OnModuleInit {
       );
     }
 
-    const qb = this.visitorsRepo
-      .createQueryBuilder('visitor')
-      .skip((page - 1) * limit)
-      .take(limit)
-      .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
+    const visitors = await this.visitorsRepo.find({
+      where: { browser_key: In(uniqueKeys) },
+    });
+    const visitorByKey = new Map(
+      visitors.map((visitor) => [visitor.browser_key, visitor]),
+    );
 
-    this.applyVisitorSort(qb, query, { withAdminJoins: true });
+    const userIds = [...new Set(devices.map((device) => device.adminUserId))];
+    const users = userIds.length
+      ? await this.usersRepo.find({
+          where: { id: In(userIds) },
+          select: { id: true, email: true, firstName: true, lastName: true },
+        })
+      : [];
+    const usersById = new Map(users.map((user) => [user.id, user]));
 
-    if (query.search?.trim()) {
-      const term = query.search.trim();
+    // Device name / type / model are per client id — one shared value for all admin rows.
+    const sharedDeviceByKey = new Map<
+      string,
+      {
+        deviceName: string | null;
+        deviceType: string | null;
+        deviceModel: string | null;
+      }
+    >();
+    for (const device of devices) {
+      const cur = sharedDeviceByKey.get(device.browserKey) ?? {
+        deviceName: null,
+        deviceType: null,
+        deviceModel: null,
+      };
+      sharedDeviceByKey.set(device.browserKey, {
+        deviceName: cur.deviceName || device.deviceName,
+        deviceType:
+          cur.deviceType && cur.deviceType !== 'Unknown'
+            ? cur.deviceType
+            : device.deviceType || cur.deviceType,
+        deviceModel: cur.deviceModel || device.deviceModel,
+      });
+    }
+
+    type AdminPair = { visitor: AnalyticsVisitor; admin: AdminVisitorInfo };
+    let pairs: AdminPair[] = [];
+    for (const device of devices) {
+      const visitor = visitorByKey.get(device.browserKey);
+      if (!visitor) continue;
+      const user = usersById.get(device.adminUserId);
+      const shared = sharedDeviceByKey.get(device.browserKey);
+      const deviceType =
+        shared?.deviceType || visitor.device_type || null;
+      const deviceModel =
+        deviceType === 'Desktop'
+          ? null
+          : shared?.deviceModel || visitor.device_model || null;
+      pairs.push({
+        visitor,
+        admin: {
+          userId: device.adminUserId,
+          email: user?.email || '',
+          name: user
+            ? `${user.firstName || ''} ${user.lastName || ''}`.trim() ||
+              user.email
+            : 'Admin',
+          deviceId: device.id,
+          deviceName: shared?.deviceName ?? null,
+          deviceType,
+          deviceModel,
+          source: device.source,
+        },
+      });
+    }
+
+    const term = query.search?.trim();
+    if (term) {
       if (/^\d+$/.test(term)) {
-        qb.andWhere('visitor.id = :id', { id: Number(term) });
-      } else {
-        qb.andWhere(
-          `(visitor.last_path ILIKE :path OR visitor.browser_key IN (
-            SELECT d.browser_key FROM admin_client_devices d
-            INNER JOIN users u ON u.id = d.admin_user_id
-            WHERE u.email ILIKE :adminTerm
-               OR u."firstName" ILIKE :adminTerm
-               OR u."lastName" ILIKE :adminTerm
-               OR d.device_name ILIKE :adminTerm
-               OR d.device_model ILIKE :adminTerm
-               OR d.device_type ILIKE :adminTerm
-          ))`,
-          { path: `%${term}%`, adminTerm: `%${term}%` },
+        const id = Number(term);
+        pairs = pairs.filter(
+          (pair) => pair.visitor.id === id || pair.admin.userId === id,
         );
+      } else {
+        const lower = term.toLowerCase();
+        pairs = pairs.filter((pair) => {
+          const hay = [
+            pair.visitor.last_path,
+            pair.admin.email,
+            pair.admin.name,
+            pair.admin.deviceName,
+            pair.admin.deviceType,
+            pair.admin.deviceModel,
+            pair.admin.source,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return hay.includes(lower);
+        });
       }
     }
 
-    const [rows, total] = await qb.getManyAndCount();
-    const adminInfoByBrowserKey = await this.resolveAdminInfoByBrowserKeys(
-      rows.map((row) => row.browser_key),
-      adminKeyToUserId,
-    );
-    return this.mapVisitorListRows(
-      rows,
-      total,
-      page,
-      limit,
-      'admins',
-      adminInfoByBrowserKey,
-    );
+    const visitorIds = [...new Set(pairs.map((pair) => pair.visitor.id))];
+    const sessions =
+      visitorIds.length === 0
+        ? []
+        : await this.sessionsRepo
+            .createQueryBuilder('session')
+            .where('session.visitor_id IN (:...visitorIds)', { visitorIds })
+            .getMany();
+
+    const durationByVisitor = new Map<number, number>();
+    const activityLastSeenByVisitor = new Map<number, Date>();
+    for (const session of sessions) {
+      durationByVisitor.set(
+        session.visitor_id,
+        (durationByVisitor.get(session.visitor_id) || 0) +
+          (session.duration_seconds || 0),
+      );
+      const prev = activityLastSeenByVisitor.get(session.visitor_id);
+      if (!prev || session.last_seen_at > prev) {
+        activityLastSeenByVisitor.set(session.visitor_id, session.last_seen_at);
+      }
+    }
+
+    const dir = query.sortOrder === 'asc' ? 1 : -1;
+    const sortBy = query.sortBy || 'lastSeen';
+
+    const cmpText = (a: string | null | undefined, b: string | null | undefined) =>
+      (a || '').localeCompare(b || '', undefined, { sensitivity: 'base' });
+    const cmpNum = (a: number, b: number) => a - b;
+    const cmpDate = (a: Date, b: Date) => a.getTime() - b.getTime();
+
+    pairs.sort((left, right) => {
+      let primary = 0;
+      switch (sortBy) {
+        case 'lastPath':
+          primary = cmpText(left.visitor.last_path, right.visitor.last_path);
+          break;
+        case 'sessions':
+          primary = cmpNum(left.visitor.session_count, right.visitor.session_count);
+          break;
+        case 'events':
+          primary = cmpNum(left.visitor.event_count, right.visitor.event_count);
+          break;
+        case 'duration':
+          primary = cmpNum(
+            durationByVisitor.get(left.visitor.id) || 0,
+            durationByVisitor.get(right.visitor.id) || 0,
+          );
+          break;
+        case 'deviceName':
+          primary = cmpText(left.admin.deviceName, right.admin.deviceName);
+          break;
+        case 'admin':
+          primary = cmpText(
+            left.admin.name || left.admin.email,
+            right.admin.name || right.admin.email,
+          );
+          break;
+        case 'lastSeen':
+        default: {
+          const leftSeen =
+            activityLastSeenByVisitor.get(left.visitor.id) ??
+            left.visitor.last_seen_at;
+          const rightSeen =
+            activityLastSeenByVisitor.get(right.visitor.id) ??
+            right.visitor.last_seen_at;
+          primary = cmpDate(leftSeen, rightSeen);
+          break;
+        }
+      }
+      if (primary !== 0) return primary * dir;
+      // Stable tie-break: newer device registration first, then client id.
+      if (left.admin.deviceId !== right.admin.deviceId) {
+        return (right.admin.deviceId || 0) - (left.admin.deviceId || 0);
+      }
+      return right.visitor.id - left.visitor.id;
+    });
+
+    const total = pairs.length;
+    const pagePairs = pairs.slice((page - 1) * limit, page * limit);
+
+    return {
+      data: pagePairs.map(({ visitor, admin }) => {
+        const resolvedLastSeen =
+          activityLastSeenByVisitor.get(visitor.id) ?? visitor.last_seen_at;
+        const parsed = parseDeviceInfo(
+          visitor.user_agent,
+          visitor.device_model || admin.deviceModel,
+        );
+        const deviceType =
+          admin.deviceType || visitor.device_type || parsed.type;
+        const deviceModel =
+          deviceType === 'Desktop'
+            ? null
+            : admin.deviceModel || visitor.device_model || parsed.model;
+        return {
+          id: visitor.id,
+          rowKey: `d-${admin.deviceId}`,
+          userId: visitor.user_id,
+          lastPath: visitor.last_path,
+          eventCount: visitor.event_count,
+          sessionCount: visitor.session_count,
+          totalDurationSeconds: durationByVisitor.get(visitor.id) || 0,
+          firstSeenAt: visitor.first_seen_at,
+          lastSeenAt: resolvedLastSeen,
+          userAgent: visitor.user_agent,
+          deviceType,
+          deviceModel,
+          deviceLabel: deviceModel ? `${deviceType} · ${deviceModel}` : deviceType,
+          isAdmin: true,
+          admin,
+        };
+      }),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        audience: 'admins' as const,
+      },
+    };
   }
 
   private async mapVisitorListRows(

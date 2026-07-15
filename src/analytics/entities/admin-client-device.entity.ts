@@ -7,16 +7,23 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+/**
+ * One row = one admin + one browser client id.
+ * Same admin may have many clients; same client may be linked to many admins.
+ */
 @Entity('admin_client_devices')
+@Index('uq_admin_client_devices_browser_admin', ['browser_key', 'admin_user_id'], {
+  unique: true,
+})
 export class AdminClientDevice {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Index({ unique: true })
+  @Index('idx_admin_client_devices_browser_key')
   @Column({ type: 'varchar', length: 64 })
   browser_key: string;
 
-  @Index()
+  @Index('idx_admin_client_devices_admin_user_id')
   @Column({ type: 'int' })
   admin_user_id: number;
 

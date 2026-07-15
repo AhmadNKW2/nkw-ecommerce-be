@@ -40,6 +40,28 @@ export function isSimplifiedProductCreator(
   );
 }
 
+/** Default list statuses for a portal user (vendor vs store creators differ). */
+export function resolveVendorPortalListStatuses(
+  user?: ProductCreatorContext | null,
+): ProductStatus[] {
+  if (user?.role === UserRole.STORE_ADMIN) {
+    return [
+      ProductStatus.ACTIVE,
+      ProductStatus.REVIEW,
+      ProductStatus.UPDATED,
+      ProductStatus.STORE,
+    ];
+  }
+
+  // vendor_admin and vendor-auth tokens
+  return [
+    ProductStatus.ACTIVE,
+    ProductStatus.REVIEW,
+    ProductStatus.UPDATED,
+    ProductStatus.VENDOR,
+  ];
+}
+
 export function resolveSimplifiedProductStatus(
   user?: ProductCreatorContext | null,
 ): ProductStatus {
@@ -98,7 +120,7 @@ export function applyVendorPortalListScope<
   next.vendor_portal_scoped = true;
 
   if (next.status === undefined || next.status === null || next.status === '') {
-    next.status = VENDOR_PORTAL_PRODUCT_STATUSES as T['status'];
+    next.status = resolveVendorPortalListStatuses(user) as T['status'];
   }
 
   return next;

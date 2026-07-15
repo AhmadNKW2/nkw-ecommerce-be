@@ -56,6 +56,56 @@ export class AdminClientDevicesService implements OnModuleInit {
         ALTER TABLE admin_client_devices
           ADD COLUMN IF NOT EXISTS device_model varchar(120)
       `);
+
+      // Allow many admins per client id (and many clients per admin).
+      // Drop legacy unique-on-browser_key-only indexes/constraints.
+      await this.dataSource.query(`
+        DO $$
+        DECLARE r RECORD;
+        BEGIN
+          FOR r IN
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname = 'admin_client_devices'
+              AND c.contype = 'u'
+              AND pg_get_constraintdef(c.oid) ILIKE '%browser_key%'
+              AND pg_get_constraintdef(c.oid) NOT ILIKE '%admin_user_id%'
+          LOOP
+            EXECUTE format('ALTER TABLE admin_client_devices DROP CONSTRAINT IF EXISTS %I', r.conname);
+          END LOOP;
+
+          FOR r IN
+            SELECT i.relname AS idx
+            FROM pg_class t
+            JOIN pg_index ix ON t.oid = ix.indrelid
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            WHERE t.relname = 'admin_client_devices'
+              AND ix.indisunique
+              AND NOT ix.indisprimary
+              AND array_length(ix.indkey, 1) = 1
+              AND EXISTS (
+                SELECT 1
+                FROM pg_attribute a
+                WHERE a.attrelid = t.oid
+                  AND a.attnum = ix.indkey[0]
+                  AND a.attname = 'browser_key'
+              )
+          LOOP
+            EXECUTE format('DROP INDEX IF EXISTS %I', r.idx);
+          END LOOP;
+        END $$;
+      `);
+
+      await this.dataSource.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_admin_client_devices_browser_admin
+          ON admin_client_devices (browser_key, admin_user_id)
+      `);
+      await this.dataSource.query(`
+        CREATE INDEX IF NOT EXISTS idx_admin_client_devices_browser_key
+          ON admin_client_devices (browser_key)
+      `);
+
       this.schemaReady = true;
     } catch {
       this.schemaReady = true;
@@ -67,8 +117,8 @@ export class AdminClientDevicesService implements OnModuleInit {
   }
 
   /**
-   * Mark an existing browser client id as belonging to an admin.
-   * Same admin user may register many browser keys (devices / profiles).
+   * Link a browser client id to the current admin.
+   * Same admin → many clients; same client → many admins (separate rows).
    */
   async register(adminUserId: number, dto: RegisterAdminClientDto) {
     await this.ensureSchema();
@@ -85,10 +135,23 @@ export class AdminClientDevicesService implements OnModuleInit {
     const deviceModel = parsed.model;
 
     let device = await this.devicesRepo.findOne({
-      where: { browser_key: browserKey },
+      where: { browser_key: browserKey, admin_user_id: adminUserId },
     });
 
     const reused = Boolean(device);
+
+    // Device name / type / model belong to the client id — share across all admins.
+    const siblings = await this.devicesRepo.find({
+      where: { browser_key: browserKey },
+      order: { id: 'ASC' },
+    });
+    const sharedName =
+      siblings.find((row) => row.device_name?.trim())?.device_name ?? null;
+    const sharedType =
+      siblings.find((row) => row.device_type && row.device_type !== 'Unknown')
+        ?.device_type ?? null;
+    const sharedModel =
+      siblings.find((row) => row.device_model?.trim())?.device_model ?? null;
 
     if (!device) {
       device = this.devicesRepo.create({
@@ -96,18 +159,20 @@ export class AdminClientDevicesService implements OnModuleInit {
         admin_user_id: adminUserId,
         source,
         user_agent: userAgent,
-        device_type: deviceType,
-        device_model: deviceModel,
-        device_name: null,
+        device_type: sharedType || deviceType,
+        device_model:
+          (sharedType || deviceType) === 'Desktop'
+            ? null
+            : sharedModel || deviceModel,
+        device_name: sharedName,
         first_seen_at: now,
         last_seen_at: now,
       });
     } else {
-      device.admin_user_id = adminUserId;
       device.source = source;
       // Do not flip Desktop ↔ Mobile on the same client id (e.g. Chrome DevTools
       // device mode). Keep a stable fingerprint once we know it.
-      const previousType = device.device_type;
+      const previousType = device.device_type || sharedType;
       const typeConflict =
         previousType &&
         previousType !== 'Unknown' &&
@@ -128,13 +193,22 @@ export class AdminClientDevicesService implements OnModuleInit {
           device.device_model = parseDeviceInfo(userAgent).model;
         }
       }
-      if (deviceType === 'Desktop') {
+      if ((device.device_type || deviceType) === 'Desktop') {
         device.device_model = null;
+      }
+      if (!device.device_name && sharedName) {
+        device.device_name = sharedName;
       }
       device.last_seen_at = now;
     }
 
     await this.devicesRepo.save(device);
+    await this.syncClientDeviceFields(browserKey, {
+      deviceName: device.device_name,
+      deviceType: device.device_type,
+      deviceModel: device.device_model,
+      userAgent: device.user_agent,
+    });
     this.invalidateCache();
 
     let visitor = await this.visitorsRepo.findOne({
@@ -191,18 +265,45 @@ export class AdminClientDevicesService implements OnModuleInit {
       throw new NotFoundException(`Admin device #${deviceId} not found`);
     }
 
-    device.device_name = name;
-    await this.devicesRepo.save(device);
+    // Name is per client id — update every admin row for this browser key.
+    await this.devicesRepo.update(
+      { browser_key: device.browser_key },
+      { device_name: name },
+    );
     this.invalidateCache();
 
     return {
       id: device.id,
       browserKey: device.browser_key,
-      deviceName: device.device_name,
+      deviceName: name,
       deviceType: device.device_type,
       deviceModel: device.device_model,
       source: device.source,
     };
+  }
+
+  /**
+   * Keep device name / type / model identical for every admin linked to a client id.
+   */
+  private async syncClientDeviceFields(
+    browserKey: string,
+    fields: {
+      deviceName?: string | null;
+      deviceType?: string | null;
+      deviceModel?: string | null;
+      userAgent?: string | null;
+    },
+  ) {
+    const patch: Partial<AdminClientDevice> = {};
+    if (fields.deviceName !== undefined) patch.device_name = fields.deviceName;
+    if (fields.deviceType !== undefined) patch.device_type = fields.deviceType;
+    if (fields.deviceModel !== undefined) {
+      patch.device_model =
+        fields.deviceType === 'Desktop' ? null : fields.deviceModel;
+    }
+    if (fields.userAgent !== undefined) patch.user_agent = fields.userAgent;
+    if (!Object.keys(patch).length) return;
+    await this.devicesRepo.update({ browser_key: browserKey }, patch);
   }
 
   async isAdminBrowserKey(browserKey: string): Promise<boolean> {
@@ -230,6 +331,42 @@ export class AdminClientDevicesService implements OnModuleInit {
       if (row) result.set(key, row);
     }
     return result;
+  }
+
+  /** All device registrations (one row per admin×client pair). */
+  async listAllDevices(): Promise<
+    Array<{
+      id: number;
+      browserKey: string;
+      adminUserId: number;
+      source: string;
+      deviceName: string | null;
+      deviceType: string | null;
+      deviceModel: string | null;
+      userAgent: string | null;
+      firstSeenAt: Date;
+      lastSeenAt: Date;
+    }>
+  > {
+    await this.ensureSchema();
+    const rows = await this.devicesRepo.find({
+      order: { id: 'DESC' },
+    });
+    return rows.map((row) => {
+      const parsed = parseDeviceInfo(row.user_agent, row.device_model);
+      return {
+        id: row.id,
+        browserKey: row.browser_key,
+        adminUserId: row.admin_user_id,
+        source: row.source,
+        deviceName: row.device_name,
+        deviceType: row.device_type || parsed.type,
+        deviceModel: row.device_model || parsed.model,
+        userAgent: row.user_agent,
+        firstSeenAt: row.first_seen_at,
+        lastSeenAt: row.last_seen_at,
+      };
+    });
   }
 
   async listForAdmin(adminUserId?: number) {
@@ -295,28 +432,24 @@ export class AdminClientDevicesService implements OnModuleInit {
     }
 
     await this.ensureSchema();
-    const rows = await this.devicesRepo.find();
+    const rows = await this.devicesRepo.find({ order: { id: 'ASC' } });
     this.cachedKeys = new Set(rows.map((row) => row.browser_key));
-    this.cachedByKey = new Map(
-      rows.map((row) => [row.browser_key, row.admin_user_id]),
-    );
-    this.cachedDevicesByKey = new Map(
-      rows.map((row) => {
-        const parsed = parseDeviceInfo(row.user_agent, row.device_model);
-        return [
-          row.browser_key,
-          {
-            deviceId: row.id,
-            adminUserId: row.admin_user_id,
-            deviceName: row.device_name,
-            deviceType: row.device_type || parsed.type,
-            deviceModel: row.device_model || parsed.model,
-            source: row.source,
-            userAgent: row.user_agent,
-          },
-        ];
-      }),
-    );
+    // One admin id per key for legacy lookup (latest registration wins for badge/detail).
+    this.cachedByKey = new Map();
+    this.cachedDevicesByKey = new Map();
+    for (const row of rows) {
+      this.cachedByKey.set(row.browser_key, row.admin_user_id);
+      const parsed = parseDeviceInfo(row.user_agent, row.device_model);
+      this.cachedDevicesByKey.set(row.browser_key, {
+        deviceId: row.id,
+        adminUserId: row.admin_user_id,
+        deviceName: row.device_name,
+        deviceType: row.device_type || parsed.type,
+        deviceModel: row.device_model || parsed.model,
+        source: row.source,
+        userAgent: row.user_agent,
+      });
+    }
     this.cacheExpiresAt = now + 30_000;
   }
 

@@ -1326,6 +1326,8 @@ export class SearchService implements OnModuleInit {
   }
 
   private buildFilterDto(dto: SearchQueryDto, isAdmin = false): FilterProductDto {
+    const vendorPortalScoped = (dto as any).vendor_portal_scoped === true;
+    const rawStatus = (dto as any).status;
     const normalizedSortBy = (dto as any).sortBy ?? dto.sort_by;
     const { sortBy, sortOrder } = this.mapSort(normalizedSortBy);
     const categoryIdsFromDto =
@@ -1381,10 +1383,18 @@ export class SearchService implements OnModuleInit {
       sortBy,
       sortOrder,
       randomBrowse: this.shouldUseRandomBrowseSort(dto, isAdmin),
-      visible: this.resolveAdminVisibleFilter(dto, isAdmin),
-      status: Array.isArray((dto as any).status)
-        ? (dto as any).status[0]
-        : (dto as any).status,
+      visible:
+        vendorPortalScoped && (dto as any).visible === undefined
+          ? undefined
+          : this.resolveAdminVisibleFilter(dto, isAdmin),
+      // Keep full portal status lists (active/review/updated/vendor|store).
+      // Collapsing to status[0] previously hid newly created vendor products.
+      status: Array.isArray(rawStatus)
+        ? rawStatus.length > 0
+          ? (rawStatus as any)
+          : undefined
+        : rawStatus,
+      ...(vendorPortalScoped ? { vendor_portal_scoped: true } : {}),
       ids: filterIds,
       sku: (dto as any).sku,
       has_no_vendor: (dto as any).has_no_vendor,

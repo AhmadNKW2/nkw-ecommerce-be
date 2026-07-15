@@ -1970,13 +1970,19 @@ export class ProductsService {
 
     // Filter by status (override default ACTIVE if specified)
     const portalScoped = (filterDto as any).vendor_portal_scoped === true;
+    const hasExplicitIds = Boolean(filterIds && filterIds.length > 0);
     if (status !== undefined) {
       if (Array.isArray(status)) {
         baseQuery.where('product.status IN (:...statuses)', { statuses: status });
       } else {
         baseQuery.where('product.status = :status', { status });
       }
+    } else if (hasExplicitIds && isAdmin) {
+      // Admin hydration by explicit IDs (e.g. Typesense hit list) must not
+      // re-apply the default workflow status set — that hid vendor/store products.
     } else if (portalScoped) {
+      // Fallback when portal scope did not attach an explicit status list.
+      // Vendor admins: active/review/updated/vendor; store admins: .../store.
       baseQuery.where('product.status IN (:...defaultStatuses)', {
         defaultStatuses: [
           ProductStatus.ACTIVE,
@@ -2011,7 +2017,8 @@ export class ProductsService {
 
     // Filter by visible (default to visible-only; an explicit query param overrides this).
     // Vendor portal users see their own hidden products by default.
-    if (portalScoped && visible === undefined) {
+    // Admin hydration by explicit IDs also skips the default visible filter.
+    if ((portalScoped || (hasExplicitIds && isAdmin)) && visible === undefined) {
       // no visible filter
     } else {
       baseQuery.andWhere('product.visible = :visible', {
