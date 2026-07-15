@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { AdminClientDevice } from './entities/admin-client-device.entity';
@@ -17,8 +17,16 @@ export class AdminClientDevicesService {
     private readonly visitorsRepo: Repository<AnalyticsVisitor>,
   ) {}
 
+  /**
+   * Mark an existing browser client id as belonging to an admin.
+   * Never generates a new client id — the browser must send its stored one.
+   */
   async register(adminUserId: number, dto: RegisterAdminClientDto) {
-    const browserKey = dto.browserKey.trim();
+    const browserKey = dto.browserKey?.trim();
+    if (!browserKey) {
+      throw new BadRequestException('browserKey (client id) is required');
+    }
+
     const now = new Date();
     const source = (dto.source || 'admin_fe').slice(0, 32);
     const userAgent = dto.userAgent?.slice(0, 512) || null;
@@ -26,6 +34,8 @@ export class AdminClientDevicesService {
     let device = await this.devicesRepo.findOne({
       where: { browser_key: browserKey },
     });
+
+    const reused = Boolean(device);
 
     if (!device) {
       device = this.devicesRepo.create({
@@ -46,7 +56,7 @@ export class AdminClientDevicesService {
     await this.devicesRepo.save(device);
     this.invalidateCache();
 
-    // Remove any first-party visitor journeys already stored for this device.
+    // Drop any visitor journey rows for this (now admin) client id.
     const purged = await this.visitorsRepo.delete({ browser_key: browserKey });
 
     return {
@@ -54,6 +64,7 @@ export class AdminClientDevicesService {
       browserKey: device.browser_key,
       adminUserId: device.admin_user_id,
       source: device.source,
+      reused,
       purgedVisitors: purged.affected || 0,
     };
   }
@@ -92,6 +103,10 @@ export class AdminClientDevicesService {
       firstSeenAt: row.first_seen_at,
       lastSeenAt: row.last_seen_at,
     }));
+  }
+
+  async listMine(adminUserId: number) {
+    return this.listForAdmin(adminUserId);
   }
 
   async excludeVisitorIds(visitorIds: number[]): Promise<number[]> {

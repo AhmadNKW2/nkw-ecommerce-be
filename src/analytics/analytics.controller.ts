@@ -51,6 +51,19 @@ export class AnalyticsController {
     return this.adminClientDevicesService.register(req.user.id, dto);
   }
 
+  @Get('admin-clients/me')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.CONSTANT_TOKEN_ADMIN,
+    UserRole.CATALOG_MANAGER,
+    UserRole.VENDOR_ADMIN,
+    UserRole.STORE_ADMIN,
+  )
+  listMyAdminClients(@Req() req: { user: { id: number } }) {
+    return this.adminClientDevicesService.listMine(req.user.id);
+  }
+
   @Get('admin-clients')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN)

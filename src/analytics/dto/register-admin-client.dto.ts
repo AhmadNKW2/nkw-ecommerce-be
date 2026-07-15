@@ -1,6 +1,7 @@
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class RegisterAdminClientDto {
+  /** Required: the browser's existing visitor client id. */
   @IsString()
   @MaxLength(64)
   browserKey: string;
