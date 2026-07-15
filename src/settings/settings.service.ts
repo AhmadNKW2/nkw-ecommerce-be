@@ -871,6 +871,21 @@ export class SettingsService implements OnModuleInit {
         );
       }
 
+      if (
+        !(await queryRunner.hasColumn(
+          'product_field_toggles',
+          'show_admin_visitors_enabled',
+        ))
+      ) {
+        missingColumns.push(
+          new TableColumn({
+            name: 'show_admin_visitors_enabled',
+            type: 'boolean',
+            default: false,
+          }),
+        );
+      }
+
       if (!(await queryRunner.hasColumn('product_field_toggles', 'product_status_enabled'))) {
         missingColumns.push(
           new TableColumn({

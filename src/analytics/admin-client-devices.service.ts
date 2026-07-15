@@ -8,6 +8,7 @@ import { RegisterAdminClientDto } from './dto/register-admin-client.dto';
 @Injectable()
 export class AdminClientDevicesService {
   private cachedKeys: Set<string> | null = null;
+  private cachedByKey: Map<string, number> | null = null;
   private cacheExpiresAt = 0;
 
   constructor(
@@ -19,6 +20,7 @@ export class AdminClientDevicesService {
 
   /**
    * Mark an existing browser client id as belonging to an admin.
+   * Same admin user may register many browser keys (devices / profiles).
    * Never generates a new client id — the browser must send its stored one.
    */
   async register(adminUserId: number, dto: RegisterAdminClientDto) {
@@ -56,16 +58,13 @@ export class AdminClientDevicesService {
     await this.devicesRepo.save(device);
     this.invalidateCache();
 
-    // Drop any visitor journey rows for this (now admin) client id.
-    const purged = await this.visitorsRepo.delete({ browser_key: browserKey });
-
     return {
       id: device.id,
       browserKey: device.browser_key,
       adminUserId: device.admin_user_id,
       source: device.source,
       reused,
-      purgedVisitors: purged.affected || 0,
+      purgedVisitors: 0,
     };
   }
 
@@ -75,17 +74,14 @@ export class AdminClientDevicesService {
   }
 
   async getAdminBrowserKeys(): Promise<Set<string>> {
-    const now = Date.now();
-    if (this.cachedKeys && now < this.cacheExpiresAt) {
-      return this.cachedKeys;
-    }
+    await this.ensureCache();
+    return this.cachedKeys!;
+  }
 
-    const rows = await this.devicesRepo.find({
-      select: { browser_key: true },
-    });
-    this.cachedKeys = new Set(rows.map((row) => row.browser_key));
-    this.cacheExpiresAt = now + 30_000;
-    return this.cachedKeys;
+  /** Map browser_key → admin_user_id for visitor enrichment. */
+  async getAdminUserIdByBrowserKey(): Promise<Map<string, number>> {
+    await this.ensureCache();
+    return this.cachedByKey!;
   }
 
   async listForAdmin(adminUserId?: number) {
@@ -127,8 +123,25 @@ export class AdminClientDevicesService {
     return visitorIds.filter((id) => allowed.has(id));
   }
 
+  private async ensureCache() {
+    const now = Date.now();
+    if (this.cachedKeys && this.cachedByKey && now < this.cacheExpiresAt) {
+      return;
+    }
+
+    const rows = await this.devicesRepo.find({
+      select: { browser_key: true, admin_user_id: true },
+    });
+    this.cachedKeys = new Set(rows.map((row) => row.browser_key));
+    this.cachedByKey = new Map(
+      rows.map((row) => [row.browser_key, row.admin_user_id]),
+    );
+    this.cacheExpiresAt = now + 30_000;
+  }
+
   private invalidateCache() {
     this.cachedKeys = null;
+    this.cachedByKey = null;
     this.cacheExpiresAt = 0;
   }
 }

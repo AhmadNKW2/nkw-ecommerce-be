@@ -8,6 +8,8 @@ import { AnalyticsVisitor } from './entities/analytics-visitor.entity';
 import { AnalyticsSession } from './entities/analytics-session.entity';
 import { AnalyticsEvent } from './entities/analytics-event.entity';
 import { AdminClientDevice } from './entities/admin-client-device.entity';
+import { User } from '../users/entities/user.entity';
+import { SettingsModule } from '../settings/settings.module';
 
 @Module({
   imports: [
@@ -16,7 +18,9 @@ import { AdminClientDevice } from './entities/admin-client-device.entity';
       AnalyticsSession,
       AnalyticsEvent,
       AdminClientDevice,
+      User,
     ]),
+    SettingsModule,
   ],
   controllers: [AnalyticsController],
   providers: [

@@ -70,6 +70,10 @@ export class UpdateProductFieldTogglesDto {
   @IsBoolean()
   popup_enabled?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  show_admin_visitors_enabled?: boolean;
+
   // Appearance-only toggles
   @IsOptional()
   @IsBoolean()
