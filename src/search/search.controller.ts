@@ -16,6 +16,7 @@ import {
 } from './dto/search-response.dto';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
 import { isCatalogAdminUser } from '../common/utils/catalog-access.util';
+import { applyVendorPortalListScope } from '../products/utils/simplified-product-creator.util';
 
 @Controller('search')
 export class SearchController {
@@ -47,6 +48,8 @@ export class SearchController {
       );
     }
 
+    const scopedQuery = applyVendorPortalListScope(query, req.user);
+
     if (query.is_admin === true) {
       res.setHeader(
         'Cache-Control',
@@ -59,7 +62,7 @@ export class SearchController {
 
     const fullResponse = isAdminUser && query.is_admin === true;
 
-    return this.searchService.search(query, isAdminUser, fullResponse);
+    return this.searchService.search(scopedQuery, isAdminUser, fullResponse);
   }
 
   /**
@@ -73,7 +76,8 @@ export class SearchController {
     @Req() req: any,
   ): Promise<AutocompleteResponseDto> {
     const isAdminUser = isCatalogAdminUser(req.user);
+    const scopedQuery = applyVendorPortalListScope(query as any, req.user);
 
-    return this.searchService.autocomplete(query, isAdminUser);
+    return this.searchService.autocomplete(scopedQuery as any, isAdminUser);
   }
 }

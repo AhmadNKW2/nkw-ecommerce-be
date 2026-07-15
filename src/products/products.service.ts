@@ -45,8 +45,11 @@ import {
   stripProductPricingFields,
 } from '../users/utils/admin-access.util';
 import {
+  assertVendorPortalOwnsProduct,
   isSimplifiedProductCreator,
+  resolveCreatorVendorId,
   validateAndNormalizeSimplifiedCreateDto,
+  type ProductCreatorContext,
 } from './utils/simplified-product-creator.util';
 
 import { ProductSpecificationInputDto } from './dto/product-specification.dto';
@@ -1682,7 +1685,7 @@ export class ProductsService {
     );
   }
 
-  async create(dto: CreateProductDto, userId?: number, user?: { role: string; adminAccess?: unknown; vendorId?: number | null; authSource?: 'user' | 'vendor' }): Promise<any> {
+  async create(dto: CreateProductDto, userId?: number, user?: ProductCreatorContext): Promise<any> {
     try {
       const creatorContext = {
         role: user?.role,
@@ -1966,8 +1969,23 @@ export class ProductsService {
     const baseQuery = this.productsRepository.createQueryBuilder('product');
 
     // Filter by status (override default ACTIVE if specified)
+    const portalScoped = (filterDto as any).vendor_portal_scoped === true;
     if (status !== undefined) {
-      baseQuery.where('product.status = :status', { status });
+      if (Array.isArray(status)) {
+        baseQuery.where('product.status IN (:...statuses)', { statuses: status });
+      } else {
+        baseQuery.where('product.status = :status', { status });
+      }
+    } else if (portalScoped) {
+      baseQuery.where('product.status IN (:...defaultStatuses)', {
+        defaultStatuses: [
+          ProductStatus.ACTIVE,
+          ProductStatus.REVIEW,
+          ProductStatus.UPDATED,
+          ProductStatus.VENDOR,
+          ProductStatus.STORE,
+        ],
+      });
     } else if (isAdmin) {
       baseQuery.where('product.status IN (:...defaultStatuses)', {
         defaultStatuses: [
@@ -1991,10 +2009,15 @@ export class ProductsService {
       baseQuery.andWhere('product.id IN (:...filterIds)', { filterIds });
     }
 
-    // Filter by visible (default to visible-only; an explicit query param overrides this)
-    baseQuery.andWhere('product.visible = :visible', {
-      visible: visible !== undefined ? visible : true,
-    });
+    // Filter by visible (default to visible-only; an explicit query param overrides this).
+    // Vendor portal users see their own hidden products by default.
+    if (portalScoped && visible === undefined) {
+      // no visible filter
+    } else {
+      baseQuery.andWhere('product.visible = :visible', {
+        visible: visible !== undefined ? visible : true,
+      });
+    }
 
     // Filter by single category (backward compat or "none")
     if (categoryId) {
@@ -2959,7 +2982,7 @@ export class ProductsService {
   async update(
     id: number,
     dto: UpdateProductDto,
-    user?: { role: string; adminAccess?: unknown },
+    user?: ProductCreatorContext,
   ): Promise<any> {
     if (user && !hasAdminAccess(user as any, 'product_pricing')) {
       dto = stripProductPricingFields(dto);
@@ -2988,6 +3011,16 @@ export class ProductsService {
     });
     if (!existingProduct) {
       throw new NotFoundException('Product not found');
+    }
+
+    assertVendorPortalOwnsProduct(existingProduct.vendor_id, user);
+
+    // Vendor portal users cannot reassign products to another vendor.
+    if (isSimplifiedProductCreator(user) && dto.vendor_id !== undefined) {
+      const lockedVendorId = resolveCreatorVendorId(user);
+      if (lockedVendorId != null) {
+        dto.vendor_id = lockedVendorId;
+      }
     }
 
     // Enforce product field toggles — silently drop disabled fields before persisting.

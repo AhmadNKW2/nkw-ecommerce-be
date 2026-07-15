@@ -41,4 +41,27 @@ export class ListVisitorsDto {
   @IsOptional()
   @IsIn(['visitors', 'admins'])
   audience?: 'visitors' | 'admins' = 'visitors';
+
+  @IsOptional()
+  @IsIn([
+    'lastPath',
+    'sessions',
+    'events',
+    'duration',
+    'lastSeen',
+    'deviceName',
+    'admin',
+  ])
+  sortBy?:
+    | 'lastPath'
+    | 'sessions'
+    | 'events'
+    | 'duration'
+    | 'lastSeen'
+    | 'deviceName'
+    | 'admin';
+
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortOrder?: 'asc' | 'desc' = 'desc';
 }

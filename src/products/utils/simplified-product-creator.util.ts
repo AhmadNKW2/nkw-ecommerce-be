@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { UserRole } from '../../users/entities/user.entity';
 import { ProductStatus } from '../entities/product.entity';
 import { CreateProductDto } from '../dto/create-product.dto';
@@ -13,8 +13,18 @@ export type ProductCreatorContext = {
   role?: string;
   authSource?: 'user' | 'vendor';
   vendorId?: number | null;
+  vendor_id?: number | null;
   adminAccess?: Partial<AdminAccess> | null;
 };
+
+/** Statuses a vendor/store portal user should see for their own catalog. */
+export const VENDOR_PORTAL_PRODUCT_STATUSES: ProductStatus[] = [
+  ProductStatus.ACTIVE,
+  ProductStatus.REVIEW,
+  ProductStatus.UPDATED,
+  ProductStatus.VENDOR,
+  ProductStatus.STORE,
+];
 
 export function isSimplifiedProductCreator(
   user?: ProductCreatorContext | null,
@@ -43,11 +53,77 @@ export function resolveSimplifiedProductStatus(
 export function resolveCreatorVendorId(
   user?: ProductCreatorContext | null,
 ): number | null {
-  if (user?.vendorId && Number.isInteger(user.vendorId) && user.vendorId > 0) {
-    return user.vendorId;
+  const candidates = [user?.vendorId, user?.vendor_id];
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isInteger(value) && value > 0) {
+      return value;
+    }
   }
 
   return null;
+}
+
+/**
+ * Force list/search filters to the caller's vendor. Returns a scoped copy.
+ * Throws if the portal user has no vendor binding.
+ */
+export function applyVendorPortalListScope<
+  T extends {
+    vendor_id?: number;
+    vendorId?: number;
+    vendor_ids?: number[] | string;
+    has_no_vendor?: boolean;
+    status?: string | string[] | ProductStatus;
+    visible?: boolean;
+    vendor_portal_scoped?: boolean;
+  },
+>(filters: T, user?: ProductCreatorContext | null): T {
+  if (!isSimplifiedProductCreator(user)) {
+    return filters;
+  }
+
+  const vendorId = resolveCreatorVendorId(user);
+  if (!vendorId) {
+    throw new ForbiddenException(
+      'Vendor account is not linked to a vendor record',
+    );
+  }
+
+  const next = { ...filters } as T;
+  next.vendor_id = vendorId;
+  next.vendorId = vendorId;
+  next.vendor_ids = undefined;
+  next.has_no_vendor = undefined;
+  next.vendor_portal_scoped = true;
+
+  if (next.status === undefined || next.status === null || next.status === '') {
+    next.status = VENDOR_PORTAL_PRODUCT_STATUSES as T['status'];
+  }
+
+  return next;
+}
+
+export function assertVendorPortalOwnsProduct(
+  productVendorId: number | null | undefined,
+  user?: ProductCreatorContext | null,
+): void {
+  if (!isSimplifiedProductCreator(user)) {
+    return;
+  }
+
+  const vendorId = resolveCreatorVendorId(user);
+  if (!vendorId) {
+    throw new ForbiddenException(
+      'Vendor account is not linked to a vendor record',
+    );
+  }
+
+  if (productVendorId !== vendorId) {
+    throw new ForbiddenException(
+      "You don't have permission to access this product",
+    );
+  }
 }
 
 function canUseProductFormStep(

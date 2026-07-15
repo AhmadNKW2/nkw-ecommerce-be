@@ -202,6 +202,79 @@ export class AnalyticsVisitorsService implements OnModuleInit {
     return { accepted: events.length, visitorId: visitor.id, sessionId: session.id };
   }
 
+  private applyVisitorSort(
+    qb: ReturnType<Repository<AnalyticsVisitor>['createQueryBuilder']>,
+    query: ListVisitorsDto,
+    options?: { withAdminJoins?: boolean },
+  ) {
+    const dir = query.sortOrder === 'asc' ? 'ASC' : 'DESC';
+    const sortBy = query.sortBy || 'lastSeen';
+    const nulls = dir === 'ASC' ? 'NULLS FIRST' : 'NULLS LAST';
+    const allowAdminSort = options?.withAdminJoins === true;
+
+    switch (sortBy) {
+      case 'lastPath':
+        qb.orderBy('visitor.last_path', dir, nulls);
+        break;
+      case 'sessions':
+        qb.orderBy('visitor.session_count', dir, nulls);
+        break;
+      case 'events':
+        qb.orderBy('visitor.event_count', dir, nulls);
+        break;
+      case 'duration':
+        qb.orderBy(
+          `(SELECT COALESCE(SUM(s.duration_seconds), 0) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
+          dir,
+        );
+        break;
+      case 'deviceName':
+        if (allowAdminSort) {
+          qb.orderBy(
+            `(SELECT d.device_name FROM admin_client_devices d WHERE d.browser_key = visitor.browser_key ORDER BY d.id DESC LIMIT 1)`,
+            dir,
+            nulls,
+          );
+        } else {
+          qb.orderBy(
+            `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
+            dir,
+            nulls,
+          ).addOrderBy('visitor.last_seen_at', dir);
+        }
+        break;
+      case 'admin':
+        if (allowAdminSort) {
+          qb.orderBy(
+            `(SELECT LOWER(COALESCE(u."firstName", '') || ' ' || COALESCE(u."lastName", '') || ' ' || COALESCE(u.email, ''))
+              FROM admin_client_devices d
+              INNER JOIN users u ON u.id = d.admin_user_id
+              WHERE d.browser_key = visitor.browser_key
+              ORDER BY d.id DESC LIMIT 1)`,
+            dir,
+            nulls,
+          );
+        } else {
+          qb.orderBy(
+            `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
+            dir,
+            nulls,
+          ).addOrderBy('visitor.last_seen_at', dir);
+        }
+        break;
+      case 'lastSeen':
+      default:
+        qb.orderBy(
+          `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
+          dir,
+          nulls,
+        ).addOrderBy('visitor.last_seen_at', dir);
+        break;
+    }
+
+    qb.addOrderBy('visitor.id', 'DESC');
+  }
+
   async listVisitors(query: ListVisitorsDto) {
     const audience = query.audience === 'admins' ? 'admins' : 'visitors';
     if (audience === 'admins') {
@@ -216,14 +289,10 @@ export class AnalyticsVisitorsService implements OnModuleInit {
 
     const qb = this.visitorsRepo
       .createQueryBuilder('visitor')
-      .orderBy(
-        `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
-        'DESC',
-        'NULLS LAST',
-      )
-      .addOrderBy('visitor.last_seen_at', 'DESC')
       .skip((page - 1) * limit)
       .take(limit);
+
+    this.applyVisitorSort(qb, query);
 
     if (adminKeys.length) {
       qb.andWhere('visitor.browser_key NOT IN (:...adminKeys)', { adminKeys });
@@ -293,15 +362,11 @@ export class AnalyticsVisitorsService implements OnModuleInit {
 
     const qb = this.visitorsRepo
       .createQueryBuilder('visitor')
-      .orderBy(
-        `(SELECT MAX(s.last_seen_at) FROM analytics_sessions s WHERE s.visitor_id = visitor.id)`,
-        'DESC',
-        'NULLS LAST',
-      )
-      .addOrderBy('visitor.last_seen_at', 'DESC')
       .skip((page - 1) * limit)
       .take(limit)
       .andWhere('visitor.browser_key IN (:...adminKeys)', { adminKeys });
+
+    this.applyVisitorSort(qb, query, { withAdminJoins: true });
 
     if (query.search?.trim()) {
       const term = query.search.trim();

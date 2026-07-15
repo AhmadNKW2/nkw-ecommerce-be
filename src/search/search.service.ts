@@ -1607,12 +1607,21 @@ export class SearchService implements OnModuleInit {
     } else {
       // Admin defaults mirror the storefront's default catalog (active/updated/review,
       // visible only), but can be overridden via explicit `status`/`visible` params.
+      // Vendor portal scope expands statuses and shows hidden drafts by default.
       const statusOverride = (dto as any).status as string[] | undefined;
+      const vendorPortalScoped = (dto as any).vendor_portal_scoped === true;
+      const defaultStatuses = vendorPortalScoped
+        ? ['active', 'updated', 'review', 'vendor', 'store']
+        : SEARCHABLE_STATUSES;
       filters.push(
-        `status:=[${(statusOverride && statusOverride.length > 0 ? statusOverride : SEARCHABLE_STATUSES).join(',')}]`,
+        `status:=[${(statusOverride && statusOverride.length > 0 ? statusOverride : defaultStatuses).join(',')}]`,
       );
 
-      filters.push(`visible:=${this.resolveAdminVisibleFilter(dto, isAdmin)}`);
+      if (vendorPortalScoped && (dto as any).visible === undefined) {
+        // Portal users need to see their own hidden products by default.
+      } else {
+        filters.push(`visible:=${this.resolveAdminVisibleFilter(dto, isAdmin)}`);
+      }
     }
 
     return filters.length > 0 ? filters.join(' && ') : undefined;
@@ -3646,6 +3655,11 @@ export class SearchService implements OnModuleInit {
         page: 1,
         per_page: perPage,
         include_facets: false,
+        vendor_id: (dto as any).vendor_id,
+        vendor_ids: (dto as any).vendor_ids,
+        status: (dto as any).status,
+        vendor_portal_scoped: (dto as any).vendor_portal_scoped,
+        is_admin: dto.is_admin,
       } as SearchQueryDto,
       isAdmin,
       false,

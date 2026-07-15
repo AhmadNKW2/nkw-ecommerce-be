@@ -433,6 +433,7 @@ export class AuthController {
       lastName: req.user.lastName,
       image: req.user.image,
       role: req.user.role,
+      vendorId: req.user.vendorId ?? req.user.vendor_id ?? null,
       adminAccess: resolveAdminAccess(req.user),
     };
   }

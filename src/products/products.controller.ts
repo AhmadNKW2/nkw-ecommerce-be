@@ -16,6 +16,7 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  ForbiddenException,
   Sse,
   MessageEvent
 } from '@nestjs/common';
@@ -47,6 +48,12 @@ import { RequireAdminAccess } from '../common/decorators/admin-access.decorator'
 import { RolesGuard } from '../common/guards/roles.guard';
 import { RestoreProductDto } from './dto/restore-product.dto';
 import { OptionalJwtAuthGuard } from '../common/guards/optional-jwt-auth.guard';
+import {
+  applyVendorPortalListScope,
+  assertVendorPortalOwnsProduct,
+  isSimplifiedProductCreator,
+  resolveCreatorVendorId,
+} from './utils/simplified-product-creator.util';
 
 class SetProductTagsDto {
   @IsArray()
@@ -67,6 +74,24 @@ const PRODUCTS_MANAGER_ROLES = [
   UserRole.VENDOR_ADMIN,
   UserRole.STORE_ADMIN,
 ] as const;
+
+function assertNotVendorPortalAdminTools(user?: { role?: string } | null) {
+  if (isSimplifiedProductCreator(user)) {
+    throw new ForbiddenException(
+      "You don't have permission to perform this action",
+    );
+  }
+}
+
+function isProductsAdminUser(user?: { role?: string } | null): boolean {
+  return (
+    user?.role === UserRole.ADMIN ||
+    user?.role === UserRole.CATALOG_MANAGER ||
+    user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
+    user?.role === 'products_api' ||
+    isSimplifiedProductCreator(user)
+  );
+}
 
 @ApiTags('Products')
 @Controller('products')
@@ -362,7 +387,8 @@ export class ProductsController {
   @Roles(...PRODUCTS_MANAGER_ROLES)
   @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Bulk update product workflow status' })
-  bulkUpdateProductStatus(@Body() dto: BulkUpdateProductStatusDto) {
+  bulkUpdateProductStatus(@Body() dto: BulkUpdateProductStatusDto, @Req() req: any) {
+    assertNotVendorPortalAdminTools(req.user);
     return this.productsService.bulkUpdateProductStatus(dto);
   }
 
@@ -398,13 +424,9 @@ export class ProductsController {
     example: '1,2,3',
   })
   findProductNames(@Query() queryDto: ProductNamesQueryDto, @Req() req: any) {
-    const isAdmin =
-      req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
-      req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
-      req.user?.role === 'products_api';
-
-    return this.productsService.findProductNames(queryDto, isAdmin);
+    const isAdmin = isProductsAdminUser(req.user);
+    const scopedQuery = applyVendorPortalListScope(queryDto as any, req.user);
+    return this.productsService.findProductNames(scopedQuery, isAdmin);
   }
 
   @Get('content')
@@ -414,13 +436,9 @@ export class ProductsController {
       'Get products with id, names, long descriptions, and image URLs only',
   })
   findProductContent(@Query() filterDto: FilterProductDto, @Req() req: any) {
-    const isAdmin =
-      req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
-      req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
-      req.user?.role === 'products_api';
-
-    return this.productsService.findProductContent(filterDto, isAdmin);
+    const isAdmin = isProductsAdminUser(req.user);
+    const scopedFilters = applyVendorPortalListScope(filterDto as any, req.user);
+    return this.productsService.findProductContent(scopedFilters, isAdmin);
   }
 
   @Get()
@@ -504,12 +522,9 @@ export class ProductsController {
     example: true,
   })
   findAll(@Query() filterDto: FilterProductDto, @Req() req: any) {
-    const isAdmin =
-      req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
-      req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
-      req.user?.role === 'products_api';
-    return this.productsService.findAll(filterDto, isAdmin);
+    const isAdmin = isProductsAdminUser(req.user);
+    const scopedFilters = applyVendorPortalListScope(filterDto as any, req.user);
+    return this.productsService.findAll(scopedFilters, isAdmin);
   }
 
   @Get('vendor/:vendorId')
@@ -520,20 +535,26 @@ export class ProductsController {
     @Query() filterDto: FilterProductDto,
     @Req() req: any,
   ) {
-    const isAdmin =
-      req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
-      req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
-      req.user?.role === 'products_api';
+    const isAdmin = isProductsAdminUser(req.user);
+    const portalVendorId = resolveCreatorVendorId(req.user);
+    if (
+      isSimplifiedProductCreator(req.user) &&
+      portalVendorId != null &&
+      portalVendorId !== vendorId
+    ) {
+      throw new NotFoundException('Vendor not found');
+    }
 
-    return this.productsService.findAll(
+    const scopedFilters = applyVendorPortalListScope(
       {
         ...filterDto,
         vendorId,
         vendor_ids: undefined,
-      },
-      isAdmin,
+      } as any,
+      req.user,
     );
+
+    return this.productsService.findAll(scopedFilters, isAdmin);
   }
 
   @Get('reference-link')
@@ -554,6 +575,7 @@ export class ProductsController {
     @Query('reference_slug') referenceSlug: string,
     @Req() req: any,
   ) {
+    assertNotVendorPortalAdminTools(req.user);
     const isAdmin =
       req.user?.role === UserRole.ADMIN ||
       req.user?.role === UserRole.CATALOG_MANAGER ||
@@ -575,7 +597,8 @@ export class ProductsController {
       'Merge products that share the same vendor and reference_slug, keeping the lowest product ID',
   })
   @ApiBody({ type: MergeDuplicateReferenceSlugsDto })
-  mergeDuplicateReferenceSlugs(@Body() dto: MergeDuplicateReferenceSlugsDto) {
+  mergeDuplicateReferenceSlugs(@Body() dto: MergeDuplicateReferenceSlugsDto, @Req() req: any) {
+    assertNotVendorPortalAdminTools(req.user);
     return this.productsService.mergeDuplicateReferenceSlugs(dto);
   }
 
@@ -591,13 +614,11 @@ export class ProductsController {
 
   @Get(':id')
   @UseGuards(OptionalJwtAuthGuard)
-  findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
-    const isAdmin =
-      req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
-      req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
-      req.user?.role === 'products_api';
-    return this.productsService.findOne(id, isAdmin);
+  async findOne(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    const isAdmin = isProductsAdminUser(req.user);
+    const product = await this.productsService.findOne(id, isAdmin);
+    assertVendorPortalOwnsProduct(product?.vendor_id ?? product?.vendor?.id, req.user);
+    return product;
   }
 
   @Get('slug/:slug')
@@ -928,7 +949,8 @@ export class ProductsController {
       },
     },
   })
-  reimportReviewProducts(@Body() dto: ReimportReviewProductsDto) {
+  reimportReviewProducts(@Body() dto: ReimportReviewProductsDto, @Req() req: any) {
+    assertNotVendorPortalAdminTools(req.user);
     const jobId = this.productImportService.startReimportReviewProductsInBackground(
       dto.category_id,
       dto.vendor_id,
