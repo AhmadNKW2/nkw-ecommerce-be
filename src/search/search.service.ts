@@ -565,12 +565,22 @@ export class SearchService implements OnModuleInit {
       return [];
     }
 
+    // Hydrate only by IDs. Do not re-apply default visible/status filters —
+    // Typesense (or the prior filter stage) already selected these products.
+    // Re-applying visible:=true dropped vendor-portal drafts (visible=false, status=vendor).
+    const explicitVisible = (dto as any)?.visible as boolean | undefined;
     const productsResult = await this.productsService.findAll(
       {
         page: 1,
         limit: productIds.length,
         ids: productIds,
-        visible: this.resolveAdminVisibleFilter(dto ?? ({} as SearchQueryDto), isAdmin),
+        ...(explicitVisible !== undefined ? { visible: explicitVisible } : {}),
+        ...(Array.isArray((dto as any)?.status) && (dto as any).status.length > 0
+          ? { status: (dto as any).status }
+          : {}),
+        ...((dto as any)?.vendor_portal_scoped
+          ? { vendor_portal_scoped: true }
+          : {}),
       } as any,
       isAdmin,
     );
@@ -3186,7 +3196,16 @@ export class SearchService implements OnModuleInit {
                 page: 1,
                 limit: Math.max(pageProductIds.length, perPage),
                 ids: pageProductIds,
-                visible: this.resolveAdminVisibleFilter(dto, isAdmin),
+                ...(((dto as any).visible !== undefined
+                  ? { visible: (dto as any).visible }
+                  : {}) as object),
+                ...(Array.isArray((dto as any).status) &&
+                (dto as any).status.length > 0
+                  ? { status: (dto as any).status }
+                  : {}),
+                ...((dto as any).vendor_portal_scoped
+                  ? { vendor_portal_scoped: true }
+                  : {}),
               } as any,
               isAdmin,
             )
@@ -3247,7 +3266,16 @@ export class SearchService implements OnModuleInit {
               page: 1,
               limit: Math.max(pageProductIds.length, perPage),
               ids: pageProductIds,
-              visible: this.resolveAdminVisibleFilter(dto, isAdmin),
+              ...(((dto as any).visible !== undefined
+                ? { visible: (dto as any).visible }
+                : {}) as object),
+              ...(Array.isArray((dto as any).status) &&
+              (dto as any).status.length > 0
+                ? { status: (dto as any).status }
+                : {}),
+              ...((dto as any).vendor_portal_scoped
+                ? { vendor_portal_scoped: true }
+                : {}),
             } as any,
             isAdmin,
           )

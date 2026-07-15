@@ -262,6 +262,9 @@ export class AnalyticsVisitorsService implements OnModuleInit {
           ).addOrderBy('visitor.last_seen_at', dir);
         }
         break;
+      case 'firstSeen':
+        qb.orderBy('visitor.first_seen_at', dir, nulls);
+        break;
       case 'lastSeen':
       default:
         qb.orderBy(
@@ -518,6 +521,9 @@ export class AnalyticsVisitorsService implements OnModuleInit {
             left.admin.name || left.admin.email,
             right.admin.name || right.admin.email,
           );
+          break;
+        case 'firstSeen':
+          primary = cmpDate(left.visitor.first_seen_at, right.visitor.first_seen_at);
           break;
         case 'lastSeen':
         default: {

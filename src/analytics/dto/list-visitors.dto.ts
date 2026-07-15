@@ -48,6 +48,7 @@ export class ListVisitorsDto {
     'sessions',
     'events',
     'duration',
+    'firstSeen',
     'lastSeen',
     'deviceName',
     'admin',
@@ -57,6 +58,7 @@ export class ListVisitorsDto {
     | 'sessions'
     | 'events'
     | 'duration'
+    | 'firstSeen'
     | 'lastSeen'
     | 'deviceName'
     | 'admin';
