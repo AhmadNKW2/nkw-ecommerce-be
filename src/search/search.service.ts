@@ -791,6 +791,7 @@ export class SearchService implements OnModuleInit {
       average_rating_min: dto.average_rating_min ?? null,
       include_facets: dto.include_facets !== false,
       titleRelevanceVersion: TITLE_RELEVANCE_VERSION,
+      expansionVersion: SEARCH_EXPANSION_VERSION,
     });
   }
 
@@ -2854,7 +2855,18 @@ export class SearchService implements OnModuleInit {
       : [];
     if (referenceProductIds.length > 0) {
       const beforeSize = uniqueIds.size;
-      addIds('specification', referenceProductIds);
+      // Reference products from concept terms must still obey the active
+      // request filters (color/RAM/etc). Injecting them raw made text searches
+      // like q=لابتوب&attributes_values_ids=218 return unfiltered laptop IDs.
+      const filteredReferenceProductIds = await this.searchTypesenseIds({
+        q: '*',
+        filterBy: this.mergeFilterByClauses(
+          params.baseFilterBy,
+          `id:=[${referenceProductIds.join(',')}]`,
+        ),
+        limit: Math.min(referenceProductIds.length, maxCandidates),
+      });
+      addIds('specification', filteredReferenceProductIds);
       if (params.debug) {
         conceptQueryDebug.push({
           query: '[reference_product_ids]',
@@ -2863,7 +2875,8 @@ export class SearchService implements OnModuleInit {
         });
       }
       if (idsByTier.specification.length > 0) {
-        tierNotes.specification = 'reference products from matched terms';
+        tierNotes.specification =
+          'reference products from matched terms (filter-aware)';
       }
     }
 

@@ -519,6 +519,56 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     });
   });
 
+  it('filters concept reference product IDs through the active Typesense filters', async () => {
+    const { service, typesenseSearch } = makeService({
+      hits: [{ document: { id: 2663, category_ids: [1] } }],
+      found: 1,
+    });
+    const searchTypesenseIds = jest
+      .spyOn(service as any, 'searchTypesenseIds')
+      .mockResolvedValue([2663]);
+    jest.spyOn(service as any, 'detectEntityIdsFromTokens').mockResolvedValue({
+      brandIds: [],
+      categoryIds: [],
+    });
+    (service as any).termConceptLexicon.segmentQueryWithVariants = jest
+      .fn()
+      .mockResolvedValue({
+        segments: [
+          {
+            text: 'laptop',
+            orderedVariants: ['laptop'],
+            referenceProductIds: [2663, 2671, 1834],
+          },
+        ],
+        allSegmentsMatchedByTerms: true,
+      });
+
+    const expanded = await (service as any).collectExpandedTypesenseIds({
+      dto: { q: 'لابتوب', attributes_values_ids: '218' },
+      isAdmin: false,
+      baseFilterBy:
+        'attributes_values_ids:=[218] && visible:=true && status:=[active,updated,review] && is_out_of_stock:=false',
+      primaryIds: [],
+      requestedLimit: 20,
+      debug: false,
+    });
+
+    expect(searchTypesenseIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        q: '*',
+        filterBy: expect.stringContaining('attributes_values_ids:=[218]'),
+      }),
+    );
+    expect(searchTypesenseIds.mock.calls[0][0].filterBy).toContain(
+      'id:=[2663,2671,1834]',
+    );
+    expect(expanded.orderedIds).toContain(2663);
+    expect(expanded.orderedIds).not.toContain(2671);
+    expect(expanded.orderedIds).not.toContain(1834);
+    expect(typesenseSearch).toBeDefined();
+  });
+
   it('pins an exact Arabic title match as the first result before other hits', async () => {
     const exactTitle =
       'لابتوب ألعاب Lenovo LOQ 15IRX10 AI مقاس 15.6 إنش FHD IPS 144Hz بمعالج Intel Core i7-14700HX وكرت RTX 5060 8GB';
