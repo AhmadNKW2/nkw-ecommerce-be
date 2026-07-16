@@ -238,12 +238,106 @@ async function ensureTermGroupsTable(client) {
   console.log('  term_groups ready');
 }
 
+async function ensureVendorSubmissionsTables(client) {
+  console.log('vendor_product_submissions tables');
+
+  if (!(await tableExists(client, 'vendor_product_submissions'))) {
+    await client.query(`
+      CREATE TABLE vendor_product_submissions (
+        id SERIAL PRIMARY KEY,
+        vendor_id integer NOT NULL,
+        created_by integer NULL,
+        title text NOT NULL,
+        description text NOT NULL,
+        price decimal(10,2) NOT NULL DEFAULT 0,
+        stock integer NOT NULL DEFAULT 0,
+        status varchar(40) NOT NULL DEFAULT 'pending_ai',
+        ai_result jsonb NULL,
+        resolved_brand_id integer NULL,
+        resolved_category_id integer NULL,
+        brand_request_id integer NULL,
+        category_request_id integer NULL,
+        product_id integer NULL,
+        error text NULL,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX idx_vendor_product_submissions_vendor_id
+      ON vendor_product_submissions (vendor_id)
+    `);
+    await client.query(`
+      CREATE INDEX idx_vendor_product_submissions_status
+      ON vendor_product_submissions (status)
+    `);
+    console.log('  created vendor_product_submissions');
+  } else {
+    console.log('  skip vendor_product_submissions (exists)');
+  }
+
+  if (!(await tableExists(client, 'vendor_product_submission_media'))) {
+    await client.query(`
+      CREATE TABLE vendor_product_submission_media (
+        id SERIAL PRIMARY KEY,
+        submission_id integer NOT NULL REFERENCES vendor_product_submissions(id) ON DELETE CASCADE,
+        media_id integer NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+        sort_order integer NOT NULL DEFAULT 0,
+        is_primary boolean NOT NULL DEFAULT false,
+        created_at timestamp NOT NULL DEFAULT now(),
+        CONSTRAINT uq_vendor_submission_media UNIQUE (submission_id, media_id)
+      )
+    `);
+    await client.query(`
+      CREATE INDEX idx_vendor_submission_media_submission_id
+      ON vendor_product_submission_media (submission_id)
+    `);
+    console.log('  created vendor_product_submission_media');
+  } else {
+    console.log('  skip vendor_product_submission_media (exists)');
+  }
+
+  if (!(await tableExists(client, 'catalog_requests'))) {
+    await client.query(`
+      CREATE TABLE catalog_requests (
+        id SERIAL PRIMARY KEY,
+        type varchar(20) NOT NULL,
+        status varchar(20) NOT NULL DEFAULT 'pending',
+        submission_id integer NULL,
+        requested_by integer NULL,
+        reviewed_by integer NULL,
+        reviewed_at timestamp NULL,
+        payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+        result_entity_id integer NULL,
+        admin_notes text NULL,
+        created_at timestamp NOT NULL DEFAULT now(),
+        updated_at timestamp NOT NULL DEFAULT now()
+      )
+    `);
+    await client.query(`
+      CREATE INDEX idx_catalog_requests_status ON catalog_requests (status)
+    `);
+    await client.query(`
+      CREATE INDEX idx_catalog_requests_type ON catalog_requests (type)
+    `);
+    await client.query(`
+      CREATE INDEX idx_catalog_requests_submission_id
+      ON catalog_requests (submission_id)
+    `);
+    console.log('  created catalog_requests');
+  } else {
+    console.log('  skip catalog_requests (exists)');
+  }
+}
+
 async function verifySchema(client) {
   console.log('\nverification');
   const checks = [
     ['users', 'constant_access_token'],
     ['product_field_toggles', 'product_files_enabled'],
     ['product_attachments', null],
+    ['vendor_product_submissions', 'status'],
+    ['catalog_requests', 'type'],
   ];
 
   for (const [table, column] of checks) {
@@ -277,6 +371,7 @@ async function main() {
     await ensureProductsColumns(client);
     await ensureOrdersColumns(client);
     await ensureTermGroupsTable(client);
+    await ensureVendorSubmissionsTables(client);
     await verifySchema(client);
     console.log('\nSchema ensure completed successfully.');
   } finally {

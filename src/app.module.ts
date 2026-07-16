@@ -32,6 +32,7 @@ import { AdminNotificationsModule } from './admin-notifications/admin-notificati
 import { TermsModule } from './terms/terms.module';
 import { AppCacheModule } from './common/cache/app-cache.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { VendorSubmissionsModule } from './vendor-submissions/vendor-submissions.module';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     AdminNotificationsModule,
     TermsModule,
     AnalyticsModule,
+    VendorSubmissionsModule,
   ],
 })
 export class AppModule implements NestModule {

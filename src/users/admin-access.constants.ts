@@ -17,6 +17,7 @@ export const ADMIN_ACCESS_KEYS = [
   'analytics',
   'settings',
   'admins',
+  'catalog_requests',
   'product_form_basic',
   'product_form_attributes',
   'product_form_specifications',
@@ -71,6 +72,7 @@ export const DEFAULT_ADMIN_ACCESS: AdminAccess = {
   analytics: true,
   settings: true,
   admins: true,
+  catalog_requests: true,
   ...ALL_PRODUCT_FORM_STEPS_ON,
 };
 
@@ -93,6 +95,7 @@ export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
   analytics: false,
   settings: false,
   admins: false,
+  catalog_requests: true,
   ...ALL_PRODUCT_FORM_STEPS_ON,
 };
 
@@ -115,6 +118,7 @@ export const DEFAULT_VENDOR_PORTAL_ACCESS: AdminAccess = {
   analytics: false,
   settings: false,
   admins: false,
+  catalog_requests: false,
   product_form_basic: true,
   product_form_attributes: false,
   product_form_specifications: false,

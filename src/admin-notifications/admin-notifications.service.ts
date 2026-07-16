@@ -3,7 +3,11 @@ import { Observable, Subject, interval, merge } from 'rxjs';
 import { map } from 'rxjs/operators';
 
 export type AdminNotificationPayload = {
-  type: 'order.created' | 'note.created';
+  type:
+    | 'order.created'
+    | 'note.created'
+    | 'submission.created'
+    | 'catalog_request.created';
   entityId: number;
   createdAt: string;
 };
@@ -42,6 +46,22 @@ export class AdminNotificationsService {
     this.events$.next({
       type: 'note.created',
       entityId: noteId,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  publishSubmissionCreated(submissionId: number): void {
+    this.events$.next({
+      type: 'submission.created',
+      entityId: submissionId,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  publishCatalogRequestCreated(requestId: number): void {
+    this.events$.next({
+      type: 'catalog_request.created',
+      entityId: requestId,
       createdAt: new Date().toISOString(),
     });
   }
