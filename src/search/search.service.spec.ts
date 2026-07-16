@@ -492,6 +492,33 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     expect(params.text_match_type).toBe('max_weight');
   });
 
+  it('does not use random browse when attribute values are selected', () => {
+    const { service } = makeService();
+
+    expect(
+      (service as any).shouldUseRandomBrowseSort({
+        q: '*',
+        attributes_values_ids: '15,218',
+      }),
+    ).toBe(false);
+  });
+
+  it('reapplies the admin stock filter while hydrating Typesense result IDs', () => {
+    const { service } = makeService();
+
+    expect(
+      (service as any).buildHydrationFilterDto(
+        [101, 102],
+        { q: '*', in_stock: false },
+        true,
+      ),
+    ).toMatchObject({
+      ids: [101, 102],
+      in_stock: false,
+      randomBrowse: false,
+    });
+  });
+
   it('pins an exact Arabic title match as the first result before other hits', async () => {
     const exactTitle =
       'لابتوب ألعاب Lenovo LOQ 15IRX10 AI مقاس 15.6 إنش FHD IPS 144Hz بمعالج Intel Core i7-14700HX وكرت RTX 5060 8GB';

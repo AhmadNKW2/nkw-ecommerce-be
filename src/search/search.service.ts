@@ -489,6 +489,20 @@ export class SearchService implements OnModuleInit {
       return false;
     }
 
+    // Attribute/specification values can span different groups (for example,
+    // RAM=16 and Color=Sky Blue). The random-browse path uses a DB hydration
+    // query that cannot preserve those grouped AND constraints, so it can
+    // return cards outside the Typesense-filtered total. Use the regular
+    // Typesense path whenever either value filter is active.
+    const hasValueFacetFilters =
+      (this.parseCsvNumbers((dto as any).attributes_values_ids)?.length ?? 0) >
+        0 ||
+      (this.parseCsvNumbers((dto as any).specifications_values_ids)?.length ??
+        0) > 0;
+    if (hasValueFacetFilters) {
+      return false;
+    }
+
     if (!this.isWildcardBrowseQuery(dto)) {
       return false;
     }
@@ -570,23 +584,8 @@ export class SearchService implements OnModuleInit {
       return [];
     }
 
-    // Hydrate only by IDs. Do not re-apply default visible/status filters —
-    // Typesense (or the prior filter stage) already selected these products.
-    // Re-applying visible:=true dropped vendor-portal drafts (visible=false, status=vendor).
-    const explicitVisible = (dto as any)?.visible as boolean | undefined;
     const productsResult = await this.productsService.findAll(
-      {
-        page: 1,
-        limit: productIds.length,
-        ids: productIds,
-        ...(explicitVisible !== undefined ? { visible: explicitVisible } : {}),
-        ...(Array.isArray((dto as any)?.status) && (dto as any).status.length > 0
-          ? { status: (dto as any).status }
-          : {}),
-        ...((dto as any)?.vendor_portal_scoped
-          ? { vendor_portal_scoped: true }
-          : {}),
-      } as any,
+      this.buildHydrationFilterDto(productIds, dto, isAdmin),
       isAdmin,
     );
 
@@ -1653,6 +1652,28 @@ export class SearchService implements OnModuleInit {
       specifications_values_ids: specificationsValuesIds,
       start_date: (dto as any).start_date,
       end_date: (dto as any).end_date,
+    };
+  }
+
+  /**
+   * Typesense chooses the candidate IDs, then admin search hydrates full product
+   * records from Postgres. Reapply the request filters during hydration so a
+   * briefly stale Typesense document cannot display a product that no longer
+   * matches its current stock, visibility, price, or other filter state.
+   */
+  private buildHydrationFilterDto(
+    productIds: number[],
+    dto: SearchQueryDto | undefined,
+    isAdmin: boolean,
+  ): FindAllProductsOptions {
+    const filters = dto ? this.buildFilterDto(dto, isAdmin) : {};
+
+    return {
+      ...filters,
+      page: 1,
+      limit: Math.max(productIds.length, 1),
+      ids: productIds,
+      randomBrowse: false,
     };
   }
 
@@ -3538,21 +3559,7 @@ export class SearchService implements OnModuleInit {
       if (fullResponse) {
         const productsResult = pageProductIds.length
           ? await this.productsService.findAll(
-              {
-                page: 1,
-                limit: Math.max(pageProductIds.length, perPage),
-                ids: pageProductIds,
-                ...(((dto as any).visible !== undefined
-                  ? { visible: (dto as any).visible }
-                  : {}) as object),
-                ...(Array.isArray((dto as any).status) &&
-                (dto as any).status.length > 0
-                  ? { status: (dto as any).status }
-                  : {}),
-                ...((dto as any).vendor_portal_scoped
-                  ? { vendor_portal_scoped: true }
-                  : {}),
-              } as any,
+              this.buildHydrationFilterDto(pageProductIds, dto, isAdmin),
               isAdmin,
             )
           : { data: [] };
@@ -3608,21 +3615,7 @@ export class SearchService implements OnModuleInit {
     } else if (fullResponse) {
       const productsResult = pageProductIds.length
         ? await this.productsService.findAll(
-            {
-              page: 1,
-              limit: Math.max(pageProductIds.length, perPage),
-              ids: pageProductIds,
-              ...(((dto as any).visible !== undefined
-                ? { visible: (dto as any).visible }
-                : {}) as object),
-              ...(Array.isArray((dto as any).status) &&
-              (dto as any).status.length > 0
-                ? { status: (dto as any).status }
-                : {}),
-              ...((dto as any).vendor_portal_scoped
-                ? { vendor_portal_scoped: true }
-                : {}),
-            } as any,
+            this.buildHydrationFilterDto(pageProductIds, dto, isAdmin),
             isAdmin,
           )
         : { data: [] };
