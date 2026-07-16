@@ -40,6 +40,28 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
   const categoriesRepository = {
     find: jest.fn().mockResolvedValue(categoryRows),
   };
+  const attributeValuesRepository = {
+    find: jest.fn((options: any) => {
+      const requestedIds = options?.where?.id?._value ?? [];
+      const values = [
+        { id: 7, attribute_id: 2 },
+        { id: 15, attribute_id: 1 },
+        { id: 17, attribute_id: 3 },
+        { id: 18, attribute_id: 3 },
+      ];
+      return Promise.resolve(values.filter((value) => requestedIds.includes(value.id)));
+    }),
+  };
+  const specificationValuesRepository = {
+    find: jest.fn((options: any) => {
+      const requestedIds = options?.where?.id?._value ?? [];
+      const values = [
+        { id: 23, specification_id: 4 },
+        { id: 24, specification_id: 4 },
+      ];
+      return Promise.resolve(values.filter((value) => requestedIds.includes(value.id)));
+    }),
+  };
 
   const termConceptLexicon = {
     resolveAllConceptsInQuery: jest.fn().mockResolvedValue([]),
@@ -61,8 +83,8 @@ function makeService(searchResult: any = { hits: [], found: 0 }, categoryRows: A
     emptyRepo as any,
     emptyRepo as any,
     emptyRepo as any,
-    emptyRepo as any,
-    emptyRepo as any,
+    attributeValuesRepository as any,
+    specificationValuesRepository as any,
   );
 
   return { service, typesenseSearch, productsService, categoriesRepository };
@@ -122,7 +144,7 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
       specifications_values_ids: '23,24',
       min_price: 10,
       max_price: 50,
-    } as SearchQueryDto;
+    } as unknown as SearchQueryDto;
 
     await service.search(dto, false, false);
 
@@ -136,6 +158,22 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
     expect(params.filter_by).toContain('effective_price:<=50');
     expect(params.filter_by).toContain('visible:=true');
     expect(params.filter_by).toContain('is_out_of_stock:=false');
+  });
+
+  it('requires matches across different attribute groups while allowing values within one group', async () => {
+    const { service, typesenseSearch } = makeService();
+    const dto = {
+      q: 'tablet',
+      // ID 7 is Color=White; ID 15 is RAM=16.
+      attributes_values_ids: '7,15',
+    } as unknown as SearchQueryDto;
+
+    await service.search(dto, false, false);
+
+    const params = typesenseSearch.mock.calls[0][0];
+    expect(params.filter_by).toContain('attributes_values_ids:=[7]');
+    expect(params.filter_by).toContain('attributes_values_ids:=[15]');
+    expect(params.filter_by).not.toContain('attributes_values_ids:=[7,15]');
   });
 
   it('normalizes Arabic variants in the query sent to Typesense for main search', async () => {

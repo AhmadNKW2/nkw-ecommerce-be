@@ -1795,7 +1795,68 @@ export class SearchService implements OnModuleInit {
     return visibleOverride !== undefined ? visibleOverride : true;
   }
 
-  private buildTypesenseFilterBy(dto: SearchQueryDto, isAdmin = false): string | undefined {
+  private async buildTypesenseAttributeValueFilters(
+    valueIds: number[],
+  ): Promise<string[]> {
+    const values = await this.attributeValuesRepository.find({
+      select: { id: true, attribute_id: true },
+      where: { id: In(valueIds) },
+    });
+    const valuesByAttributeId = new Map<number, number[]>();
+    const resolvedValueIds = new Set<number>();
+
+    for (const value of values) {
+      resolvedValueIds.add(value.id);
+      const group = valuesByAttributeId.get(value.attribute_id) ?? [];
+      group.push(value.id);
+      valuesByAttributeId.set(value.attribute_id, group);
+    }
+
+    // Keep the request valid if a value was deleted between rendering its facet
+    // and submitting the filter. Typesense then returns no match for that value.
+    for (const valueId of valueIds) {
+      if (!resolvedValueIds.has(valueId)) {
+        valuesByAttributeId.set(-valueId, [valueId]);
+      }
+    }
+
+    return Array.from(valuesByAttributeId.values()).map(
+      (ids) => `attributes_values_ids:=[${ids.join(',')}]`,
+    );
+  }
+
+  private async buildTypesenseSpecificationValueFilters(
+    valueIds: number[],
+  ): Promise<string[]> {
+    const values = await this.specificationValuesRepository.find({
+      select: { id: true, specification_id: true },
+      where: { id: In(valueIds) },
+    });
+    const valuesBySpecificationId = new Map<number, number[]>();
+    const resolvedValueIds = new Set<number>();
+
+    for (const value of values) {
+      resolvedValueIds.add(value.id);
+      const group = valuesBySpecificationId.get(value.specification_id) ?? [];
+      group.push(value.id);
+      valuesBySpecificationId.set(value.specification_id, group);
+    }
+
+    for (const valueId of valueIds) {
+      if (!resolvedValueIds.has(valueId)) {
+        valuesBySpecificationId.set(-valueId, [valueId]);
+      }
+    }
+
+    return Array.from(valuesBySpecificationId.values()).map(
+      (ids) => `specifications_values_ids:=[${ids.join(',')}]`,
+    );
+  }
+
+  private async buildTypesenseFilterBy(
+    dto: SearchQueryDto,
+    isAdmin = false,
+  ): Promise<string | undefined> {
     const filters: string[] = [];
 
     const brandIds =
@@ -1821,7 +1882,9 @@ export class SearchService implements OnModuleInit {
       (dto as any).attributes_values_ids,
     );
     if (attributeValueIds && attributeValueIds.length > 0) {
-      filters.push(`attributes_values_ids:=[${attributeValueIds.join(',')}]`);
+      filters.push(
+        ...(await this.buildTypesenseAttributeValueFilters(attributeValueIds)),
+      );
     }
 
     const specificationValueIds = this.parseCsvNumbers(
@@ -1829,7 +1892,9 @@ export class SearchService implements OnModuleInit {
     );
     if (specificationValueIds && specificationValueIds.length > 0) {
       filters.push(
-        `specifications_values_ids:=[${specificationValueIds.join(',')}]`,
+        ...(await this.buildTypesenseSpecificationValueFilters(
+          specificationValueIds,
+        )),
       );
     }
 
@@ -2448,7 +2513,7 @@ export class SearchService implements OnModuleInit {
     isAdmin: boolean,
     fullResponse: boolean,
   ): Promise<any> {
-    const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
+    const filterBy = await this.buildTypesenseFilterBy(dto, isAdmin);
     const filterDto = this.buildFilterDto(dto, isAdmin);
     const perPage = filterDto.limit ?? 20;
     const page = filterDto.page ?? 1;
@@ -3210,7 +3275,7 @@ export class SearchService implements OnModuleInit {
     const maxCandidates = this.getMaxExpansionCandidates();
     const expansionEnabled = this.isProgressiveExpansionEnabled();
     const primaryEnoughCount = this.getPrimaryEnoughCount();
-    const filterBy = this.buildTypesenseFilterBy(dto, isAdmin);
+    const filterBy = await this.buildTypesenseFilterBy(dto, isAdmin);
     const normalizedQuery = normalizeSearchQuery(dto.q && dto.q !== '*' ? dto.q : '*');
     const conceptDetectionTokens = this.tokenizeQueryForExpansion(normalizedQuery);
 
