@@ -225,6 +225,9 @@ export class ProductsService {
             category: true,
           },
           specifications: true,
+          productMedia: {
+            media: true,
+          },
           brand: true,
           category: true,
         },
