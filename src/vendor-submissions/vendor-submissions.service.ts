@@ -666,7 +666,7 @@ export class VendorSubmissionsService {
       status: ProductStatus.REVIEW,
       visible: true,
       price: submission.price,
-      sale_price: submission.sale_price ?? undefined,
+      cost: submission.sale_price ?? undefined,
       original_vendor_price: submission.price,
       original_vendor_sale_price: submission.sale_price ?? undefined,
       quantity: submission.stock,
@@ -826,6 +826,26 @@ export class VendorSubmissionsService {
   private optionalNumber(value: unknown): number | undefined {
     const num = Number(value);
     return Number.isFinite(num) && num > 0 ? num : undefined;
+  }
+
+  // ─────────────────────── Admin delete ───────────────────────
+
+  /**
+   * Permanently remove a vendor submission and its related catalog requests.
+   * Does not delete a materialized product if one already exists.
+   */
+  async remove(id: number): Promise<{ deleted: true; id: number }> {
+    const submission = await this.submissionRepo.findOne({ where: { id } });
+    if (!submission) {
+      throw new NotFoundException('Submission not found');
+    }
+
+    await this.catalogRequestRepo.delete({ submission_id: id });
+    await this.submissionMediaRepo.delete({ submission_id: id });
+    await this.submissionRepo.delete(id);
+
+    this.logger.log(`Deleted vendor submission #${id}`);
+    return { deleted: true, id };
   }
 
   // ─────────────────────── Reads ───────────────────────

@@ -37,7 +37,7 @@ export interface AuthTokens {
   refreshToken: string;
   accessTokenExpiry: Date;
   refreshTokenExpiry: Date;
-  accessTokenExpiresInSeconds: number | null;
+  accessTokenExpiresInSeconds: number;
   isStaticAccessToken: boolean;
 }
 
@@ -184,8 +184,10 @@ export class AuthService {
       refreshToken,
       accessTokenExpiry,
       refreshTokenExpiry,
+      // Always return a positive TTL so clients can schedule refresh correctly.
+      // Null previously made admin FE set expiresAt=Date.now() and refresh in a loop.
       accessTokenExpiresInSeconds: isStaticAccessToken
-        ? null
+        ? this.staticAccessTokenCookieMaxAge
         : this.accessTokenExpiresIn,
       isStaticAccessToken,
     };

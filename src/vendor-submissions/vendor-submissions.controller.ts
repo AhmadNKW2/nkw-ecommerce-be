@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
@@ -106,5 +107,16 @@ export class VendorSubmissionsController {
   materialize(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
     this.assertAdminOnly(req.user);
     return this.submissionsService.materialize(id, req.user?.id);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('products')
+  @ApiOperation({
+    summary: 'Permanently delete a vendor product submission and related requests',
+  })
+  remove(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
+    this.assertAdminOnly(req.user);
+    return this.submissionsService.remove(id);
   }
 }

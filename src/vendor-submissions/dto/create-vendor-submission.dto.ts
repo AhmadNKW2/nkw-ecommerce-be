@@ -49,7 +49,7 @@ export class CreateVendorSubmissionDto {
   @Min(0)
   price: number;
 
-  @ApiProperty({ example: 39.9, description: 'Vendor discounted sale price' })
+  @ApiProperty({ example: 39.9, description: 'Vendor cost price' })
   @IsNumber()
   @Min(0)
   sale_price: number;
