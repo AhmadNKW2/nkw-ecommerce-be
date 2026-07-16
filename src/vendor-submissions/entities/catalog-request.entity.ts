@@ -7,14 +7,15 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-export type CatalogRequestType = 'brand' | 'category';
+export type CatalogRequestType = 'brand' | 'category' | 'specs';
 
 export type CatalogRequestStatus = 'pending' | 'approved' | 'rejected';
 
 /**
- * Payload the AI suggested for the entity that should be created.
- * - brand: { name_en, name_ar, detected_source }
- * - category: { name_en, name_ar, parent_id, parent_name, reason }
+ * Payload the AI suggested for the entity that should be created or confirmed.
+ * - brand: { name_en, name_ar, matched_brand_id?, mode: 'match' | 'create' }
+ * - category: { name_en, name_ar, parent_id, matched_category_id?, mode, reason }
+ * - specs: { stage2 snapshot for admin review of mapped values }
  */
 export type CatalogRequestPayload = Record<string, unknown>;
 

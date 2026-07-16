@@ -282,6 +282,12 @@ async function ensureVendorSubmissionsTables(client) {
     'sale_price',
     'decimal(10,2) NULL',
   );
+  await addColumnIfMissing(
+    client,
+    'vendor_product_submissions',
+    'specs_request_id',
+    'integer NULL',
+  );
 
   if (!(await tableExists(client, 'vendor_product_submission_media'))) {
     await client.query(`

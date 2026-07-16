@@ -30,11 +30,12 @@ const decimalNumberTransformer: ValueTransformer = {
  *
  * pending_ai            -> row created, waiting for the Stage 1 classifier
  * ai_processing         -> AI job currently running
- * awaiting_brand        -> AI could not match a brand; a catalog request is open
- * awaiting_category     -> AI could not match a category; a catalog request is open
+ * awaiting_brand        -> brand catalog request pending (match or create)
+ * awaiting_category     -> category catalog request pending (match or create)
  * awaiting_category_specs -> category approved, admin must add specs/attributes,
  *                            then re-run Stage 2
- * ready                 -> brand + category resolved and enriched, ready to materialize
+ * awaiting_specs_approval -> Stage 2 done; admin must approve mapped values
+ * ready                 -> brand + category + specs approved; ready to materialize
  * materialized          -> a real product row was created
  * rejected              -> submission rejected by an admin
  * failed                -> AI/processing error, needs a retry
@@ -45,6 +46,7 @@ export type VendorProductSubmissionStatus =
   | 'awaiting_brand'
   | 'awaiting_category'
   | 'awaiting_category_specs'
+  | 'awaiting_specs_approval'
   | 'ready'
   | 'materialized'
   | 'rejected'
@@ -106,6 +108,9 @@ export class VendorProductSubmission {
 
   @Column({ type: 'int', nullable: true })
   category_request_id: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  specs_request_id: number | null;
 
   @Column({ type: 'int', nullable: true })
   product_id: number | null;

@@ -1,6 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsIn,
   IsInt,
   IsOptional,
@@ -12,7 +13,7 @@ import type {
   CatalogRequestType,
 } from '../entities/catalog-request.entity';
 
-const REQUEST_TYPES: CatalogRequestType[] = ['brand', 'category'];
+const REQUEST_TYPES: CatalogRequestType[] = ['brand', 'category', 'specs'];
 const REQUEST_STATUSES: CatalogRequestStatus[] = [
   'pending',
   'approved',
@@ -46,6 +47,9 @@ export class ListCatalogRequestsDto {
 /**
  * Admin approval payload. All fields optional so the admin can accept the AI
  * suggestion as-is or edit brand/category names and category placement.
+ *
+ * For matched brand/category requests, omit existing_entity_id to keep the
+ * AI match, or pass a different id / force create with names only.
  */
 export class ApproveCatalogRequestDto {
   @ApiPropertyOptional({ description: 'Override brand/category English name' })
@@ -67,6 +71,22 @@ export class ApproveCatalogRequestDto {
   @IsInt()
   @IsOptional()
   parent_id?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Confirm an existing brand/category id (match approval). Omit to create new.',
+  })
+  @Type(() => Number)
+  @IsInt()
+  @IsOptional()
+  existing_entity_id?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      'When true, create a new brand/category even if a match id is present.',
+  })
+  @IsOptional()
+  create_new?: boolean;
 
   @ApiPropertyOptional()
   @IsString()

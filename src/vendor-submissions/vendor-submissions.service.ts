@@ -141,77 +141,104 @@ export class VendorSubmissionsService {
 
       submission.ai_result = { stage1 };
 
-      // Resolve brand.
+      // Brand always requires admin approve / edit / reject — even when matched.
       submission.resolved_brand_id = null;
       submission.brand_request_id = null;
-      if (stage1.brand_match) {
-        const matched = brands.find(
-          (brand) =>
-            brand.name_en?.trim().toLowerCase() ===
-            stage1.brand_match!.trim().toLowerCase(),
-        );
-        if (matched) {
-          submission.resolved_brand_id = matched.id;
+      {
+        let matchedBrand: { id: number; name_en: string } | null = null;
+        if (stage1.brand_match) {
+          matchedBrand =
+            brands.find(
+              (brand) =>
+                brand.name_en?.trim().toLowerCase() ===
+                stage1.brand_match!.trim().toLowerCase(),
+            ) ?? null;
         }
-      }
-      if (!submission.resolved_brand_id && stage1.suggested_brand) {
-        const request = await this.catalogRequestRepo.save(
+
+        const nameEn =
+          matchedBrand?.name_en?.trim() ||
+          stage1.suggested_brand?.name_en?.trim() ||
+          stage1.brand_match?.trim() ||
+          '';
+        const nameAr =
+          stage1.suggested_brand?.name_ar?.trim() || nameEn;
+
+        const brandRequest = await this.catalogRequestRepo.save(
           this.catalogRequestRepo.create({
             type: 'brand',
             status: 'pending',
             submission_id: submission.id,
             requested_by: submission.created_by,
             payload: {
-              name_en: stage1.suggested_brand.name_en,
-              name_ar: stage1.suggested_brand.name_ar,
+              mode: matchedBrand ? 'match' : 'create',
+              matched_brand_id: matchedBrand?.id ?? null,
+              name_en: nameEn,
+              name_ar: nameAr,
             },
           }),
         );
-        submission.brand_request_id = request.id;
-        this.adminNotifications.publishCatalogRequestCreated(request.id);
+        submission.brand_request_id = brandRequest.id;
+        this.adminNotifications.publishCatalogRequestCreated(brandRequest.id);
       }
 
-      // Resolve category — only accept a LEAF category (no children).
+      // Category always requires admin approve / edit / reject — leaf only.
       submission.resolved_category_id = null;
       submission.category_request_id = null;
-      const parentIds = new Set(
-        categoryNodes
-          .map((node) => node.parent_id)
-          .filter((pid): pid is number => typeof pid === 'number'),
-      );
-      if (stage1.category_match) {
-        const node = categoryNodes.find(
-          (candidate) => candidate.id === stage1.category_match,
+      submission.specs_request_id = null;
+      {
+        const parentIds = new Set(
+          categoryNodes
+            .map((node) => node.parent_id)
+            .filter((pid): pid is number => typeof pid === 'number'),
         );
-        const isLeaf = node ? !parentIds.has(node.id) : false;
-        if (node && isLeaf) {
-          submission.resolved_category_id = stage1.category_match;
+
+        let matchedLeaf: (typeof categoryNodes)[number] | null = null;
+        if (stage1.category_match) {
+          const node = categoryNodes.find(
+            (candidate) => candidate.id === stage1.category_match,
+          );
+          if (node && !parentIds.has(node.id)) {
+            matchedLeaf = node;
+          }
         }
-      }
-      if (!submission.resolved_category_id && stage1.suggested_category) {
-        const request = await this.catalogRequestRepo.save(
+
+        const nameEn =
+          matchedLeaf?.name_en?.trim() ||
+          stage1.suggested_category?.name_en?.trim() ||
+          '';
+        const nameAr =
+          matchedLeaf?.name_ar?.trim() ||
+          stage1.suggested_category?.name_ar?.trim() ||
+          nameEn;
+        const parentId = matchedLeaf
+          ? matchedLeaf.parent_id
+          : (stage1.suggested_category?.parent_id ?? null);
+
+        const categoryRequest = await this.catalogRequestRepo.save(
           this.catalogRequestRepo.create({
             type: 'category',
             status: 'pending',
             submission_id: submission.id,
             requested_by: submission.created_by,
             payload: {
-              name_en: stage1.suggested_category.name_en,
-              name_ar: stage1.suggested_category.name_ar,
-              parent_id: stage1.suggested_category.parent_id,
-              reason: stage1.suggested_category.reason ?? null,
+              mode: matchedLeaf ? 'match' : 'create',
+              matched_category_id: matchedLeaf?.id ?? null,
+              name_en: nameEn,
+              name_ar: nameAr,
+              parent_id: parentId,
+              reason:
+                stage1.suggested_category?.reason ??
+                (matchedLeaf ? 'AI matched an existing leaf category' : null),
             },
           }),
         );
-        submission.category_request_id = request.id;
-        this.adminNotifications.publishCatalogRequestCreated(request.id);
+        submission.category_request_id = categoryRequest.id;
+        this.adminNotifications.publishCatalogRequestCreated(categoryRequest.id);
       }
 
       await this.submissionRepo.save(submission);
-
-      // If we already have a category, enrich only when it has specs/attributes;
-      // otherwise block until an admin defines them.
-      await this.maybeRunStage2(submission.id);
+      // Stage 2 waits until both brand and category are approved.
+      await this.recomputeStatus(submission.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.submissionRepo.update(id, {
@@ -261,20 +288,52 @@ export class VendorSubmissionsService {
       ...(submission.ai_result ?? {}),
       stage2,
     };
+
+    // Specs/attributes mapping always needs admin approve / reject.
+    if (submission.specs_request_id) {
+      await this.catalogRequestRepo.update(
+        { id: submission.specs_request_id, status: 'pending' },
+        {
+          status: 'rejected',
+          admin_notes: 'Superseded by a new AI mapping run',
+          reviewed_at: new Date(),
+        },
+      );
+    }
+
+    const specsRequest = await this.catalogRequestRepo.save(
+      this.catalogRequestRepo.create({
+        type: 'specs',
+        status: 'pending',
+        submission_id: submission.id,
+        requested_by: submission.created_by,
+        payload: {
+          mode: 'review',
+          title_en: stage2.title_en ?? null,
+          title_ar: stage2.title_ar ?? null,
+          specifications: stage2.specifications ?? [],
+          attributes: stage2.attributes ?? [],
+        },
+      }),
+    );
+    submission.specs_request_id = specsRequest.id;
     await this.submissionRepo.save(submission);
+    this.adminNotifications.publishCatalogRequestCreated(specsRequest.id);
     await this.recomputeStatus(submission.id);
 
     return this.findOne(submission.id);
   }
 
   /**
-   * Run Stage 2 only when the resolved category already has specs/attributes.
-   * Otherwise leave the submission in awaiting_category_specs so an admin can
-   * define them and trigger the mapping manually.
+   * Run Stage 2 only when brand + category are approved and the category
+   * already has specs/attributes. Otherwise leave the submission blocked.
    */
   private async maybeRunStage2(id: number): Promise<void> {
     const submission = await this.submissionRepo.findOne({ where: { id } });
-    if (!submission?.resolved_category_id) {
+    if (!submission) {
+      return;
+    }
+    if (!submission.resolved_brand_id || !submission.resolved_category_id) {
       await this.recomputeStatus(id);
       return;
     }
@@ -312,19 +371,133 @@ export class VendorSubmissionsService {
     await this.submissionRepo.update(submissionId, {
       resolved_brand_id: brandId,
     });
-    await this.recomputeStatus(submissionId);
+    await this.maybeRunStage2(submissionId);
   }
 
   async onCategoryResolved(
     submissionId: number,
     categoryId: number,
   ): Promise<void> {
+    if (!(await this.isLeafCategory(categoryId))) {
+      throw new BadRequestException(
+        'Approved category must be a leaf category (no subcategories).',
+      );
+    }
     await this.submissionRepo.update(submissionId, {
       resolved_category_id: categoryId,
     });
-    // Newly approved category is a leaf. Enrich now if it already has
-    // specs/attributes; otherwise wait for an admin to define them.
     await this.maybeRunStage2(submissionId);
+  }
+
+  async onSpecsResolved(submissionId: number): Promise<void> {
+    await this.recomputeStatus(submissionId);
+  }
+
+  /**
+   * Backfill pending brand/category approval requests for submissions that
+   * were auto-resolved by an older Stage 1 path. Clears premature resolved
+   * ids so admin must explicitly approve / edit / reject.
+   */
+  private async ensureApprovalRequests(id: number): Promise<void> {
+    const submission = await this.submissionRepo.findOne({ where: { id } });
+    if (!submission || submission.status === 'materialized') {
+      return;
+    }
+
+    const stage1 = (
+      submission.ai_result as Record<string, unknown> | null
+    )?.stage1 as
+      | {
+          brand_match?: string | null;
+          suggested_brand?: { name_en?: string; name_ar?: string } | null;
+          category_match?: number | null;
+          suggested_category?: {
+            name_en?: string;
+            name_ar?: string;
+            parent_id?: number | null;
+            reason?: string;
+          } | null;
+        }
+      | undefined;
+
+    if (!submission.brand_request_id) {
+      let nameEn =
+        stage1?.suggested_brand?.name_en?.trim() ||
+        stage1?.brand_match?.trim() ||
+        '';
+      let nameAr = stage1?.suggested_brand?.name_ar?.trim() || nameEn;
+      let matchedBrandId: number | null = null;
+
+      if (submission.resolved_brand_id) {
+        const brand = await this.brandRepo.findOne({
+          where: { id: submission.resolved_brand_id },
+        });
+        if (brand) {
+          matchedBrandId = brand.id;
+          nameEn = brand.name_en;
+          nameAr = brand.name_ar || brand.name_en;
+        }
+      }
+
+      const brandRequest = await this.catalogRequestRepo.save(
+        this.catalogRequestRepo.create({
+          type: 'brand',
+          status: 'pending',
+          submission_id: submission.id,
+          requested_by: submission.created_by,
+          payload: {
+            mode: matchedBrandId ? 'match' : 'create',
+            matched_brand_id: matchedBrandId,
+            name_en: nameEn,
+            name_ar: nameAr,
+          },
+        }),
+      );
+      submission.brand_request_id = brandRequest.id;
+      submission.resolved_brand_id = null;
+      this.adminNotifications.publishCatalogRequestCreated(brandRequest.id);
+    }
+
+    if (!submission.category_request_id) {
+      let nameEn = stage1?.suggested_category?.name_en?.trim() || '';
+      let nameAr = stage1?.suggested_category?.name_ar?.trim() || nameEn;
+      let parentId = stage1?.suggested_category?.parent_id ?? null;
+      let matchedCategoryId: number | null = null;
+
+      if (submission.resolved_category_id) {
+        const category = await this.categoryRepo.findOne({
+          where: { id: submission.resolved_category_id },
+        });
+        if (category) {
+          matchedCategoryId = category.id;
+          nameEn = category.name_en;
+          nameAr = category.name_ar || category.name_en;
+          parentId = category.parent_id ?? null;
+        }
+      }
+
+      const categoryRequest = await this.catalogRequestRepo.save(
+        this.catalogRequestRepo.create({
+          type: 'category',
+          status: 'pending',
+          submission_id: submission.id,
+          requested_by: submission.created_by,
+          payload: {
+            mode: matchedCategoryId ? 'match' : 'create',
+            matched_category_id: matchedCategoryId,
+            name_en: nameEn,
+            name_ar: nameAr,
+            parent_id: parentId,
+            reason: stage1?.suggested_category?.reason ?? null,
+          },
+        }),
+      );
+      submission.category_request_id = categoryRequest.id;
+      submission.resolved_category_id = null;
+      this.adminNotifications.publishCatalogRequestCreated(categoryRequest.id);
+    }
+
+    await this.submissionRepo.save(submission);
   }
 
   private async recomputeStatus(submissionId: number): Promise<void> {
@@ -338,25 +511,75 @@ export class VendorSubmissionsService {
       return;
     }
 
-    const brandRequest = submission.brand_request_id
-      ? await this.catalogRequestRepo.findOne({
-          where: { id: submission.brand_request_id },
-        })
-      : null;
-    const brandBlocked = brandRequest?.status === 'pending';
+    const [brandRequest, categoryRequest, specsRequest] = await Promise.all([
+      submission.brand_request_id
+        ? this.catalogRequestRepo.findOne({
+            where: { id: submission.brand_request_id },
+          })
+        : Promise.resolve(null),
+      submission.category_request_id
+        ? this.catalogRequestRepo.findOne({
+            where: { id: submission.category_request_id },
+          })
+        : Promise.resolve(null),
+      submission.specs_request_id
+        ? this.catalogRequestRepo.findOne({
+            where: { id: submission.specs_request_id },
+          })
+        : Promise.resolve(null),
+    ]);
 
-    const categoryResolved = Boolean(submission.resolved_category_id);
-    const stage2Done = Boolean(
-      (submission.ai_result as Record<string, unknown> | null)?.stage2,
-    );
+    const stage2 = (submission.ai_result as Record<string, unknown> | null)
+      ?.stage2 as Stage2Result | undefined;
+    const stage2Done = Boolean(stage2);
+
+    // Backfill a specs approval request for older submissions that already
+    // have Stage 2 output but never got a specs request row.
+    let effectiveSpecsRequest = specsRequest;
+    if (stage2Done && !submission.specs_request_id) {
+      effectiveSpecsRequest = await this.catalogRequestRepo.save(
+        this.catalogRequestRepo.create({
+          type: 'specs',
+          status: 'pending',
+          submission_id: submission.id,
+          requested_by: submission.created_by,
+          payload: {
+            mode: 'review',
+            title_en: stage2?.title_en ?? null,
+            title_ar: stage2?.title_ar ?? null,
+            specifications: stage2?.specifications ?? [],
+            attributes: stage2?.attributes ?? [],
+          },
+        }),
+      );
+      submission.specs_request_id = effectiveSpecsRequest.id;
+      this.adminNotifications.publishCatalogRequestCreated(
+        effectiveSpecsRequest.id,
+      );
+    }
+
+    const brandBlocked =
+      !submission.resolved_brand_id ||
+      brandRequest?.status === 'pending' ||
+      brandRequest?.status === 'rejected';
+    const categoryBlocked =
+      !submission.resolved_category_id ||
+      categoryRequest?.status === 'pending' ||
+      categoryRequest?.status === 'rejected';
+    const specsBlocked =
+      !effectiveSpecsRequest ||
+      effectiveSpecsRequest.status === 'pending' ||
+      effectiveSpecsRequest.status === 'rejected';
 
     let status: VendorProductSubmission['status'];
     if (brandBlocked) {
       status = 'awaiting_brand';
-    } else if (!categoryResolved) {
+    } else if (categoryBlocked) {
       status = 'awaiting_category';
     } else if (!stage2Done) {
       status = 'awaiting_category_specs';
+    } else if (specsBlocked) {
+      status = 'awaiting_specs_approval';
     } else {
       status = 'ready';
     }
@@ -368,6 +591,9 @@ export class VendorSubmissionsService {
   // ─────────────────────── Materialize ───────────────────────
 
   async materialize(id: number, userId?: number): Promise<{ product_id: number }> {
+    await this.ensureApprovalRequests(id);
+    await this.recomputeStatus(id);
+
     const submission = await this.submissionRepo.findOne({
       where: { id },
       relations: { media: true },
@@ -380,8 +606,11 @@ export class VendorSubmissionsService {
     }
     if (submission.status !== 'ready') {
       throw new BadRequestException(
-        `Submission is not ready to materialize (status: ${submission.status}).`,
+        `Submission is not ready to materialize (status: ${submission.status}). Approve brand, category, and specs first.`,
       );
+    }
+    if (!submission.resolved_brand_id) {
+      throw new BadRequestException('Submission has no approved brand.');
     }
     if (!submission.resolved_category_id) {
       throw new BadRequestException('Submission has no resolved category.');
@@ -635,6 +864,34 @@ export class VendorSubmissionsService {
       skip: (page - 1) * limit,
       take: limit,
     });
+
+    // Admin list: backfill approval requests for older auto-matched rows.
+    if (!vendorId) {
+      for (const row of data) {
+        if (
+          row.status !== 'materialized' &&
+          row.status !== 'rejected' &&
+          (!row.brand_request_id ||
+            !row.category_request_id ||
+            ((row.ai_result as Record<string, unknown> | null)?.stage2 &&
+              !row.specs_request_id))
+        ) {
+          await this.ensureApprovalRequests(row.id);
+          await this.recomputeStatus(row.id);
+        }
+      }
+      const refreshed = await this.submissionRepo.find({
+        where,
+        relations: { media: { media: true } },
+        order: { created_at: 'DESC' },
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+      return {
+        data: refreshed,
+        meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      };
+    }
 
     return {
       data,

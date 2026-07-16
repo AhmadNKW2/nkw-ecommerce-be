@@ -9,6 +9,7 @@ const SUBMISSION_STATUSES: VendorProductSubmissionStatus[] = [
   'awaiting_brand',
   'awaiting_category',
   'awaiting_category_specs',
+  'awaiting_specs_approval',
   'ready',
   'materialized',
   'rejected',
