@@ -2219,10 +2219,13 @@ export class ProductImportService {
   private analyzeApproximateMatch(
     rawCandidates: string[],
     matchedCandidates: string[],
+    options: { allowNumericSignatureMatch?: boolean } = {},
   ): {
     shouldReplace: boolean;
     reason: string;
   } {
+    const allowNumericSignatureMatch =
+      options.allowNumericSignatureMatch === true;
     const normalizedMatchedCandidates = new Set(
       matchedCandidates
         .map((candidate) => this.normalizeLookupText(candidate))
@@ -2234,13 +2237,15 @@ export class ProductImportService {
         .filter(Boolean),
     );
 
-    let hasMeasurableRawValue = false;
+    let hasComparableRawValue = false;
 
     for (const rawCandidate of rawCandidates) {
       const normalizedRawCandidate = rawCandidate.trim();
       if (!normalizedRawCandidate) {
         continue;
       }
+
+      hasComparableRawValue = true;
 
       if (
         normalizedMatchedCandidates.has(
@@ -2254,32 +2259,35 @@ export class ProductImportService {
         };
       }
 
+      if (!allowNumericSignatureMatch) {
+        continue;
+      }
+
       const rawNumericSignature = this.extractNumericSignature(
         normalizedRawCandidate,
       ).join('|');
-      if (rawNumericSignature) {
-        hasMeasurableRawValue = true;
-        if (matchedNumericSignatures.has(rawNumericSignature)) {
-          return {
-            shouldReplace: false,
-            reason: 'raw value matches an existing database numeric signature',
-          };
-        }
+      if (
+        rawNumericSignature &&
+        matchedNumericSignatures.has(rawNumericSignature)
+      ) {
+        return {
+          shouldReplace: false,
+          reason: 'raw value matches an existing database numeric signature',
+        };
       }
     }
 
-    if (hasMeasurableRawValue) {
+    if (!hasComparableRawValue) {
       return {
-        shouldReplace: true,
-        reason:
-          'raw measurable value differs from all existing unit-based database values',
+        shouldReplace: false,
+        reason: 'raw value is empty; keeping AI matched database value',
       };
     }
 
     return {
-      shouldReplace: false,
+      shouldReplace: true,
       reason:
-        'raw value has no measurable token; approximate numeric safeguard not applied',
+        'raw value does not match the AI-selected database value; creating exact value',
     };
   }
 
@@ -2564,18 +2572,22 @@ export class ProductImportService {
             );
             matchedValueId = null;
             shouldCreateValue = true;
-          } else if (this.hasDefinedUnit(matchedDefinition)) {
+          } else {
             const matchDecision = this.analyzeApproximateMatch(
               parsedValue.rawCandidates,
               this.buildDefinitionValueCandidates(
                 matchedDefinition,
                 matchedValue,
               ),
+              {
+                allowNumericSignatureMatch:
+                  this.hasDefinedUnit(matchedDefinition),
+              },
             );
 
             if (matchDecision.shouldReplace) {
               this.logger.log(
-                `${definitionKindLabel} ${definitionId}: rejecting approximate match id=${matchedValueId} for raw value '${parsedValue.displayValue}'; creating exact value (${matchDecision.reason}).`,
+                `${definitionKindLabel} ${definitionId}: rejecting mismatched value id=${matchedValueId} for raw value '${parsedValue.displayValue}'; creating exact value (${matchDecision.reason}).`,
               );
               matchedValueId = null;
               shouldCreateValue = true;
@@ -2584,10 +2596,6 @@ export class ProductImportService {
                 `${definitionKindLabel} ${definitionId}: keeping matched value id=${matchedValueId} for raw value '${parsedValue.displayValue}' (${matchDecision.reason}).`,
               );
             }
-          } else {
-            this.logger.log(
-              `${definitionKindLabel} ${definitionId}: keeping matched value id=${matchedValueId} for raw value '${parsedValue.displayValue}' (no unit defined; approximate numeric safeguard not applied).`,
-            );
           }
         }
 

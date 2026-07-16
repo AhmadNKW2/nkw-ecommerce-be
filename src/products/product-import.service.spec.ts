@@ -1065,6 +1065,150 @@ describe('ProductImportService', () => {
     );
   });
 
+  it('rejects mismatched non-unit AI matched_value_id and creates the exact CPU model', async () => {
+    specificationsService.addValue.mockResolvedValue({ id: 1301 });
+
+    const result = await (service as any).resolveSpecifications(
+      [
+        {
+          specification_id: 24,
+          values: [
+            {
+              original_value: { name_en: 'Core i7', name_ar: 'Core i7' },
+              matched_value_id: 139,
+            },
+          ],
+        },
+        {
+          specification_id: 25,
+          values: [
+            {
+              original_value: { name_en: '13650HX', name_ar: '13650HX' },
+              matched_value_id: 631,
+            },
+          ],
+        },
+      ],
+      [
+        {
+          id: 24,
+          name_en: 'CPU Series',
+          level: 0,
+          values: [{ id: 139, value_en: 'Core i7', value_ar: 'Core i7' }],
+        },
+        {
+          id: 25,
+          name_en: 'CPU Model',
+          parent_id: 24,
+          level: 1,
+          values: [
+            {
+              id: 631,
+              value_en: '14700HX',
+              value_ar: '14700HX',
+              parent_value_id: 139,
+            },
+            {
+              id: 634,
+              value_en: '14650HX',
+              value_ar: '14650HX',
+              parent_value_id: 139,
+            },
+          ],
+        },
+      ],
+    );
+
+    expect(result).toEqual([
+      {
+        specification_id: 24,
+        specification_value_ids: [139],
+      },
+      {
+        specification_id: 25,
+        specification_value_ids: [1301],
+      },
+    ]);
+    expect(specificationsService.addValue).toHaveBeenCalledWith(
+      25,
+      '13650HX',
+      '13650HX',
+      139,
+    );
+  });
+
+  it('keeps an exact non-unit AI matched_value_id when the raw text matches', async () => {
+    const result = await (service as any).resolveSpecifications(
+      [
+        {
+          specification_id: 25,
+          values: [
+            {
+              original_value: { name_en: '13650HX', name_ar: '13650HX' },
+              matched_value_id: 1301,
+            },
+          ],
+        },
+      ],
+      [
+        {
+          id: 25,
+          name_en: 'CPU Model',
+          values: [
+            { id: 1301, value_en: '13650HX', value_ar: '13650HX' },
+            { id: 631, value_en: '14700HX', value_ar: '14700HX' },
+          ],
+        },
+      ],
+    );
+
+    expect(result).toEqual([
+      {
+        specification_id: 25,
+        specification_value_ids: [1301],
+      },
+    ]);
+    expect(specificationsService.addValue).not.toHaveBeenCalled();
+  });
+
+  it('rejects approximate unit-based AI matches when the numeric value differs', async () => {
+    specificationsService.addValue.mockResolvedValue({ id: 902 });
+
+    const result = await (service as any).resolveSpecifications(
+      [
+        {
+          specification_id: 9,
+          values: [
+            {
+              original_value: { name_en: '25', name_ar: '25' },
+              matched_value_id: 276,
+            },
+          ],
+        },
+      ],
+      [
+        {
+          id: 9,
+          name_en: 'Screen Size',
+          unit_en: 'inch',
+          unit_ar: 'انش',
+          values: [
+            { id: 270, value_en: '25', value_ar: '25' },
+            { id: 276, value_en: '24.5', value_ar: '24.5' },
+          ],
+        },
+      ],
+    );
+
+    expect(result).toEqual([
+      {
+        specification_id: 9,
+        specification_value_ids: [270],
+      },
+    ]);
+    expect(specificationsService.addValue).not.toHaveBeenCalled();
+  });
+
   it('rejects AI attributes that return more than one value for the same attribute', async () => {
     await expect(
       (service as any).resolveAttributes(
