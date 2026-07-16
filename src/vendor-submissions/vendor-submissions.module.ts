@@ -4,6 +4,7 @@ import { AdminNotificationsModule } from '../admin-notifications/admin-notificat
 import { AttributesModule } from '../attributes/attributes.module';
 import { Brand } from '../brands/entities/brand.entity';
 import { BrandsModule } from '../brands/brands.module';
+import { Category } from '../categories/entities/category.entity';
 import { CategoriesModule } from '../categories/categories.module';
 import { ProductsModule } from '../products/products.module';
 import { SpecificationsModule } from '../specifications/specifications.module';
@@ -23,6 +24,7 @@ import { VendorSubmissionsService } from './vendor-submissions.service';
       VendorProductSubmissionMedia,
       CatalogRequest,
       Brand,
+      Category,
     ]),
     ProductsModule,
     CategoriesModule,

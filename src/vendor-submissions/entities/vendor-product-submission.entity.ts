@@ -77,6 +77,14 @@ export class VendorProductSubmission {
   })
   price: number;
 
+  @Column('decimal', {
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: decimalNumberTransformer,
+  })
+  sale_price: number | null;
+
   @Column({ type: 'int', default: 0 })
   stock: number;
 

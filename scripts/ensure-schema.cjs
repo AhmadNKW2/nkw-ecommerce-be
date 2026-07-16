@@ -276,6 +276,13 @@ async function ensureVendorSubmissionsTables(client) {
     console.log('  skip vendor_product_submissions (exists)');
   }
 
+  await addColumnIfMissing(
+    client,
+    'vendor_product_submissions',
+    'sale_price',
+    'decimal(10,2) NULL',
+  );
+
   if (!(await tableExists(client, 'vendor_product_submission_media'))) {
     await client.query(`
       CREATE TABLE vendor_product_submission_media (

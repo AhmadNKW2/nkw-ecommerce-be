@@ -11,6 +11,7 @@ import { AdminNotificationsService } from '../admin-notifications/admin-notifica
 import { AttributesService } from '../attributes/attributes.service';
 import { Brand, BrandStatus } from '../brands/entities/brand.entity';
 import { CategoriesService } from '../categories/categories.service';
+import { Category } from '../categories/entities/category.entity';
 import { ProductStatus } from '../products/entities/product.entity';
 import { ProductsService } from '../products/products.service';
 import {
@@ -48,6 +49,8 @@ export class VendorSubmissionsService {
     private readonly catalogRequestRepo: Repository<CatalogRequest>,
     @InjectRepository(Brand)
     private readonly brandRepo: Repository<Brand>,
+    @InjectRepository(Category)
+    private readonly categoryRepo: Repository<Category>,
     private readonly aiService: VendorSubmissionAiService,
     private readonly categoriesService: CategoriesService,
     private readonly specificationsService: SpecificationsService,
@@ -75,6 +78,7 @@ export class VendorSubmissionsService {
       title: dto.title.trim(),
       description: dto.description,
       price: dto.price,
+      sale_price: dto.sale_price,
       stock: dto.stock,
       status: 'pending_ai',
       ai_result: null,
@@ -167,14 +171,20 @@ export class VendorSubmissionsService {
         this.adminNotifications.publishCatalogRequestCreated(request.id);
       }
 
-      // Resolve category.
+      // Resolve category — only accept a LEAF category (no children).
       submission.resolved_category_id = null;
       submission.category_request_id = null;
+      const parentIds = new Set(
+        categoryNodes
+          .map((node) => node.parent_id)
+          .filter((pid): pid is number => typeof pid === 'number'),
+      );
       if (stage1.category_match) {
-        const exists = categoryNodes.some(
-          (node) => node.id === stage1.category_match,
+        const node = categoryNodes.find(
+          (candidate) => candidate.id === stage1.category_match,
         );
-        if (exists) {
+        const isLeaf = node ? !parentIds.has(node.id) : false;
+        if (node && isLeaf) {
           submission.resolved_category_id = stage1.category_match;
         }
       }
@@ -199,12 +209,9 @@ export class VendorSubmissionsService {
 
       await this.submissionRepo.save(submission);
 
-      // If we already have a category, enrich now.
-      if (submission.resolved_category_id) {
-        await this.runStage2(submission.id);
-      } else {
-        await this.recomputeStatus(submission.id);
-      }
+      // If we already have a category, enrich only when it has specs/attributes;
+      // otherwise block until an admin defines them.
+      await this.maybeRunStage2(submission.id);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.submissionRepo.update(id, {
@@ -234,6 +241,12 @@ export class VendorSubmissionsService {
       this.attributesService.findAll([categoryId]),
     ]);
 
+    if (specifications.length === 0 && attributes.length === 0) {
+      throw new BadRequestException(
+        'This category has no specifications or attributes yet. Add them to the category first, then run AI mapping.',
+      );
+    }
+
     const stage2 = await this.aiService.enrich(
       {
         title: submission.title,
@@ -254,6 +267,45 @@ export class VendorSubmissionsService {
     return this.findOne(submission.id);
   }
 
+  /**
+   * Run Stage 2 only when the resolved category already has specs/attributes.
+   * Otherwise leave the submission in awaiting_category_specs so an admin can
+   * define them and trigger the mapping manually.
+   */
+  private async maybeRunStage2(id: number): Promise<void> {
+    const submission = await this.submissionRepo.findOne({ where: { id } });
+    if (!submission?.resolved_category_id) {
+      await this.recomputeStatus(id);
+      return;
+    }
+
+    const hasCatalog = await this.categoryHasSpecsOrAttributes(
+      submission.resolved_category_id,
+    );
+    if (hasCatalog) {
+      await this.runStage2(id);
+    } else {
+      await this.recomputeStatus(id);
+    }
+  }
+
+  private async categoryHasSpecsOrAttributes(
+    categoryId: number,
+  ): Promise<boolean> {
+    const [specifications, attributes] = await Promise.all([
+      this.specificationsService.findAll([categoryId]),
+      this.attributesService.findAll([categoryId]),
+    ]);
+    return specifications.length > 0 || attributes.length > 0;
+  }
+
+  private async isLeafCategory(categoryId: number): Promise<boolean> {
+    const childCount = await this.categoryRepo.count({
+      where: { parent_id: categoryId },
+    });
+    return childCount === 0;
+  }
+
   // ─────── Called by CatalogRequestsService on approval ───────
 
   async onBrandResolved(submissionId: number, brandId: number): Promise<void> {
@@ -270,9 +322,9 @@ export class VendorSubmissionsService {
     await this.submissionRepo.update(submissionId, {
       resolved_category_id: categoryId,
     });
-    // Category exists but its specs/attributes may still be empty; the admin
-    // adds them, then triggers Stage 2 via run-ai.
-    await this.recomputeStatus(submissionId);
+    // Newly approved category is a leaf. Enrich now if it already has
+    // specs/attributes; otherwise wait for an admin to define them.
+    await this.maybeRunStage2(submissionId);
   }
 
   private async recomputeStatus(submissionId: number): Promise<void> {
@@ -334,6 +386,11 @@ export class VendorSubmissionsService {
     if (!submission.resolved_category_id) {
       throw new BadRequestException('Submission has no resolved category.');
     }
+    if (!(await this.isLeafCategory(submission.resolved_category_id))) {
+      throw new BadRequestException(
+        'Resolved category must be a leaf category (no subcategories).',
+      );
+    }
 
     const stage2 = (submission.ai_result as Record<string, unknown> | null)
       ?.stage2 as Stage2Result | undefined;
@@ -380,7 +437,9 @@ export class VendorSubmissionsService {
       status: ProductStatus.REVIEW,
       visible: true,
       price: submission.price,
+      sale_price: submission.sale_price ?? undefined,
       original_vendor_price: submission.price,
+      original_vendor_sale_price: submission.sale_price ?? undefined,
       quantity: submission.stock,
       is_out_of_stock: submission.stock <= 0,
       media,
