@@ -376,7 +376,7 @@ export class TermsService implements OnModuleInit {
       process.env.TERMS_OPENAI_MODEL?.trim() ||
       process.env.CATEGORY_TAGS_OPENAI_MODEL?.trim() ||
       process.env.OPENAI_MODEL?.trim() ||
-      'gpt-5.4';
+      'gpt-5.6-terra';
     const openAiKey = this.getOpenAiApiKey();
 
     const requestBody = {

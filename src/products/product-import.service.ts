@@ -1006,7 +1006,7 @@ export class ProductImportService {
       this.requireOptionalString(rawPayload.model) ??
       process.env.PRODUCT_IMPORT_OPENAI_MODEL?.trim() ??
       process.env.OPENAI_MODEL?.trim() ??
-      'gpt-5.4';
+      'gpt-5.6-terra';
     const sourceFile =
       this.requireOptionalString(body.source_file) ??
       this.requireOptionalString(rawPayload.source_file) ??

@@ -150,7 +150,7 @@ describe('ProductImportService', () => {
         categoryId: 9,
         categoryIds: [9],
         vendorId: 2,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-terra',
         sourceFile: null,
       });
     jest.spyOn(service as any, 'loadImportCatalog').mockResolvedValue({
@@ -310,7 +310,7 @@ describe('ProductImportService', () => {
       categoryId: 9,
       categoryIds: [9, 12, 18],
       vendorId: 2,
-      model: 'gpt-5.4',
+      model: 'gpt-5.6-terra',
       sourceFile: null,
     });
     const loadImportCatalogSpy = jest
@@ -387,7 +387,7 @@ describe('ProductImportService', () => {
         categoryId: 9,
         categoryIds: [9, 12, 18],
         vendorId: 2,
-        model: 'gpt-5.4',
+        model: 'gpt-5.6-terra',
         sourceFile: null,
       },
       {

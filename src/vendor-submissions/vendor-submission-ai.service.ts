@@ -101,7 +101,7 @@ export class VendorSubmissionAiService {
       process.env.VENDOR_SUBMISSION_STAGE2_MODEL?.trim() ||
       process.env.PRODUCT_IMPORT_OPENAI_MODEL?.trim() ||
       process.env.OPENAI_MODEL?.trim() ||
-      'gpt-5.4'
+      'gpt-5.6-terra'
     );
   }
 

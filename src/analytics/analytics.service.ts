@@ -35,6 +35,123 @@ export class AnalyticsService {
     ).trim();
   }
 
+  /**
+   * Product page views from GA4, keyed by product slug.
+   * Paths like /en/products/foo or /products/foo are normalized to slug "foo".
+   */
+  async getProductPageViewsBySlug(
+    startDate: string,
+    endDate: string,
+  ): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    try {
+      const client = this.getClient();
+      const property = `properties/${this.propertyId}`;
+      const [response] = await client.runReport({
+        property,
+        dateRanges: [{ startDate, endDate }],
+        dimensions: [{ name: 'pagePath' }],
+        metrics: [{ name: 'screenPageViews' }],
+        dimensionFilter: {
+          filter: {
+            fieldName: 'pagePath',
+            stringFilter: {
+              matchType: 'FULL_REGEXP',
+              value: '.*/products/[^/?#]+.*',
+              caseSensitive: false,
+            },
+          },
+        },
+        limit: 10_000,
+        orderBys: [{ metric: { metricName: 'screenPageViews' }, desc: true }],
+      });
+
+      for (const row of response.rows || []) {
+        const path = row.dimensionValues?.[0]?.value || '';
+        const match = path.match(/\/(?:[a-z]{2}\/)?products\/([^/?#]+)/i);
+        const slug = match?.[1]?.trim();
+        if (!slug) continue;
+        const views = this.toNumber(row.metricValues?.[0]?.value);
+        result.set(slug, (result.get(slug) || 0) + views);
+      }
+    } catch (error) {
+      this.logger.warn(
+        `GA4 product page views unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return result;
+  }
+
+  /** Which date presets for GA4 Overview. Always offer standard GA ranges. */
+  async getGaDateCoverage(): Promise<{
+    earliestAt: string | null;
+    latestAt: string | null;
+    pills: Array<{
+      key: string;
+      label: string;
+      days: number;
+      hasData: boolean;
+    }>;
+    suggested: string | null;
+  }> {
+    const pills = [
+      { key: '1d', label: 'Today', days: 1, hasData: true },
+      { key: '7d', label: '7 days', days: 7, hasData: true },
+      { key: '28d', label: '28 days', days: 28, hasData: true },
+      { key: '90d', label: '90 days', days: 90, hasData: true },
+      { key: '365d', label: '12 months', days: 365, hasData: true },
+    ];
+
+    try {
+      const client = this.getClient();
+      const property = `properties/${this.propertyId}`;
+      const end = this.startOfUtcDay(new Date());
+      const start = this.addDays(end, -364);
+      const [response] = await client.runReport({
+        property,
+        dateRanges: [
+          {
+            startDate: this.formatYmd(start),
+            endDate: this.formatYmd(end),
+          },
+        ],
+        dimensions: [{ name: 'date' }],
+        metrics: [{ name: 'screenPageViews' }],
+        orderBys: [{ dimension: { dimensionName: 'date' } }],
+        limit: 400,
+      });
+
+      const daysWithData = new Set<string>();
+      for (const row of response.rows || []) {
+        const date = this.formatGaDate(row.dimensionValues?.[0]?.value || '');
+        const views = this.toNumber(row.metricValues?.[0]?.value);
+        if (date && views > 0) daysWithData.add(date);
+      }
+
+      const sorted = [...daysWithData].sort();
+      return {
+        earliestAt: sorted[0] || null,
+        latestAt: sorted[sorted.length - 1] || null,
+        pills,
+        suggested: '28d',
+      };
+    } catch (error) {
+      this.logger.warn(
+        `GA4 date coverage unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return {
+        earliestAt: null,
+        latestAt: null,
+        pills,
+        suggested: '28d',
+      };
+    }
+  }
+
   async getOverview(query: AnalyticsQueryDto): Promise<AnalyticsOverview> {
     const client = this.getClient();
     const property = `properties/${this.propertyId}`;
@@ -205,6 +322,9 @@ export class AnalyticsService {
     }
 
     const daysByRange: Record<string, number> = {
+      '1d': 1,
+      '2d': 2,
+      '3d': 3,
       '7d': 7,
       '28d': 28,
       '90d': 90,

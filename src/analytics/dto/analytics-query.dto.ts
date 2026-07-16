@@ -1,6 +1,6 @@
 import { IsIn, IsOptional, IsString, Matches } from 'class-validator';
 
-const DATE_PRESETS = ['7d', '28d', '90d', '365d'] as const;
+const DATE_PRESETS = ['1d', '2d', '3d', '7d', '28d', '90d', '365d'] as const;
 
 export class AnalyticsQueryDto {
   @IsOptional()

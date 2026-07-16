@@ -84,9 +84,9 @@ export class ImportProductPayloadDto {
   original_vendor_category_name?: string;
 
   @ApiPropertyOptional({
-    example: 'gpt-5.4',
+    example: 'gpt-5.6-terra',
     description:
-      'Optional OpenAI model override. Falls back to PRODUCT_IMPORT_OPENAI_MODEL or gpt-5.4.',
+      'Optional OpenAI model override. Falls back to PRODUCT_IMPORT_OPENAI_MODEL or gpt-5.6-terra.',
   })
   model?: string;
 }

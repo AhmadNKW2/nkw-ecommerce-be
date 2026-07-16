@@ -26,6 +26,6 @@ import { User } from '../users/entities/user.entity';
     AnalyticsVisitorsService,
     AdminClientDevicesService,
   ],
-  exports: [AdminClientDevicesService, TypeOrmModule],
+  exports: [AdminClientDevicesService, AnalyticsService, TypeOrmModule],
 })
 export class AnalyticsModule {}

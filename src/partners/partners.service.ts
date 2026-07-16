@@ -6,9 +6,12 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
 import { CreatePartnerDto } from './dto/create-partner.dto';
+import { CreatePartnerLeadDto } from './dto/create-partner-lead.dto';
 import { FilterPartnerDto } from './dto/filter-partner.dto';
 import { UpdatePartnerDto } from './dto/update-partner.dto';
 import { Partner } from './entities/partner.entity';
+
+const DEFAULT_LEAD_COMPANY_NAME = 'N/A';
 
 @Injectable()
 export class PartnersService {
@@ -22,6 +25,15 @@ export class PartnersService {
 
     const partner = this.partnersRepository.create(createPartnerDto);
     return this.partnersRepository.save(partner);
+  }
+
+  async createLead(createPartnerLeadDto: CreatePartnerLeadDto): Promise<Partner> {
+    return this.create({
+      full_name: createPartnerLeadDto.full_name,
+      company_name:
+        createPartnerLeadDto.company_name?.trim() || DEFAULT_LEAD_COMPANY_NAME,
+      phone_number: createPartnerLeadDto.phone_number,
+    });
   }
 
   async findAll(filterDto?: FilterPartnerDto) {

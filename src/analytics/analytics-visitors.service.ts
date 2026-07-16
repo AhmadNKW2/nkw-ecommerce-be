@@ -6,7 +6,10 @@ import { AnalyticsSession } from './entities/analytics-session.entity';
 import { AnalyticsEvent } from './entities/analytics-event.entity';
 import { CollectAnalyticsDto } from './dto/collect-analytics.dto';
 import { ListVisitorsDto } from './dto/list-visitors.dto';
+import { ListPopularProductsDto, parseIncludeAdminFlag } from './dto/list-popular-products.dto';
+import { ListSearchQueriesDto } from './dto/list-search-queries.dto';
 import { AdminClientDevicesService } from './admin-client-devices.service';
+import { AnalyticsService } from './analytics.service';
 import { parseDeviceInfo } from './device-info';
 import { User } from '../users/entities/user.entity';
 
@@ -35,6 +38,7 @@ export class AnalyticsVisitorsService implements OnModuleInit {
     @InjectRepository(User)
     private readonly usersRepo: Repository<User>,
     private readonly adminClientDevicesService: AdminClientDevicesService,
+    private readonly analyticsService: AnalyticsService,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -437,6 +441,15 @@ export class AnalyticsVisitorsService implements OnModuleInit {
       });
     }
 
+    if (query.startDate && query.endDate) {
+      const start = new Date(`${query.startDate}T00:00:00.000Z`).getTime();
+      const end = new Date(`${query.endDate}T23:59:59.999Z`).getTime();
+      pairs = pairs.filter((pair) => {
+        const seen = new Date(pair.visitor.last_seen_at).getTime();
+        return seen >= start && seen <= end;
+      });
+    }
+
     const term = query.search?.trim();
     if (term) {
       if (/^\d+$/.test(term)) {
@@ -764,6 +777,621 @@ export class AnalyticsVisitorsService implements OnModuleInit {
     await this.adminClientDevicesService.unregisterBrowserKey(browserKey);
 
     return { success: true, id, browserKey };
+  }
+
+  /**
+   * Most popular products.
+   * Views = Google Analytics screenPageViews on /products/{slug} (fallback: first-party page views)
+   * Sessions / Client IDs / Clicks = first-party DB (respects with/without admin)
+   */
+  async listPopularProducts(query: ListPopularProductsDto) {
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 20));
+    const includeAdmin = parseIncludeAdminFlag(query.includeAdmin);
+    const sortBy = query.sortBy || 'views';
+    const sortOrder = query.sortOrder === 'asc' ? 'asc' : 'desc';
+    const search = query.search?.trim().toLowerCase() || '';
+    const startDate = query.startDate;
+    const endDate = query.endDate;
+
+    const [dbRows, adminStats, gaViews] = await Promise.all([
+      this.queryProductAggregates({
+        includeAdmin,
+        startDate,
+        endDate,
+      }),
+      this.queryProductAdminContribution({ startDate, endDate }),
+      startDate && endDate
+        ? this.analyticsService.getProductPageViewsBySlug(startDate, endDate)
+        : Promise.resolve(new Map<string, number>()),
+    ]);
+
+    const byKey = new Map<
+      string,
+      {
+        productId: number | null;
+        slug: string | null;
+        name: string;
+        nameAr: string | null;
+        views: number;
+        dbViews: number;
+        gaViews: number;
+        sessions: number;
+        clicks: number;
+        clientIds: number;
+      }
+    >();
+
+    for (const row of dbRows) {
+      const slug = row.slug || null;
+      const key = slug || `id:${row.productId}`;
+      const ga = slug ? gaViews.get(slug) || 0 : 0;
+      byKey.set(key, {
+        productId: row.productId,
+        slug,
+        name: row.name,
+        nameAr: row.nameAr,
+        dbViews: row.views,
+        gaViews: ga,
+        views: row.views,
+        sessions: row.sessions,
+        clicks: row.clicks,
+        clientIds: row.clientIds,
+      });
+    }
+
+    const missingGaSlugs = [...gaViews.entries()]
+      .filter(([slug, ga]) => ga > 0 && !byKey.has(slug))
+      .map(([slug]) => slug);
+
+    const gaOnlyProducts =
+      missingGaSlugs.length > 0
+        ? ((await this.dataSource.query(
+            `SELECT id, slug, name_en, name_ar FROM products
+             WHERE slug = ANY($1::text[]) AND deleted_at IS NULL`,
+            [missingGaSlugs],
+          )) as Array<{
+            id: number;
+            slug: string;
+            name_en: string;
+            name_ar: string;
+          }>)
+        : [];
+    const gaOnlyBySlug = new Map(gaOnlyProducts.map((p) => [p.slug, p]));
+
+    for (const [slug, ga] of gaViews) {
+      if (ga <= 0) continue;
+      const existing = byKey.get(slug);
+      if (existing) {
+        existing.gaViews = ga;
+        continue;
+      }
+      const p = gaOnlyBySlug.get(slug);
+      byKey.set(slug, {
+        productId: p?.id ?? null,
+        slug,
+        name: p?.name_en || p?.name_ar || slug,
+        nameAr: p?.name_ar || p?.name_en || null,
+        dbViews: 0,
+        gaViews: ga,
+        views: 0,
+        sessions: 0,
+        clicks: 0,
+        clientIds: 0,
+      });
+    }
+
+    let items = [...byKey.values()];
+    if (search) {
+      items = items.filter((item) => {
+        const hay = `${item.name} ${item.nameAr || ''} ${item.slug || ''} ${item.productId || ''}`.toLowerCase();
+        return hay.includes(search);
+      });
+    }
+
+    items.sort((a, b) => {
+      const av =
+        sortBy === 'sessions'
+          ? a.sessions
+          : sortBy === 'clientIds'
+            ? a.clientIds
+            : sortBy === 'clicks'
+              ? a.clicks
+              : a.views;
+      const bv =
+        sortBy === 'sessions'
+          ? b.sessions
+          : sortBy === 'clientIds'
+            ? b.clientIds
+            : sortBy === 'clicks'
+              ? b.clicks
+              : b.views;
+      if (av !== bv) return sortOrder === 'asc' ? av - bv : bv - av;
+      if (a.views !== b.views) return b.views - a.views;
+      return (a.slug || '').localeCompare(b.slug || '');
+    });
+
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const offset = (page - 1) * limit;
+    const pageItems = items.slice(offset, offset + limit).map((item) => ({
+      productId: item.productId,
+      slug: item.slug,
+      name: item.name,
+      nameAr: item.nameAr,
+      views: item.dbViews,
+      gaViews: item.gaViews,
+      sessions: item.sessions,
+      clicks: item.clicks,
+      clientIds: item.clientIds,
+      viewsSource: 'first_party' as const,
+    }));
+
+    const totalSessions = items.reduce((sum, i) => sum + i.sessions, 0);
+    const totalClicks = items.reduce((sum, i) => sum + i.clicks, 0);
+    const totalDbViews = items.reduce((sum, i) => sum + i.dbViews, 0);
+
+    return {
+      data: pageItems,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages,
+        includeAdmin,
+        sortBy,
+        sortOrder,
+        viewsSource: 'first_party',
+        totals: {
+          views: totalDbViews,
+          sessions: totalSessions,
+          clicks: totalClicks,
+        },
+        adminContribution: adminStats,
+        toggleHasEffect: adminStats.adminViews > 0 || adminStats.adminClicks > 0,
+      },
+    };
+  }
+
+  async listSearchQueries(query: ListSearchQueriesDto) {
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 20));
+    const offset = (page - 1) * limit;
+    // Defensive: query-string includeAdmin must be parsed as 0/1 (not Boolean("false")).
+    const includeAdmin = parseIncludeAdminFlag(query.includeAdmin);
+    const sortBy = query.sortBy || 'views';
+    const sortOrder = query.sortOrder === 'asc' ? 'ASC' : 'DESC';
+    const search = query.search?.trim() || '';
+
+    const params: unknown[] = [];
+    const push = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    const startParam = query.startDate
+      ? push(`${query.startDate}T00:00:00.000Z`)
+      : null;
+    const endParam = query.endDate
+      ? push(`${query.endDate}T23:59:59.999Z`)
+      : null;
+    const searchParam = search ? push(`%${search}%`) : null;
+
+    const dateFilter = [
+      startParam ? `e.occurred_at >= ${startParam}::timestamptz` : null,
+      endParam ? `e.occurred_at <= ${endParam}::timestamptz` : null,
+    ]
+      .filter(Boolean)
+      .join(' AND ');
+
+    const adminFilter = includeAdmin
+      ? 'TRUE'
+      : `NOT EXISTS (
+          SELECT 1
+          FROM analytics_visitors v
+          INNER JOIN admin_client_devices d ON d.browser_key = v.browser_key
+          WHERE v.id = e.visitor_id
+        )`;
+
+    const sortColumn =
+      sortBy === 'sessions'
+        ? 'sessions'
+        : sortBy === 'clientIds'
+          ? '"clientIds"'
+          : 'views';
+
+    // Only real search submits (`Searched: …`), not filter/sort events that carry search_term.
+    const searchEventFilter = `e.event_name ILIKE 'Searched:%'`;
+
+    const sql = `
+      WITH searched AS (
+        SELECT
+          e.visitor_id,
+          e.session_id,
+          LOWER(TRIM(COALESCE(
+            NULLIF(e.properties->>'search_term', ''),
+            TRIM(SUBSTRING(e.event_name FROM 10)),
+            ''
+          ))) AS query_key,
+          TRIM(COALESCE(
+            NULLIF(e.properties->>'search_term', ''),
+            TRIM(SUBSTRING(e.event_name FROM 10)),
+            ''
+          )) AS query_label
+        FROM analytics_events e
+        WHERE ${adminFilter}
+          ${dateFilter ? `AND ${dateFilter}` : ''}
+          AND ${searchEventFilter}
+      ),
+      aggregated AS (
+        SELECT
+          MAX(s.query_label) AS query,
+          COUNT(*)::int AS views,
+          COUNT(DISTINCT s.session_id)::int AS sessions,
+          COUNT(DISTINCT s.visitor_id)::int AS "clientIds"
+        FROM searched s
+        WHERE s.query_key <> ''
+        GROUP BY s.query_key
+      )
+      SELECT
+        a.*,
+        COUNT(*) OVER()::int AS "__total"
+      FROM aggregated a
+      WHERE (
+        ${searchParam ? `a.query ILIKE ${searchParam}` : 'TRUE'}
+      )
+      ORDER BY ${sortColumn} ${sortOrder}, views DESC, query ASC
+      LIMIT ${push(limit)}
+      OFFSET ${push(offset)}
+    `;
+
+    const adminParams: unknown[] = [];
+    if (query.startDate) adminParams.push(`${query.startDate}T00:00:00.000Z`);
+    if (query.endDate) adminParams.push(`${query.endDate}T23:59:59.999Z`);
+    const adminFilterDate = [
+      query.startDate ? `e.occurred_at >= $1::timestamptz` : null,
+      query.endDate
+        ? `e.occurred_at <= $${query.startDate ? 2 : 1}::timestamptz`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' AND ');
+
+    const [rows, adminStatsRows] = await Promise.all([
+      this.dataSource.query(sql, params) as Promise<
+        Array<{
+          query: string;
+          views: number;
+          sessions: number;
+          clientIds: number;
+          __total: number;
+        }>
+      >,
+      this.dataSource.query(
+        `
+      SELECT
+        COUNT(*)::int AS "adminSearches",
+        COUNT(DISTINCT e.visitor_id)::int AS "adminClientIds",
+        COUNT(DISTINCT d.browser_key)::int AS "adminDevices"
+      FROM analytics_events e
+      INNER JOIN analytics_visitors v ON v.id = e.visitor_id
+      INNER JOIN admin_client_devices d ON d.browser_key = v.browser_key
+      WHERE ${searchEventFilter}
+      ${adminFilterDate ? `AND ${adminFilterDate}` : ''}
+    `,
+        adminParams,
+      ) as Promise<
+        Array<{
+          adminSearches: number;
+          adminClientIds: number;
+          adminDevices: number;
+        }>
+      >,
+    ]);
+
+    const adminStats = adminStatsRows[0] || {
+      adminSearches: 0,
+      adminClientIds: 0,
+      adminDevices: 0,
+    };
+
+    const total = rows[0]?.__total ?? 0;
+    return {
+      data: rows.map(({ __total: _t, ...item }) => item),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        includeAdmin,
+        sortBy,
+        sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc',
+        adminContribution: {
+          adminSearches: Number(adminStats.adminSearches) || 0,
+          adminClientIds: Number(adminStats.adminClientIds) || 0,
+          adminDevices: Number(adminStats.adminDevices) || 0,
+        },
+        toggleHasEffect: (Number(adminStats.adminSearches) || 0) > 0,
+      },
+    };
+  }
+
+  async getDateCoverage(
+    scope: 'overview' | 'products' | 'search' | 'visitors' | 'admins',
+  ) {
+    if (scope === 'overview') {
+      return {
+        scope,
+        ...(await this.analyticsService.getGaDateCoverage()),
+      };
+    }
+
+    const presets = [
+      { key: '1d', label: 'Today', days: 1 },
+      { key: '2d', label: '2 days', days: 2 },
+      { key: '3d', label: '3 days', days: 3 },
+      { key: '7d', label: '7 days', days: 7 },
+      { key: '28d', label: '28 days', days: 28 },
+      { key: '90d', label: '90 days', days: 90 },
+      { key: '365d', label: '12 months', days: 365 },
+    ];
+
+    let boundsSql = `
+      SELECT MIN(e.occurred_at) AS earliest, MAX(e.occurred_at) AS latest
+      FROM analytics_events e
+      WHERE TRUE
+    `;
+
+    if (scope === 'products') {
+      boundsSql = `
+        SELECT MIN(e.occurred_at) AS earliest, MAX(e.occurred_at) AS latest
+        FROM analytics_events e
+        WHERE (
+          e.event_name ILIKE 'product_view%'
+          OR e.event_name = 'product_card_click'
+          OR (
+            e.event_name ~* 'page[[:space:]_]*view'
+            AND COALESCE(e.path, '') ~* '/(?:[a-z]{2}/)?products/[^/?#]+'
+          )
+        )
+      `;
+    } else if (scope === 'search') {
+      boundsSql = `
+        SELECT MIN(e.occurred_at) AS earliest, MAX(e.occurred_at) AS latest
+        FROM analytics_events e
+        WHERE e.event_name ILIKE 'Searched:%'
+      `;
+    } else if (scope === 'visitors') {
+      boundsSql = `
+        SELECT MIN(v.first_seen_at) AS earliest, MAX(v.last_seen_at) AS latest
+        FROM analytics_visitors v
+        WHERE NOT EXISTS (
+          SELECT 1 FROM admin_client_devices d
+          WHERE d.browser_key = v.browser_key
+        )
+      `;
+    } else if (scope === 'admins') {
+      boundsSql = `
+        SELECT MIN(v.first_seen_at) AS earliest, MAX(v.last_seen_at) AS latest
+        FROM analytics_visitors v
+        WHERE EXISTS (
+          SELECT 1 FROM admin_client_devices d
+          WHERE d.browser_key = v.browser_key
+        )
+      `;
+    }
+
+    const bounds = (await this.dataSource.query(boundsSql)) as Array<{
+      earliest: Date | null;
+      latest: Date | null;
+    }>;
+
+    const earliest = bounds[0]?.earliest ? new Date(bounds[0].earliest) : null;
+    const latest = bounds[0]?.latest ? new Date(bounds[0].latest) : null;
+    const end = new Date();
+    end.setUTCHours(0, 0, 0, 0);
+
+    let spanDays = 0;
+    if (earliest) {
+      const earliestDay = new Date(earliest);
+      earliestDay.setUTCHours(0, 0, 0, 0);
+      spanDays = Math.max(
+        1,
+        Math.floor((end.getTime() - earliestDay.getTime()) / 86_400_000) + 1,
+      );
+    }
+
+    const pills = presets
+      .filter((preset) => spanDays > 0 && preset.days <= spanDays)
+      .map((preset) => ({ ...preset, hasData: true }));
+
+    const suggested = pills.length ? pills[pills.length - 1].key : null;
+
+    return {
+      scope,
+      earliestAt: earliest ? earliest.toISOString() : null,
+      latestAt: latest ? latest.toISOString() : null,
+      spanDays,
+      pills,
+      suggested,
+    };
+  }
+
+  private async queryProductAggregates(options: {
+    includeAdmin: boolean;
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const params: unknown[] = [];
+    const push = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const startParam = options.startDate
+      ? push(`${options.startDate}T00:00:00.000Z`)
+      : null;
+    const endParam = options.endDate
+      ? push(`${options.endDate}T23:59:59.999Z`)
+      : null;
+    const dateFilter = [
+      startParam ? `e.occurred_at >= ${startParam}::timestamptz` : null,
+      endParam ? `e.occurred_at <= ${endParam}::timestamptz` : null,
+    ]
+      .filter(Boolean)
+      .join(' AND ');
+
+    const adminFilter = options.includeAdmin
+      ? 'TRUE'
+      : `NOT EXISTS (
+          SELECT 1
+          FROM analytics_visitors v
+          INNER JOIN admin_client_devices d ON d.browser_key = v.browser_key
+          WHERE v.id = e.visitor_id
+        )`;
+
+    const sql = `
+      WITH raw_events AS (
+        SELECT
+          e.visitor_id,
+          e.session_id,
+          e.event_name,
+          e.path,
+          e.properties,
+          CASE
+            WHEN COALESCE(e.properties->>'product_id', '') ~ '^[0-9]+$'
+              THEN (e.properties->>'product_id')::int
+            ELSE NULL
+          END AS prop_product_id,
+          NULLIF(TRIM(COALESCE(e.properties->>'product_slug', '')), '') AS prop_slug,
+          NULLIF(
+            (regexp_match(COALESCE(e.path, ''), '/(?:[a-z]{2}/)?products/([^/?#]+)'))[1],
+            ''
+          ) AS path_slug,
+          CASE
+            WHEN e.event_name ILIKE 'product_view%'
+              OR e.event_name ~* 'page[[:space:]_]*view'
+              THEN true
+            ELSE false
+          END AS is_view,
+          CASE WHEN e.event_name = 'product_card_click' THEN true ELSE false END AS is_click
+        FROM analytics_events e
+        WHERE ${adminFilter}
+          ${dateFilter ? `AND ${dateFilter}` : ''}
+          AND (
+            e.event_name ILIKE 'product_view%'
+            OR e.event_name ~* 'page[[:space:]_]*view'
+            OR e.event_name = 'product_card_click'
+          )
+          AND (
+            e.event_name = 'product_card_click'
+            OR e.event_name ILIKE 'product_view%'
+            OR COALESCE(e.path, '') ~* '/(?:[a-z]{2}/)?products/[^/?#]+'
+          )
+      ),
+      resolved AS (
+        SELECT
+          re.*,
+          COALESCE(re.prop_product_id, p_by_prop.id, p_by_path.id) AS product_id,
+          COALESCE(re.prop_slug, re.path_slug, p_by_prop.slug, p_by_path.slug) AS product_slug
+        FROM raw_events re
+        LEFT JOIN products p_by_prop
+          ON re.prop_slug IS NOT NULL AND p_by_prop.slug = re.prop_slug AND p_by_prop.deleted_at IS NULL
+        LEFT JOIN products p_by_path
+          ON re.path_slug IS NOT NULL AND p_by_path.slug = re.path_slug AND p_by_path.deleted_at IS NULL
+        WHERE re.is_view OR re.is_click
+      )
+      SELECT
+        r.product_id AS "productId",
+        COALESCE(p.slug, MAX(r.product_slug)) AS slug,
+        COALESCE(p.name_en, p.name_ar, MAX(r.product_slug), CONCAT('#', r.product_id::text)) AS name,
+        COALESCE(p.name_ar, p.name_en) AS "nameAr",
+        COUNT(*) FILTER (WHERE r.is_view)::int AS views,
+        COUNT(DISTINCT r.session_id) FILTER (WHERE r.is_view)::int AS sessions,
+        COUNT(*) FILTER (WHERE r.is_click)::int AS clicks,
+        COUNT(DISTINCT r.visitor_id) FILTER (WHERE r.is_click)::int AS "clientIds"
+      FROM resolved r
+      LEFT JOIN products p ON p.id = r.product_id AND p.deleted_at IS NULL
+      WHERE r.product_id IS NOT NULL OR r.product_slug IS NOT NULL
+      GROUP BY r.product_id, p.id, p.slug, p.name_en, p.name_ar
+    `;
+
+    return (await this.dataSource.query(sql, params)) as Array<{
+      productId: number | null;
+      slug: string | null;
+      name: string;
+      nameAr: string | null;
+      views: number;
+      sessions: number;
+      clicks: number;
+      clientIds: number;
+    }>;
+  }
+
+  private async queryProductAdminContribution(options: {
+    startDate?: string;
+    endDate?: string;
+  }) {
+    const params: unknown[] = [];
+    const push = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+    const startParam = options.startDate
+      ? push(`${options.startDate}T00:00:00.000Z`)
+      : null;
+    const endParam = options.endDate
+      ? push(`${options.endDate}T23:59:59.999Z`)
+      : null;
+    const dateFilter = [
+      startParam ? `e.occurred_at >= ${startParam}::timestamptz` : null,
+      endParam ? `e.occurred_at <= ${endParam}::timestamptz` : null,
+    ]
+      .filter(Boolean)
+      .join(' AND ');
+
+    const rows = (await this.dataSource.query(
+      `
+      SELECT
+        COUNT(*) FILTER (
+          WHERE e.event_name ILIKE 'product_view%'
+             OR e.event_name ~* 'page[[:space:]_]*view'
+        )::int AS "adminViews",
+        COUNT(*) FILTER (WHERE e.event_name = 'product_card_click')::int AS "adminClicks",
+        COUNT(DISTINCT e.visitor_id)::int AS "adminClientIds",
+        COUNT(DISTINCT d.browser_key)::int AS "adminDevices"
+      FROM analytics_events e
+      INNER JOIN analytics_visitors v ON v.id = e.visitor_id
+      INNER JOIN admin_client_devices d ON d.browser_key = v.browser_key
+      WHERE (
+        e.event_name ILIKE 'product_view%'
+        OR e.event_name = 'product_card_click'
+        OR (
+          e.event_name ~* 'page[[:space:]_]*view'
+          AND COALESCE(e.path, '') ~* '/(?:[a-z]{2}/)?products/[^/?#]+'
+        )
+      )
+      ${dateFilter ? `AND ${dateFilter}` : ''}
+    `,
+      params,
+    )) as Array<{
+      adminViews: number;
+      adminClicks: number;
+      adminClientIds: number;
+      adminDevices: number;
+    }>;
+
+    const row = rows[0] || {
+      adminViews: 0,
+      adminClicks: 0,
+      adminClientIds: 0,
+      adminDevices: 0,
+    };
+    return {
+      adminViews: Number(row.adminViews) || 0,
+      adminClicks: Number(row.adminClicks) || 0,
+      adminClientIds: Number(row.adminClientIds) || 0,
+      adminDevices: Number(row.adminDevices) || 0,
+    };
   }
 
   private async resolveAdminInfoByBrowserKeys(
