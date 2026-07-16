@@ -370,6 +370,106 @@ describe('ProductsService detail attributes', () => {
     );
   });
 
+  it('applies every catalog-list filter to the database query', async () => {
+    const { baseQuery } = createFindAllQueryBuilderMocks();
+    productsRepository.createQueryBuilder.mockReturnValue(baseQuery);
+
+    await service.findAll(
+      {
+        status: ProductStatus.REVIEW,
+        visible: false,
+        in_stock: false,
+        has_duplicate_reference_link: true,
+        minPrice: 10,
+        maxPrice: 50,
+        created_by: [7, 8],
+        start_date: '2026-07-01',
+        end_date: '2026-07-15',
+        brand_ids: [3],
+        vendor_ids: [5],
+        category_ids: [11],
+        attributes_ids: [13],
+        attributes_values_ids: [17],
+        specifications_ids: [19],
+        specifications_values_ids: [23],
+      },
+      true,
+    );
+
+    expect(baseQuery.where).toHaveBeenCalledWith(
+      'product.status = :status',
+      { status: ProductStatus.REVIEW },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.visible = :visible',
+      { visible: false },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.is_out_of_stock = true',
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.vendor_id IN (:...vendor_ids)',
+      { vendor_ids: [5] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.brand_id IN (:...brand_ids)',
+      { brand_ids: [3] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.created_by IN (:...created_by)',
+      { created_by: [7, 8] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'COALESCE(product.sale_price, product.price) >= :minPrice',
+      { minPrice: 10 },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'COALESCE(product.sale_price, product.price) <= :maxPrice',
+      { maxPrice: 50 },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'product_categories pc WHERE pc.product_id = product.id AND pc.category_id IN',
+      ),
+      { category_ids: [11] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'product_attributes pa WHERE pa.product_id = product.id AND pa.attribute_id IN',
+      ),
+      { attributes_ids: [13] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'product_attribute_values pav WHERE pav.product_id = product.id AND pav.attribute_value_id IN',
+      ),
+      { attributes_values_ids: [17] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'specification_values sv ON sv.id = psv.specification_value_id',
+      ),
+      { specifications_ids: [19] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'product_specification_values psv WHERE psv.product_id = product.id AND psv.specification_value_id IN',
+      ),
+      { specifications_values_ids: [23] },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.created_at >= :start_date',
+      { start_date: '2026-06-30T21:00:00.000Z' },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      'product.created_at <= :end_date',
+      { end_date: '2026-07-15T20:59:59.999Z' },
+    );
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      expect.stringContaining('duplicate_product.reference_link'),
+    );
+  });
+
   it('returns out-of-stock product details for public requests', async () => {
     productsRepository.findOne.mockResolvedValue({
       ...productBase,

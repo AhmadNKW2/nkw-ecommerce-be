@@ -2,9 +2,47 @@ import { normalizeSearchQuery } from '../../typesense/utils/text-normalize';
 import { isArabicToken } from './spec-expansion.utils';
 
 /** Bump when title word-index ranking changes (invalidates search caches). */
-export const TITLE_RELEVANCE_VERSION = '2026-07-15-exact-title-word-index';
+export const TITLE_RELEVANCE_VERSION =
+  '2026-07-16-accessory-title-demotion';
 
 const EXACT_TITLE_SCORE = Number.MAX_SAFE_INTEGER;
+const ACCESSORY_TITLE_TOKENS = new Set([
+  'accessory',
+  'adapter',
+  'backpack',
+  'bag',
+  'cable',
+  'case',
+  'charger',
+  'charging',
+  'cooler',
+  'cooling',
+  'cover',
+  'dock',
+  'fan',
+  'holder',
+  'hub',
+  'keyboard',
+  'mouse',
+  'sleeve',
+  'stand',
+  'حامل',
+  'حقيبة',
+  'شاحن',
+  'شحن',
+  'غطاء',
+  'فأرة',
+  'فان',
+  'قاعدة',
+  'كابل',
+  'كيبورد',
+  'لوحة',
+  'مبرد',
+  'مروحة',
+  'محول',
+  'ماوس',
+]);
+const ACCESSORY_TITLE_PENALTY = 2_000_000;
 
 export function tokenizeTitleWords(text: string | null | undefined): string[] {
   const normalized = normalizeSearchQuery(text ?? '')
@@ -114,6 +152,20 @@ export function scoreTitleByWordIndexes(query: string, title: string): number {
   score += matched * 100_000;
   score += (matched / Math.max(tTokens.length, 1)) * 100;
   score -= tTokens.length * 0.01;
+
+  // A generic product query (for example, "laptop") should not rank an
+  // accessory such as "Laptop bag" ahead of the product itself merely because
+  // the shared word starts the title. The penalty is skipped when the shopper
+  // explicitly includes the accessory type in their query.
+  const requestedAccessory = qTokens.some((token) =>
+    ACCESSORY_TITLE_TOKENS.has(token),
+  );
+  const titleIsAccessory = tTokens.some((token) =>
+    ACCESSORY_TITLE_TOKENS.has(token),
+  );
+  if (titleIsAccessory && !requestedAccessory) {
+    score -= ACCESSORY_TITLE_PENALTY;
+  }
 
   return score;
 }

@@ -111,6 +111,33 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
     expect(params.filter_by).toContain('visible:=true');
   });
 
+  it('sends every storefront facet and price filter to Typesense', async () => {
+    const { service, typesenseSearch } = makeService();
+    const dto = {
+      q: 'tablet',
+      category_ids: '11,12',
+      brand_ids: '3,4',
+      vendor_ids: '5,6',
+      attributes_values_ids: '17,18',
+      specifications_values_ids: '23,24',
+      min_price: 10,
+      max_price: 50,
+    } as SearchQueryDto;
+
+    await service.search(dto, false, false);
+
+    const params = typesenseSearch.mock.calls[0][0];
+    expect(params.filter_by).toContain('category_ids:=[11,12]');
+    expect(params.filter_by).toContain('brand_id:=[3,4]');
+    expect(params.filter_by).toContain('vendor_id:=[5,6]');
+    expect(params.filter_by).toContain('attributes_values_ids:=[17,18]');
+    expect(params.filter_by).toContain('specifications_values_ids:=[23,24]');
+    expect(params.filter_by).toContain('effective_price:>=10');
+    expect(params.filter_by).toContain('effective_price:<=50');
+    expect(params.filter_by).toContain('visible:=true');
+    expect(params.filter_by).toContain('is_out_of_stock:=false');
+  });
+
   it('normalizes Arabic variants in the query sent to Typesense for main search', async () => {
     const { service, typesenseSearch } = makeService();
     const dto: SearchQueryDto = { q: 'أحمد' } as SearchQueryDto;

@@ -36,6 +36,18 @@ describe('title-relevance.utils', () => {
     expect(laptopFirst).toBeGreaterThan(bagFirst);
   });
 
+  it('demotes accessory titles unless the query asks for that accessory', () => {
+    const laptop = scoreTitleByWordIndexes('laptop', 'Lenovo laptop 15');
+    const bag = scoreTitleByWordIndexes('laptop', 'Laptop bag for 15 inch');
+    const fan = scoreTitleByWordIndexes('laptop', 'Laptop cooling fan');
+
+    expect(laptop).toBeGreaterThan(bag);
+    expect(laptop).toBeGreaterThan(fan);
+    expect(
+      scoreTitleByWordIndexes('laptop bag', 'Laptop bag for 15 inch'),
+    ).toBeGreaterThan(laptop);
+  });
+
   it('keeps Arabic-first titles in RTL reading order (string start)', () => {
     expect(titleTokensInReadingOrder('لابتوب ألعاب Lenovo')[0]).toBe(
       tokenizeTitleWords('لابتوب')[0],
