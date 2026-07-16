@@ -10,7 +10,7 @@ import {
   IsString,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
-import { parseQueryBoolean } from '../../common/utils/query-boolean.util';
+import { transformQueryBoolean } from '../../common/utils/query-boolean.util';
 import { ProductStatus } from '../entities/product.entity';
 
 function parseNumericArray(value: unknown): number[] | undefined {
@@ -109,12 +109,12 @@ export class FilterProductDto {
   sortOrder?: SortOrder = SortOrder.DESC;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   randomBrowse?: boolean;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   is_admin?: boolean;
 
@@ -135,11 +135,7 @@ export class FilterProductDto {
   status?: ProductStatus;
 
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const value = obj[key];
-    if (value === 'false' || value === false || value === '0') return false;
-    return [true, 'true', '1', 1].includes(value);
-  })
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   visible?: boolean;
 
@@ -233,11 +229,7 @@ export class FilterProductDto {
   vendor_ids?: number[];
 
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const value = obj[key];
-    if (value === 'false' || value === false || value === '0') return false;
-    return [true, 'true', '1', 1].includes(value);
-  })
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_no_vendor?: boolean;
 
@@ -288,11 +280,7 @@ export class FilterProductDto {
   brand_ids?: number[];
 
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const value = obj[key];
-    if (value === 'false' || value === false || value === '0') return false;
-    return [true, 'true', '1', 1].includes(value);
-  })
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_no_brand?: boolean;
 
@@ -324,11 +312,7 @@ export class FilterProductDto {
 
   /** Only products currently on sale (have a sale_price) */
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const value = obj[key];
-    if (value === 'false' || value === false || value === '0') return false;
-    return [true, 'true', '1', 1].includes(value);
-  })
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_sale?: boolean;
 
@@ -348,20 +332,12 @@ export class FilterProductDto {
   // ─── Stock filter ────────────────────────────────────
   /** Only products that have at least 1 unit in stock */
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const value = obj[key];
-    if (value === 'false' || value === false || value === '0') return false;
-    return [true, 'true', '1', 1].includes(value);
-  })
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   in_stock?: boolean;
 
   @IsOptional()
-  @Transform(({ obj, key }) => {
-    const value = obj[key];
-    if (value === 'false' || value === false || value === '0') return false;
-    return [true, 'true', '1', 1].includes(value);
-  })
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_duplicate_reference_link?: boolean;
 

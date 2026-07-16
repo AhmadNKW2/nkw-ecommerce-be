@@ -519,6 +519,20 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     });
   });
 
+  it('sends is_out_of_stock:=true to Typesense for admin out-of-stock filter', async () => {
+    const { service, typesenseSearch } = makeService();
+
+    await service.search(
+      { q: '*', in_stock: false, sort_by: 'created_at:desc' } as SearchQueryDto,
+      true,
+      true,
+    );
+
+    const params = typesenseSearch.mock.calls[0][0];
+    expect(params.filter_by).toContain('is_out_of_stock:=true');
+    expect(params.filter_by).not.toContain('is_out_of_stock:=false');
+  });
+
   it('filters concept reference product IDs through the active Typesense filters', async () => {
     const { service, typesenseSearch } = makeService({
       hits: [{ document: { id: 2663, category_ids: [1] } }],

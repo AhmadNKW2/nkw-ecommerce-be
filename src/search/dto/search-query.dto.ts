@@ -9,7 +9,7 @@ import {
   IsIn,
 } from 'class-validator';
 import { Type, Transform } from 'class-transformer';
-import { parseQueryBoolean } from '../../common/utils/query-boolean.util';
+import { transformQueryBoolean } from '../../common/utils/query-boolean.util';
 
 export class SearchQueryDto {
   @IsOptional()
@@ -21,7 +21,7 @@ export class SearchQueryDto {
   locale?: string;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   is_admin?: boolean;
 
@@ -44,7 +44,7 @@ export class SearchQueryDto {
    * Admin-only override of the default visible-only filter.
    */
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   visible?: boolean;
 
@@ -136,12 +136,12 @@ export class SearchQueryDto {
   // ── Availability ────────────────────────────────────────────────────────────
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   in_stock?: boolean;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   is_out_of_stock?: boolean;
 
@@ -220,7 +220,7 @@ export class SearchQueryDto {
    * Storefront can fetch facets in a follow-up request (same ranking/products).
    */
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   include_facets?: boolean;
 
@@ -254,17 +254,17 @@ export class SearchQueryDto {
   created_by?: string;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_no_vendor?: boolean;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_no_brand?: boolean;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   has_duplicate_reference_link?: boolean;
 }
@@ -274,7 +274,7 @@ export class AutocompleteQueryDto {
   q: string;
 
   @IsOptional()
-  @Transform(({ value }) => parseQueryBoolean(value))
+  @Transform(transformQueryBoolean)
   @IsBoolean()
   is_admin?: boolean;
 

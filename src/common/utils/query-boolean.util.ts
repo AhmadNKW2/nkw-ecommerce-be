@@ -1,3 +1,7 @@
+/**
+ * Parse common query-string boolean representations.
+ * Returns undefined for missing/unrecognized values so @IsOptional fields stay unset.
+ */
 export function parseQueryBoolean(value: unknown): boolean | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
@@ -12,4 +16,22 @@ export function parseQueryBoolean(value: unknown): boolean | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * class-transformer helper for query DTOs.
+ *
+ * Nest's ValidationPipe `enableImplicitConversion` can turn the string
+ * `"false"` into boolean `true` before `@Transform(({ value }) => …)` runs
+ * (non-empty strings are truthy). Always read the raw query value from
+ * `obj[key]` so `?in_stock=false` stays false.
+ */
+export function transformQueryBoolean({
+  obj,
+  key,
+}: {
+  obj: Record<string, unknown>;
+  key: string;
+}): boolean | undefined {
+  return parseQueryBoolean(obj[key]);
 }

@@ -105,6 +105,13 @@ export class SearchService implements OnModuleInit {
   private readonly logger = new Logger(SearchService.name);
   private readonly randomBrowseMaxResults = 2000;
   private readonly typesenseIdPageSize = 250;
+  /**
+   * Typesense returns at most this many values **per facet field**.
+   * `specifications_values_ids` holds every spec group (CPU model, RAM,
+   * storage, GPU, …) in one field, so a low cap hides rarer values like
+   * `14700HX` while common ones (`IPS`, `Intel`, `14650HX`) survive.
+   */
+  private readonly typesenseMaxFacetValues = 1000;
   private readonly unsupportedTypesenseFilterKeys = new Set([
     'attributes_ids',
     'specifications_ids',
@@ -789,6 +796,10 @@ export class SearchService implements OnModuleInit {
       attributes_values_ids: (dto as any).attributes_values_ids ?? null,
       specifications_values_ids: (dto as any).specifications_values_ids ?? null,
       average_rating_min: dto.average_rating_min ?? null,
+      in_stock: dto.in_stock ?? null,
+      is_out_of_stock: dto.is_out_of_stock ?? null,
+      visible: (dto as any).visible ?? null,
+      status: (dto as any).status ?? null,
       include_facets: dto.include_facets !== false,
       titleRelevanceVersion: TITLE_RELEVANCE_VERSION,
       expansionVersion: SEARCH_EXPANSION_VERSION,
@@ -2398,7 +2409,7 @@ export class SearchService implements OnModuleInit {
       query_by: PRODUCT_CARD_QUERY_BY,
       filter_by: `id:=[${facetPoolIds.join(',')}]`,
       facet_by: this.getTypesenseFacetFields(),
-      max_facet_values: 100,
+      max_facet_values: this.typesenseMaxFacetValues,
       page: 1,
       per_page: 1,
     });
@@ -2441,7 +2452,7 @@ export class SearchService implements OnModuleInit {
         query_by: PRODUCT_CARD_QUERY_BY,
         filter_by: `id:=[${facetPoolIds.join(',')}]`,
         facet_by: this.getTypesenseFacetFields(),
-        max_facet_values: 100,
+        max_facet_values: this.typesenseMaxFacetValues,
         page: 1,
         per_page: 1,
       },
@@ -2550,7 +2561,7 @@ export class SearchService implements OnModuleInit {
         prioritize_token_position: true,
         filter_by: filterBy,
         facet_by: facetFields,
-        max_facet_values: 100,
+        max_facet_values: this.typesenseMaxFacetValues,
         page: 1,
         per_page: 1,
       }),
@@ -3466,7 +3477,7 @@ export class SearchService implements OnModuleInit {
         filter_by: filterBy,
         sort_by: this.buildTypesenseSortBy(dto.sort_by, isAdmin, dto.q),
         facet_by: this.getTypesenseFacetFields(),
-        max_facet_values: 100,
+        max_facet_values: this.typesenseMaxFacetValues,
         page: 1,
         per_page: primaryFetchLimit,
         num_typos: this.getTypoBudget(this.tokenizeQueryForExpansion(normalizedQuery)),
@@ -3693,7 +3704,7 @@ export class SearchService implements OnModuleInit {
           query_by: PRODUCT_CARD_QUERY_BY,
           filter_by: `id:=[${facetPoolIds.join(',')}]`,
           facet_by: this.getTypesenseFacetFields(),
-          max_facet_values: 100,
+          max_facet_values: this.typesenseMaxFacetValues,
           page: 1,
           per_page: 1,
         });

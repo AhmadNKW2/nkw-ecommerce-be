@@ -80,4 +80,16 @@ describe('FilterProductDto', () => {
     expect(result.specifications_ids).toEqual([9, 10]);
     expect(result.specifications_values_ids).toEqual([11, 12]);
   });
+
+  it('keeps query-string false for stock and visibility filters', async () => {
+    const result = await transformQuery({
+      in_stock: 'false',
+      visible: 'false',
+      has_duplicate_reference_link: 'false',
+    });
+
+    expect(result.in_stock).toBe(false);
+    expect(result.visible).toBe(false);
+    expect(result.has_duplicate_reference_link).toBe(false);
+  });
 });
