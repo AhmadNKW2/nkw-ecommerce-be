@@ -24,6 +24,7 @@ import { ListVisitorsDto } from './dto/list-visitors.dto';
 import { ListPopularProductsDto } from './dto/list-popular-products.dto';
 import { ListSearchQueriesDto } from './dto/list-search-queries.dto';
 import { ListFunnelSessionsDto } from './dto/list-funnel-sessions.dto';
+import { ListFooterPageViewsDto } from './dto/list-footer-page-views.dto';
 import { DateCoverageDto } from './dto/date-coverage.dto';
 import { RegisterAdminClientDto } from './dto/register-admin-client.dto';
 import { UpdateAdminClientDeviceDto } from './dto/update-admin-client-device.dto';
@@ -128,6 +129,14 @@ export class AnalyticsController {
   @RequireAdminAccess('analytics')
   listFunnelSessions(@Query() query: ListFunnelSessionsDto) {
     return this.analyticsVisitorsService.listFunnelSessions(query);
+  }
+
+  @Get('footer-page-views')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('analytics')
+  listFooterPageViews(@Query() query: ListFooterPageViewsDto) {
+    return this.analyticsVisitorsService.listFooterPageViews(query);
   }
 
   @Get('date-coverage')

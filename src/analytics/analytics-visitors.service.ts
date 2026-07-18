@@ -1573,6 +1573,151 @@ export class AnalyticsVisitorsService implements OnModuleInit {
     };
   }
 
+  /**
+   * Page views on storefront footer pages only (about, contact, FAQs, shipping, legal).
+   * One row per page-view event: page name + client id.
+   */
+  async listFooterPageViews(query: {
+    page?: number;
+    limit?: number;
+    startDate?: string;
+    endDate?: string;
+    search?: string;
+    includeAdmin?: number | boolean | string;
+    sortBy?: 'occurredAt' | 'clientId' | 'pageName';
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 20));
+    const offset = (page - 1) * limit;
+    const includeAdmin = parseIncludeAdminFlag(query.includeAdmin);
+    const sortBy = query.sortBy || 'occurredAt';
+    const sortOrder = query.sortOrder === 'asc' ? 'ASC' : 'DESC';
+    const search = query.search?.trim() || '';
+
+    const params: unknown[] = [];
+    const push = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    const startParam = query.startDate
+      ? push(`${query.startDate}T00:00:00.000Z`)
+      : null;
+    const endParam = query.endDate
+      ? push(`${query.endDate}T23:59:59.999Z`)
+      : null;
+    const searchParam = search ? push(`%${search}%`) : null;
+
+    const dateFilter = [
+      startParam ? `e.occurred_at >= ${startParam}::timestamptz` : null,
+      endParam ? `e.occurred_at <= ${endParam}::timestamptz` : null,
+    ]
+      .filter(Boolean)
+      .join(' AND ');
+
+    const adminFilter = includeAdmin
+      ? 'TRUE'
+      : `NOT EXISTS (
+          SELECT 1 FROM admin_client_devices d
+          WHERE d.browser_key = v.browser_key
+        )`;
+
+    // Match footer routes with optional locale prefix and full Page URL storage.
+    const footerPathFilter = `
+      COALESCE(e.path, '') ~*
+      '(^|/)(en|ar)?/?(contact|faqs|shipping|about|privacy|terms|cookies|accessibility)([/?#]|$)'
+    `;
+
+    const pageKeyExpr = `
+      lower((
+        regexp_match(
+          COALESCE(e.path, ''),
+          '(?:^|/)(?:en|ar)?/?(contact|faqs|shipping|about|privacy|terms|cookies|accessibility)(?:[/?#]|$)',
+          'i'
+        )
+      )[1])
+    `;
+
+    const pageNameExpr = `
+      CASE ${pageKeyExpr}
+        WHEN 'contact' THEN 'Contact Us'
+        WHEN 'faqs' THEN 'FAQ'
+        WHEN 'shipping' THEN 'Shipping Information'
+        WHEN 'about' THEN 'About Us'
+        WHEN 'privacy' THEN 'Privacy Policy'
+        WHEN 'terms' THEN 'Terms of Service'
+        WHEN 'cookies' THEN 'Cookie Policy'
+        WHEN 'accessibility' THEN 'Accessibility'
+        ELSE COALESCE(initcap(${pageKeyExpr}), 'Unknown')
+      END
+    `;
+
+    const sortColumn =
+      sortBy === 'clientId'
+        ? '"clientId"'
+        : sortBy === 'pageName'
+          ? '"pageName"'
+          : '"occurredAt"';
+
+    const sql = `
+      SELECT
+        e.id AS "eventId",
+        e.visitor_id AS "clientId",
+        e.session_id AS "sessionId",
+        ${pageKeyExpr} AS "pageKey",
+        ${pageNameExpr} AS "pageName",
+        e.path AS "path",
+        e.occurred_at AS "occurredAt",
+        COUNT(*) OVER()::int AS "__total"
+      FROM analytics_events e
+      INNER JOIN analytics_visitors v ON v.id = e.visitor_id
+      WHERE e.event_name ~* 'page[[:space:]_]*view'
+        AND ${footerPathFilter}
+        AND ${adminFilter}
+        ${dateFilter ? `AND ${dateFilter}` : ''}
+        AND (
+          ${
+            searchParam
+              ? `(
+                  e.visitor_id::text ILIKE ${searchParam}
+                  OR ${pageNameExpr} ILIKE ${searchParam}
+                  OR COALESCE(e.path, '') ILIKE ${searchParam}
+                )`
+              : 'TRUE'
+          }
+        )
+      ORDER BY ${sortColumn} ${sortOrder}, e.id DESC
+      LIMIT ${push(limit)}
+      OFFSET ${push(offset)}
+    `;
+
+    const rows = (await this.dataSource.query(sql, params)) as Array<{
+      eventId: number;
+      clientId: number;
+      sessionId: number;
+      pageKey: string | null;
+      pageName: string;
+      path: string | null;
+      occurredAt: Date;
+      __total: number;
+    }>;
+
+    const total = rows[0]?.__total ?? 0;
+    return {
+      data: rows.map(({ __total: _t, ...row }) => row),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        includeAdmin,
+        sortBy,
+        sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc',
+      },
+    };
+  }
+
   private async resolveAdminInfoByBrowserKeys(
     browserKeys: string[],
     adminKeyToUserId: Map<string, number>,

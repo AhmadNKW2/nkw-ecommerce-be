@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ILike, Repository } from 'typeorm';
+import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import { CreatePartnerDto } from './dto/create-partner.dto';
 import { CreatePartnerLeadDto } from './dto/create-partner-lead.dto';
 import { FilterPartnerDto } from './dto/filter-partner.dto';
@@ -18,13 +19,16 @@ export class PartnersService {
   constructor(
     @InjectRepository(Partner)
     private readonly partnersRepository: Repository<Partner>,
+    private readonly adminNotificationsService: AdminNotificationsService,
   ) {}
 
   async create(createPartnerDto: CreatePartnerDto): Promise<Partner> {
     await this.ensurePhoneNumberAvailable(createPartnerDto.phone_number);
 
     const partner = this.partnersRepository.create(createPartnerDto);
-    return this.partnersRepository.save(partner);
+    const savedPartner = await this.partnersRepository.save(partner);
+    this.adminNotificationsService.publishPartnerCreated(savedPartner.id);
+    return savedPartner;
   }
 
   async createLead(createPartnerLeadDto: CreatePartnerLeadDto): Promise<Partner> {

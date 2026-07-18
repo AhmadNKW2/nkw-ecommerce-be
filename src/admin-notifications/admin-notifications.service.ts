@@ -7,7 +7,8 @@ export type AdminNotificationPayload = {
     | 'order.created'
     | 'note.created'
     | 'submission.created'
-    | 'catalog_request.created';
+    | 'catalog_request.created'
+    | 'partner.created';
   entityId: number;
   createdAt: string;
 };
@@ -62,6 +63,14 @@ export class AdminNotificationsService {
     this.events$.next({
       type: 'catalog_request.created',
       entityId: requestId,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  publishPartnerCreated(partnerId: number): void {
+    this.events$.next({
+      type: 'partner.created',
+      entityId: partnerId,
       createdAt: new Date().toISOString(),
     });
   }
