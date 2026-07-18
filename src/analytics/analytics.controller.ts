@@ -23,6 +23,7 @@ import { CollectAnalyticsDto } from './dto/collect-analytics.dto';
 import { ListVisitorsDto } from './dto/list-visitors.dto';
 import { ListPopularProductsDto } from './dto/list-popular-products.dto';
 import { ListSearchQueriesDto } from './dto/list-search-queries.dto';
+import { ListFunnelSessionsDto } from './dto/list-funnel-sessions.dto';
 import { DateCoverageDto } from './dto/date-coverage.dto';
 import { RegisterAdminClientDto } from './dto/register-admin-client.dto';
 import { UpdateAdminClientDeviceDto } from './dto/update-admin-client-device.dto';
@@ -121,6 +122,14 @@ export class AnalyticsController {
     return this.analyticsVisitorsService.listSearchQueries(query);
   }
 
+  @Get('funnel-sessions')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('analytics')
+  listFunnelSessions(@Query() query: ListFunnelSessionsDto) {
+    return this.analyticsVisitorsService.listFunnelSessions(query);
+  }
+
   @Get('date-coverage')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(UserRole.ADMIN)
@@ -130,7 +139,6 @@ export class AnalyticsController {
       query.scope || 'overview',
     );
   }
-
 
   @Get('visitors/:id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)

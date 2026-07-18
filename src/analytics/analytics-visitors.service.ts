@@ -1308,7 +1308,8 @@ export class AnalyticsVisitorsService implements OnModuleInit {
         COUNT(*) FILTER (WHERE r.is_view)::int AS views,
         COUNT(DISTINCT r.session_id) FILTER (WHERE r.is_view)::int AS sessions,
         COUNT(*) FILTER (WHERE r.is_click)::int AS clicks,
-        COUNT(DISTINCT r.visitor_id) FILTER (WHERE r.is_click)::int AS "clientIds"
+        -- Distinct Client #s who viewed the product (not only card-clicks)
+        COUNT(DISTINCT r.visitor_id) FILTER (WHERE r.is_view)::int AS "clientIds"
       FROM resolved r
       LEFT JOIN products p ON p.id = r.product_id AND p.deleted_at IS NULL
       WHERE r.product_id IS NOT NULL OR r.product_slug IS NOT NULL
@@ -1391,6 +1392,184 @@ export class AnalyticsVisitorsService implements OnModuleInit {
       adminClicks: Number(row.adminClicks) || 0,
       adminClientIds: Number(row.adminClientIds) || 0,
       adminDevices: Number(row.adminDevices) || 0,
+    };
+  }
+
+  /**
+   * Sessions that added to cart or reached checkout (one row per session).
+   */
+  async listFunnelSessions(query: {
+    kind: 'add_to_cart' | 'checkout';
+    page?: number;
+    limit?: number;
+    startDate?: string;
+    endDate?: string;
+    search?: string;
+    includeAdmin?: number | boolean | string;
+    sortBy?: 'startedAt' | 'lastSeen' | 'events' | 'clientId';
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const page = Math.max(1, query.page || 1);
+    const limit = Math.min(100, Math.max(1, query.limit || 20));
+    const offset = (page - 1) * limit;
+    const includeAdmin = parseIncludeAdminFlag(query.includeAdmin);
+    const sortBy = query.sortBy || 'lastSeen';
+    const sortOrder = query.sortOrder === 'asc' ? 'ASC' : 'DESC';
+    const search = query.search?.trim() || '';
+
+    const params: unknown[] = [];
+    const push = (value: unknown) => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    const startParam = query.startDate
+      ? push(`${query.startDate}T00:00:00.000Z`)
+      : null;
+    const endParam = query.endDate
+      ? push(`${query.endDate}T23:59:59.999Z`)
+      : null;
+    const searchParam = search ? push(`%${search}%`) : null;
+
+    const dateFilter = [
+      startParam ? `e.occurred_at >= ${startParam}::timestamptz` : null,
+      endParam ? `e.occurred_at <= ${endParam}::timestamptz` : null,
+    ]
+      .filter(Boolean)
+      .join(' AND ');
+
+    const adminFilter = includeAdmin
+      ? 'TRUE'
+      : `NOT EXISTS (
+          SELECT 1 FROM admin_client_devices d
+          WHERE d.browser_key = v.browser_key
+        )`;
+
+    const kindFilter =
+      query.kind === 'add_to_cart'
+        ? `e.event_name = 'add_to_cart_click'`
+        : `(
+            e.event_name ILIKE 'Checkout%'
+            OR e.event_name ILIKE 'Order %'
+            OR e.event_name ILIKE 'Order succeeded%'
+            OR e.event_name ILIKE 'Order failed%'
+            OR e.event_name ILIKE 'Order validation%'
+            OR (
+              e.event_name ~* 'page[[:space:]_]*view'
+              AND COALESCE(e.path, '') ~* '/checkout'
+            )
+          )`;
+
+    const sortColumn =
+      sortBy === 'startedAt'
+        ? '"startedAt"'
+        : sortBy === 'events'
+          ? '"eventCount"'
+          : sortBy === 'clientId'
+            ? '"clientId"'
+            : '"lastSeenAt"';
+
+    const sql = `
+      WITH matched AS (
+        SELECT
+          e.visitor_id,
+          e.session_id,
+          COUNT(*)::int AS match_count,
+          MIN(e.occurred_at) AS first_match_at,
+          MAX(e.occurred_at) AS last_match_at,
+          (ARRAY_AGG(e.event_name ORDER BY e.occurred_at DESC))[1] AS last_event_name,
+          (ARRAY_AGG(e.path ORDER BY e.occurred_at DESC))[1] AS last_path,
+          (ARRAY_AGG(e.properties->>'product_name' ORDER BY e.occurred_at DESC)
+            FILTER (WHERE e.properties->>'product_name' IS NOT NULL))[1] AS product_name,
+          (ARRAY_AGG(e.properties->>'product_id' ORDER BY e.occurred_at DESC)
+            FILTER (WHERE e.properties->>'product_id' IS NOT NULL))[1] AS product_id
+        FROM analytics_events e
+        INNER JOIN analytics_visitors v ON v.id = e.visitor_id
+        WHERE ${kindFilter}
+          AND ${adminFilter}
+          ${dateFilter ? `AND ${dateFilter}` : ''}
+        GROUP BY e.visitor_id, e.session_id
+      )
+      SELECT
+        m.visitor_id AS "clientId",
+        m.session_id AS "sessionId",
+        s.session_key AS "sessionKey",
+        m.match_count AS "matchCount",
+        m.first_match_at AS "firstMatchAt",
+        m.last_match_at AS "lastMatchAt",
+        m.last_event_name AS "lastEventName",
+        m.last_path AS "lastPath",
+        m.product_name AS "productName",
+        CASE
+          WHEN COALESCE(m.product_id, '') ~ '^[0-9]+$' THEN m.product_id::int
+          ELSE NULL
+        END AS "productId",
+        s.landing_path AS "landingPath",
+        s.exit_path AS "exitPath",
+        s.event_count AS "eventCount",
+        s.page_view_count AS "pageViewCount",
+        s.duration_seconds AS "durationSeconds",
+        s.started_at AS "startedAt",
+        s.last_seen_at AS "lastSeenAt",
+        COUNT(*) OVER()::int AS "__total"
+      FROM matched m
+      INNER JOIN analytics_sessions s ON s.id = m.session_id
+      INNER JOIN analytics_visitors v ON v.id = m.visitor_id
+      WHERE (
+        ${
+          searchParam
+            ? `(
+                m.visitor_id::text ILIKE ${searchParam}
+                OR m.session_id::text ILIKE ${searchParam}
+                OR COALESCE(m.product_name, '') ILIKE ${searchParam}
+                OR COALESCE(m.last_path, '') ILIKE ${searchParam}
+                OR COALESCE(s.landing_path, '') ILIKE ${searchParam}
+              )`
+            : 'TRUE'
+        }
+      )
+      ORDER BY ${sortColumn} ${sortOrder}, m.session_id DESC
+      LIMIT ${push(limit)}
+      OFFSET ${push(offset)}
+    `;
+
+    const rows = (await this.dataSource.query(sql, params)) as Array<{
+      clientId: number;
+      sessionId: number;
+      sessionKey: string;
+      matchCount: number;
+      firstMatchAt: Date;
+      lastMatchAt: Date;
+      lastEventName: string;
+      lastPath: string | null;
+      productName: string | null;
+      productId: number | null;
+      landingPath: string | null;
+      exitPath: string | null;
+      eventCount: number;
+      pageViewCount: number;
+      durationSeconds: number;
+      startedAt: Date;
+      lastSeenAt: Date;
+      __total: number;
+    }>;
+
+    const total = rows[0]?.__total ?? 0;
+    return {
+      data: rows.map(({ __total: _t, ...row }) => ({
+        ...row,
+        kind: query.kind,
+      })),
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+        kind: query.kind,
+        includeAdmin,
+        sortBy,
+        sortOrder: query.sortOrder === 'asc' ? 'asc' : 'desc',
+      },
     };
   }
 
