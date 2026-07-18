@@ -1934,6 +1934,7 @@ export class ProductsService {
       sku,
       in_stock,
       has_duplicate_reference_link,
+      has_no_reference_link,
       start_date,
       end_date,
       ids: filterIds,
@@ -2177,7 +2178,11 @@ export class ProductsService {
       baseQuery.andWhere('product.is_out_of_stock = false');
     }
 
-    if (has_duplicate_reference_link !== undefined) {
+    if (has_no_reference_link) {
+      baseQuery.andWhere(
+        `(product.reference_link IS NULL OR btrim(product.reference_link) = '')`,
+      );
+    } else if (has_duplicate_reference_link !== undefined) {
       if (has_duplicate_reference_link) {
         baseQuery.andWhere(
           `product.reference_link IS NOT NULL

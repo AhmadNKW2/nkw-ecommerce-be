@@ -267,6 +267,11 @@ export class SearchQueryDto {
   @Transform(transformQueryBoolean)
   @IsBoolean()
   has_duplicate_reference_link?: boolean;
+
+  @IsOptional()
+  @Transform(transformQueryBoolean)
+  @IsBoolean()
+  has_no_reference_link?: boolean;
 }
 
 export class AutocompleteQueryDto {

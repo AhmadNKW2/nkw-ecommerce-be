@@ -521,6 +521,14 @@ export class ProductsController {
       'Filter products by whether their reference_link is duplicated across other products',
     example: true,
   })
+  @ApiQuery({
+    name: 'has_no_reference_link',
+    required: false,
+    type: Boolean,
+    description:
+      'Filter products that have no reference_link (null or empty)',
+    example: true,
+  })
   findAll(@Query() filterDto: FilterProductDto, @Req() req: any) {
     const isAdmin = isProductsAdminUser(req.user);
     const scopedFilters = applyVendorPortalListScope(filterDto as any, req.user);

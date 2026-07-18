@@ -61,9 +61,36 @@ async function ensureUsersColumns(client) {
   await addColumnIfMissing(client, 'users', 'vendor_id', 'integer NULL');
 }
 
+async function ensureSeoMetaColumns(client, tableName) {
+  console.log(`${tableName} SEO meta columns`);
+  await addColumnIfMissing(client, tableName, 'meta_title_en', 'varchar(70) NULL');
+  await addColumnIfMissing(client, tableName, 'meta_title_ar', 'varchar(70) NULL');
+  await addColumnIfMissing(
+    client,
+    tableName,
+    'meta_description_en',
+    'varchar(160) NULL',
+  );
+  await addColumnIfMissing(
+    client,
+    tableName,
+    'meta_description_ar',
+    'varchar(160) NULL',
+  );
+}
+
 async function ensureVendorsColumns(client) {
   console.log('vendors columns');
   await addColumnIfMissing(client, 'vendors', 'password', 'text NULL');
+  await ensureSeoMetaColumns(client, 'vendors');
+}
+
+async function ensureCategoriesColumns(client) {
+  await ensureSeoMetaColumns(client, 'categories');
+}
+
+async function ensureBrandsColumns(client) {
+  await ensureSeoMetaColumns(client, 'brands');
 }
 
 async function ensureProductAttachmentsTable(client) {
@@ -201,6 +228,54 @@ async function ensureOrdersColumns(client) {
     'walletAppliedAmount',
     'decimal(10,2) NOT NULL DEFAULT 0',
   );
+  await addColumnIfMissing(
+    client,
+    'orders',
+    'codCollectionStatus',
+    'varchar(30) NULL',
+  );
+  await addColumnIfMissing(
+    client,
+    'orders',
+    'codAmountDue',
+    'decimal(10,2) NOT NULL DEFAULT 0',
+  );
+  await addColumnIfMissing(
+    client,
+    'orders',
+    'codCollectedAt',
+    'timestamp NULL',
+  );
+
+  const migrateCourier = await client.query(`
+    UPDATE orders
+    SET "codCollectionStatus" = 'pending'
+    WHERE "codCollectionStatus" = 'with_courier'
+  `);
+  if (migrateCourier.rowCount > 0) {
+    console.log(`  migrated ${migrateCourier.rowCount} with_courier → pending`);
+  }
+
+  // Backfill active COD orders that predate collection tracking.
+  const backfill = await client.query(`
+    UPDATE orders
+    SET
+      "codAmountDue" = GREATEST(
+        CAST("totalAmount" AS decimal) - COALESCE(CAST("walletAppliedAmount" AS decimal), 0),
+        0
+      ),
+      "codCollectionStatus" = 'pending'
+    WHERE "paymentMethod" = 'cod'
+      AND status::text NOT IN ('cancelled', 'refunded')
+      AND "codCollectionStatus" IS NULL
+      AND GREATEST(
+        CAST("totalAmount" AS decimal) - COALESCE(CAST("walletAppliedAmount" AS decimal), 0),
+        0
+      ) > 0
+  `);
+  if (backfill.rowCount > 0) {
+    console.log(`  backfilled COD collection for ${backfill.rowCount} orders`);
+  }
 }
 
 async function ensureTermGroupsTable(client) {
@@ -371,6 +446,61 @@ async function verifySchema(client) {
   }
 }
 
+async function ensurePartnersPhoneNotUnique(client) {
+  console.log('partners.phone_number uniqueness');
+  if (!(await tableExists(client, 'partners'))) {
+    console.log('  skip (table missing)');
+    return;
+  }
+
+  const constraints = await client.query(`
+    SELECT c.conname
+    FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    JOIN pg_namespace n ON t.relnamespace = n.oid
+    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY (c.conkey)
+    WHERE n.nspname = 'public'
+      AND t.relname = 'partners'
+      AND a.attname = 'phone_number'
+      AND c.contype = 'u'
+  `);
+
+  for (const row of constraints.rows) {
+    await client.query(
+      `ALTER TABLE partners DROP CONSTRAINT IF EXISTS "${row.conname}"`,
+    );
+    console.log(`  dropped constraint ${row.conname}`);
+  }
+
+  const indexes = await client.query(`
+    SELECT i.relname AS index_name
+    FROM pg_class t
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_index x ON x.indrelid = t.oid
+    JOIN pg_class i ON i.oid = x.indexrelid
+    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY (x.indkey)
+    WHERE n.nspname = 'public'
+      AND t.relname = 'partners'
+      AND a.attname = 'phone_number'
+      AND x.indisunique = true
+      AND NOT x.indisprimary
+  `);
+
+  for (const row of indexes.rows) {
+    await client.query(`DROP INDEX IF EXISTS public."${row.index_name}"`);
+    console.log(`  dropped unique index ${row.index_name}`);
+  }
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_partners_phone_number
+    ON partners (phone_number)
+  `);
+
+  if (constraints.rows.length === 0 && indexes.rows.length === 0) {
+    console.log('  skip (already non-unique)');
+  }
+}
+
 async function main() {
   const client = createClient();
   await client.connect();
@@ -379,12 +509,15 @@ async function main() {
   try {
     await ensureUsersColumns(client);
     await ensureVendorsColumns(client);
+    await ensureCategoriesColumns(client);
+    await ensureBrandsColumns(client);
     await ensureProductAttachmentsTable(client);
     await ensureProductFieldTogglesColumns(client);
     await ensureProductsColumns(client);
     await ensureOrdersColumns(client);
     await ensureTermGroupsTable(client);
     await ensureVendorSubmissionsTables(client);
+    await ensurePartnersPhoneNotUnique(client);
     await verifySchema(client);
     console.log('\nSchema ensure completed successfully.');
   } finally {

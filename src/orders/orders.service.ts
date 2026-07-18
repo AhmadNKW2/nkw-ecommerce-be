@@ -8,8 +8,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, QueryRunner, TableColumn, In } from 'typeorm';
 import {
+  CodCollectionStatus,
   Order,
   OrderStatus,
+  PaymentMethod,
 } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderStatusHistory } from './entities/order-status-history.entity';
@@ -21,6 +23,7 @@ import { FilterOrderDto } from './dto/filter-order.dto';
 import { UpdateOrderItemsCostDto } from './dto/update-order-items-cost.dto';
 import { AdminCreateOrderDto } from './dto/admin-create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
+import { UpdateCodCollectionDto } from './dto/update-cod-collection.dto';
 import { User } from '../users/entities/user.entity';
 import { hydrateProductMedia, getPrimaryMediaUrl } from '../products/utils/product-media.util';
 import { TransactionSource } from '../wallet/entities/wallet-transaction.entity';
@@ -29,6 +32,11 @@ import { ProductsService } from '../products/products.service';
 import { Address } from '../addresses/entities/address.entity';
 import { isStorefrontAvailableProduct } from '../products/utils/storefront-product-availability.util';
 import { resolveWalletPayment } from './utils/wallet-payment.util';
+import {
+  calculateCodAmountDue,
+  clearUncollectedCod,
+  resolveCodCollection,
+} from './utils/cod-collection.util';
 import { SettingsService } from '../settings/settings.service';
 import { calculateOrderShippingAmount } from '../settings/delivery-fee.util';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
@@ -99,6 +107,7 @@ export class OrdersService implements OnModuleInit {
     this.ensureSchemaPromise = Promise.all([
       this.ensureWalletPaymentColumnsExist(),
       this.ensureBrowserKeyColumnExists(),
+      this.ensureCodCollectionColumnsExist(),
       this.ensureOrderStatusHistoryTableExists(),
       this.ensureObsoleteOrderStatusesRemoved(),
     ]).then(() => undefined);
@@ -241,6 +250,75 @@ export class OrdersService implements OnModuleInit {
       await queryRunner.query(
         `CREATE INDEX IF NOT EXISTS idx_orders_browser_key ON orders (browser_key)`,
       );
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  private async ensureCodCollectionColumnsExist(): Promise<void> {
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    try {
+      await queryRunner.connect();
+
+      if (!(await queryRunner.hasColumn('orders', 'codCollectionStatus'))) {
+        await queryRunner.addColumn(
+          'orders',
+          new TableColumn({
+            name: 'codCollectionStatus',
+            type: 'varchar',
+            length: '30',
+            isNullable: true,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('orders', 'codAmountDue'))) {
+        await queryRunner.addColumn(
+          'orders',
+          new TableColumn({
+            name: 'codAmountDue',
+            type: 'decimal',
+            precision: 10,
+            scale: 2,
+            default: 0,
+          }),
+        );
+      }
+
+      if (!(await queryRunner.hasColumn('orders', 'codCollectedAt'))) {
+        await queryRunner.addColumn(
+          'orders',
+          new TableColumn({
+            name: 'codCollectedAt',
+            type: 'timestamp',
+            isNullable: true,
+          }),
+        );
+      }
+
+      await queryRunner.query(`
+        UPDATE orders
+        SET "codCollectionStatus" = 'pending'
+        WHERE "codCollectionStatus" = 'with_courier'
+      `);
+
+      await queryRunner.query(`
+        UPDATE orders
+        SET
+          "codAmountDue" = GREATEST(
+            CAST("totalAmount" AS decimal) - COALESCE(CAST("walletAppliedAmount" AS decimal), 0),
+            0
+          ),
+          "codCollectionStatus" = 'pending'
+        WHERE "paymentMethod" = 'cod'
+          AND status::text NOT IN ('cancelled', 'refunded')
+          AND "codCollectionStatus" IS NULL
+          AND GREATEST(
+            CAST("totalAmount" AS decimal) - COALESCE(CAST("walletAppliedAmount" AS decimal), 0),
+            0
+          ) > 0
+      `);
     } finally {
       await queryRunner.release();
     }
@@ -462,6 +540,11 @@ export class OrdersService implements OnModuleInit {
       }
 
       // 5. Create Order
+      const codCollection = resolveCodCollection({
+        paymentMethod: walletPayment.paymentMethod,
+        totalAmount,
+        walletAppliedAmount: walletPayment.walletAppliedAmount,
+      });
       const order = this.ordersRepository.create({
         userId: user?.id ?? null,
         status: OrderStatus.PENDING,
@@ -476,6 +559,9 @@ export class OrdersService implements OnModuleInit {
           createOrderDto.billingAddress || createOrderDto.shippingAddress,
         paymentMethod: walletPayment.paymentMethod,
         walletAppliedAmount: walletPayment.walletAppliedAmount,
+        codCollectionStatus: codCollection.codCollectionStatus,
+        codAmountDue: codCollection.codAmountDue,
+        codCollectedAt: codCollection.codCollectedAt,
         notes: createOrderDto.notes,
         browserKey: createOrderDto.browserKey?.trim().slice(0, 64) || null,
       });
@@ -660,6 +746,11 @@ export class OrdersService implements OnModuleInit {
         throw new BadRequestException('Total amount cannot be negative');
       }
 
+      const codCollection = resolveCodCollection({
+        paymentMethod: dto.paymentMethod,
+        totalAmount,
+        walletAppliedAmount: 0,
+      });
       const order = this.ordersRepository.create({
         userId: targetUser?.id ?? null,
         status: dto.status ?? OrderStatus.PENDING,
@@ -672,6 +763,9 @@ export class OrdersService implements OnModuleInit {
         billingAddress: dto.billingAddress || dto.shippingAddress,
         paymentMethod: dto.paymentMethod,
         walletAppliedAmount: 0,
+        codCollectionStatus: codCollection.codCollectionStatus,
+        codAmountDue: codCollection.codAmountDue,
+        codCollectedAt: codCollection.codCollectedAt,
         notes: dto.notes,
         trackingNumber: dto.trackingNumber,
         ...(dto.orderDate ? { createdAt: new Date(dto.orderDate) } : {}),
@@ -778,10 +872,109 @@ export class OrdersService implements OnModuleInit {
         subtotalAmount + taxAmount + shippingAmount - discountAmount;
     }
 
+    const nextPaymentMethod =
+      (fieldsToUpdate.paymentMethod as PaymentMethod | undefined) ??
+      existingOrder.paymentMethod;
+    const nextTotalAmount =
+      fieldsToUpdate.totalAmount !== undefined
+        ? Number(fieldsToUpdate.totalAmount)
+        : Number(existingOrder.totalAmount);
+    const walletAppliedAmount = Number(existingOrder.walletAppliedAmount ?? 0);
+    const alreadyReceived =
+      existingOrder.codCollectionStatus === CodCollectionStatus.RECEIVED;
+    const nextOrderStatus =
+      (dto.status as OrderStatus | undefined) ?? existingOrder.status;
+
+    if (
+      nextOrderStatus === OrderStatus.CANCELLED ||
+      nextOrderStatus === OrderStatus.REFUNDED
+    ) {
+      const clearedCod = clearUncollectedCod(
+        (fieldsToUpdate.codCollectionStatus as CodCollectionStatus | null) ??
+          existingOrder.codCollectionStatus,
+      );
+      if (clearedCod) {
+        Object.assign(fieldsToUpdate, clearedCod);
+      }
+    } else if (
+      dto.paymentMethod !== undefined ||
+      fieldsToUpdate.totalAmount !== undefined ||
+      dto.codCollectionStatus !== undefined
+    ) {
+      const amountDue = calculateCodAmountDue(
+        nextTotalAmount,
+        walletAppliedAmount,
+      );
+      const isCod =
+        nextPaymentMethod === PaymentMethod.COD && amountDue > 0;
+
+      if (!isCod) {
+        Object.assign(fieldsToUpdate, {
+          codCollectionStatus: null,
+          codAmountDue: 0,
+          codCollectedAt: null,
+        });
+      } else if (dto.codCollectionStatus !== undefined) {
+        Object.assign(fieldsToUpdate, {
+          codCollectionStatus: dto.codCollectionStatus,
+          codAmountDue: amountDue,
+          codCollectedAt:
+            dto.codCollectionStatus === CodCollectionStatus.RECEIVED
+              ? existingOrder.codCollectedAt ?? new Date()
+              : null,
+        });
+      } else if (!alreadyReceived) {
+        Object.assign(
+          fieldsToUpdate,
+          resolveCodCollection({
+            paymentMethod: nextPaymentMethod,
+            totalAmount: nextTotalAmount,
+            walletAppliedAmount,
+          }),
+        );
+      } else {
+        fieldsToUpdate.codAmountDue = amountDue;
+      }
+    }
+
     if (Object.keys(fieldsToUpdate).length > 0) {
       await this.ordersRepository.update(id, fieldsToUpdate);
     }
 
+    return this.findOne(id);
+  }
+
+  async updateCodCollection(id: number, dto: UpdateCodCollectionDto) {
+    const order = await this.findOne(id);
+
+    if (
+      order.status === OrderStatus.CANCELLED ||
+      order.status === OrderStatus.REFUNDED
+    ) {
+      throw new BadRequestException(
+        'Cannot update COD collection for a cancelled or refunded order',
+      );
+    }
+
+    const amountDue = calculateCodAmountDue(
+      Number(order.totalAmount),
+      order.walletAppliedAmount,
+    );
+
+    if (order.paymentMethod !== PaymentMethod.COD || amountDue <= 0) {
+      throw new BadRequestException(
+        'This order has no COD cash due from the shipping company',
+      );
+    }
+
+    await this.ordersRepository.update(id, {
+      codCollectionStatus: dto.status,
+      codAmountDue: amountDue,
+      codCollectedAt:
+        dto.status === CodCollectionStatus.RECEIVED
+          ? order.codCollectedAt ?? new Date()
+          : null,
+    });
     return this.findOne(id);
   }
 
@@ -1145,7 +1338,15 @@ export class OrdersService implements OnModuleInit {
   }
 
   async findAllAdmin(filterDto: FilterOrderDto) {
-    const { status, userId, page = 1, limit = 10, search } = filterDto;
+    const {
+      status,
+      userId,
+      page = 1,
+      limit = 10,
+      search,
+      codCollectionStatus,
+      codCollection,
+    } = filterDto;
     const skip = (page - 1) * limit;
 
     const query = this.ordersRepository
@@ -1180,6 +1381,22 @@ export class OrdersService implements OnModuleInit {
         '(CAST(ord.id AS TEXT) LIKE :search OR user.email ILIKE :search OR user.firstName ILIKE :search)',
         { search: `%${search}%` },
       );
+    }
+
+    if (codCollectionStatus) {
+      query.andWhere('ord.codCollectionStatus = :codCollectionStatus', {
+        codCollectionStatus,
+      });
+    } else if (codCollection === 'owed') {
+      query.andWhere('ord.codCollectionStatus = :owedStatus', {
+        owedStatus: CodCollectionStatus.PENDING,
+      });
+    } else if (codCollection === 'received') {
+      query.andWhere('ord.codCollectionStatus = :receivedStatus', {
+        receivedStatus: CodCollectionStatus.RECEIVED,
+      });
+    } else if (codCollection === 'cod') {
+      query.andWhere('ord.codCollectionStatus IS NOT NULL');
     }
 
     const [rawData, total] = await query.getManyAndCount();
@@ -1252,6 +1469,32 @@ export class OrdersService implements OnModuleInit {
         ),
     ).getRawOne<{ revenue: string; profit: string }>();
 
+    const codOwed = await applySharedFilters(
+      this.ordersRepository
+        .createQueryBuilder('ord')
+        .where('ord.codCollectionStatus = :owedStatus', {
+          owedStatus: CodCollectionStatus.PENDING,
+        })
+        .select('COUNT(ord.id)', 'count')
+        .addSelect(
+          'COALESCE(SUM(CAST(ord.codAmountDue AS decimal)), 0)',
+          'amount',
+        ),
+    ).getRawOne<{ count: string; amount: string }>();
+
+    const codReceived = await applySharedFilters(
+      this.ordersRepository
+        .createQueryBuilder('ord')
+        .where('ord.codCollectionStatus = :receivedStatus', {
+          receivedStatus: CodCollectionStatus.RECEIVED,
+        })
+        .select('COUNT(ord.id)', 'count')
+        .addSelect(
+          'COALESCE(SUM(CAST(ord.codAmountDue AS decimal)), 0)',
+          'amount',
+        ),
+    ).getRawOne<{ count: string; amount: string }>();
+
     return {
       pendingCount: countsByStatus[OrderStatus.PENDING] || 0,
       deliveredCount: countsByStatus[OrderStatus.DELIVERED] || 0,
@@ -1259,6 +1502,10 @@ export class OrdersService implements OnModuleInit {
       refundedCount: countsByStatus[OrderStatus.REFUNDED] || 0,
       revenue: Number(financials?.revenue ?? 0),
       profit: Number(financials?.profit ?? 0),
+      codOwedCount: Number(codOwed?.count ?? 0),
+      codOwedAmount: Number(codOwed?.amount ?? 0),
+      codReceivedCount: Number(codReceived?.count ?? 0),
+      codReceivedAmount: Number(codReceived?.amount ?? 0),
     };
   }
 
@@ -1444,6 +1691,12 @@ export class OrdersService implements OnModuleInit {
       }
 
       order.status = newStatus;
+      const clearedCod = clearUncollectedCod(order.codCollectionStatus);
+      if (clearedCod) {
+        order.codCollectionStatus = clearedCod.codCollectionStatus;
+        order.codAmountDue = clearedCod.codAmountDue;
+        order.codCollectedAt = clearedCod.codCollectedAt;
+      }
       await queryRunner.manager.save(order);
 
       await this.recordStatusHistory(

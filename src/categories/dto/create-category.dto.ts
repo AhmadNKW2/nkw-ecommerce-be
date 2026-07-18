@@ -34,6 +34,30 @@ export class CreateCategoryDto {
   @IsOptional()
   description_ar?: string;
 
+  @ApiPropertyOptional({ description: 'Meta title EN — max 70 chars.' })
+  @IsString()
+  @MaxLength(70)
+  @IsOptional()
+  meta_title_en?: string;
+
+  @ApiPropertyOptional({ description: 'Meta title AR — max 70 chars.' })
+  @IsString()
+  @MaxLength(70)
+  @IsOptional()
+  meta_title_ar?: string;
+
+  @ApiPropertyOptional({ description: 'Meta description EN — max 160 chars.' })
+  @IsString()
+  @MaxLength(160)
+  @IsOptional()
+  meta_description_en?: string;
+
+  @ApiPropertyOptional({ description: 'Meta description AR — max 160 chars.' })
+  @IsString()
+  @MaxLength(160)
+  @IsOptional()
+  meta_description_ar?: string;
+
   @IsString()
   @IsOptional()
   image?: string;

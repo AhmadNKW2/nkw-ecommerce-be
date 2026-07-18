@@ -86,10 +86,12 @@ describe('FilterProductDto', () => {
       in_stock: 'false',
       visible: 'false',
       has_duplicate_reference_link: 'false',
+      has_no_reference_link: 'true',
     });
 
     expect(result.in_stock).toBe(false);
     expect(result.visible).toBe(false);
     expect(result.has_duplicate_reference_link).toBe(false);
+    expect(result.has_no_reference_link).toBe(true);
   });
 });

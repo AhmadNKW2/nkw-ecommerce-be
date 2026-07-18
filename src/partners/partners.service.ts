@@ -32,12 +32,16 @@ export class PartnersService {
   }
 
   async createLead(createPartnerLeadDto: CreatePartnerLeadDto): Promise<Partner> {
-    return this.create({
+    // Public sell-with-us leads allow duplicate phone numbers.
+    const partner = this.partnersRepository.create({
       full_name: createPartnerLeadDto.full_name,
       company_name:
         createPartnerLeadDto.company_name?.trim() || DEFAULT_LEAD_COMPANY_NAME,
       phone_number: createPartnerLeadDto.phone_number,
     });
+    const savedPartner = await this.partnersRepository.save(partner);
+    this.adminNotificationsService.publishPartnerCreated(savedPartner.id);
+    return savedPartner;
   }
 
   async findAll(filterDto?: FilterPartnerDto) {

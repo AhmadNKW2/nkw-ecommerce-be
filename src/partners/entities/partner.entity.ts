@@ -21,7 +21,7 @@ export class Partner {
   @Column()
   company_name: string;
 
-  @Column({ unique: true })
+  @Column()
   phone_number: string;
 
   @CreateDateColumn()

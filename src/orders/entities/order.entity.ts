@@ -27,6 +27,12 @@ export enum PaymentMethod {
   WALLET = 'wallet',
 }
 
+/** Cash remittance from the shipping company for COD orders. */
+export enum CodCollectionStatus {
+  PENDING = 'pending',
+  RECEIVED = 'received',
+}
+
 @Entity('orders')
 @Index('idx_orders_user_id', ['userId'])
 @Index('idx_orders_status', ['status'])
@@ -91,6 +97,21 @@ export class Order {
 
   @Column('decimal', { precision: 10, scale: 2, default: 0 })
   walletAppliedAmount: number;
+
+  /**
+   * Shipping-company remittance for COD cash.
+   * Null when the order is not COD (or no cash remains after wallet).
+   */
+  @Column({ type: 'varchar', length: 30, nullable: true })
+  codCollectionStatus: CodCollectionStatus | null;
+
+  /** Cash amount the shipping company owes you for this COD order. */
+  @Column('decimal', { precision: 10, scale: 2, default: 0 })
+  codAmountDue: number;
+
+  /** When you marked cash as received from the shipping company. */
+  @Column({ type: 'timestamp', nullable: true })
+  codCollectedAt: Date | null;
 
   @Column({ nullable: true })
   notes: string;

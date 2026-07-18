@@ -16,6 +16,7 @@ import { FilterOrderDto } from './dto/filter-order.dto';
 import { UpdateOrderItemsCostDto } from './dto/update-order-items-cost.dto';
 import { AdminCreateOrderDto } from './dto/admin-create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
+import { UpdateCodCollectionDto } from './dto/update-cod-collection.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtAuthGuard } from '../auth/guards/optional-jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -81,6 +82,17 @@ export class OrdersController {
   @RequireAdminAccess('orders')
   updateStatus(@Param('id') id: string, @Body('status') status: OrderStatus) {
     return this.ordersService.updateStatus(+id, status);
+  }
+
+  @Patch(':id/cod-collection')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('orders')
+  updateCodCollection(
+    @Param('id') id: string,
+    @Body() dto: UpdateCodCollectionDto,
+  ) {
+    return this.ordersService.updateCodCollection(+id, dto);
   }
 
   @Patch(':id')

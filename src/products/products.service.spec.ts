@@ -470,6 +470,17 @@ describe('ProductsService detail attributes', () => {
     );
   });
 
+  it('filters products with no reference link', async () => {
+    const { baseQuery } = createFindAllQueryBuilderMocks();
+    productsRepository.createQueryBuilder.mockReturnValue(baseQuery);
+
+    await service.findAll({ has_no_reference_link: true }, true);
+
+    expect(baseQuery.andWhere).toHaveBeenCalledWith(
+      `(product.reference_link IS NULL OR btrim(product.reference_link) = '')`,
+    );
+  });
+
   it('returns out-of-stock product details for public requests', async () => {
     productsRepository.findOne.mockResolvedValue({
       ...productBase,

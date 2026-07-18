@@ -41,6 +41,18 @@ export class Vendor {
   @Column({ type: 'text', nullable: true })
   description_ar: string;
 
+  @Column({ type: 'varchar', length: 70, nullable: true })
+  meta_title_en: string | null;
+
+  @Column({ type: 'varchar', length: 70, nullable: true })
+  meta_title_ar: string | null;
+
+  @Column({ type: 'varchar', length: 160, nullable: true })
+  meta_description_en: string | null;
+
+  @Column({ type: 'varchar', length: 160, nullable: true })
+  meta_description_ar: string | null;
+
   @Column('varchar', { nullable: true })
   email: string | null;
 

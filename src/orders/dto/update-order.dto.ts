@@ -9,7 +9,11 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { OrderStatus, PaymentMethod } from '../entities/order.entity';
+import {
+  CodCollectionStatus,
+  OrderStatus,
+  PaymentMethod,
+} from '../entities/order.entity';
 import { AddressDto } from './create-order.dto';
 
 /** Exported so ValidationPipe whitelist metadata is preserved for nested items. */
@@ -109,4 +113,9 @@ export class UpdateOrderDto {
   @IsNumber()
   @Min(0)
   discountAmount?: number;
+
+  /** Shipping-company remittance status for COD cash. */
+  @IsOptional()
+  @IsEnum(CodCollectionStatus)
+  codCollectionStatus?: CodCollectionStatus;
 }

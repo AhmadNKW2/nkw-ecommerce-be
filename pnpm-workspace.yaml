@@ -1,0 +1,14 @@
+packages:
+  - .
+
+overrides:
+  file-type: '>=21.3.2'
+  ajv: '>=8.18.0'
+
+onlyBuiltDependencies:
+  - '@nestjs/core'
+  - '@scarf/scarf'
+  - bcrypt
+  - msgpackr-extract
+  - sharp
+  - unrs-resolver

@@ -341,6 +341,11 @@ export class FilterProductDto {
   @IsBoolean()
   has_duplicate_reference_link?: boolean;
 
+  @IsOptional()
+  @Transform(transformQueryBoolean)
+  @IsBoolean()
+  has_no_reference_link?: boolean;
+
   // ─── Date range filter ───────────────────────────────
   /** ISO date string: only products created on or after this date */
   @IsOptional()
