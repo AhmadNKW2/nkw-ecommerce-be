@@ -1,4 +1,10 @@
-import { IsBoolean, IsEnum, IsOptional } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsOptional,
+  ValidateBy,
+  ValidationOptions,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SeoEntityType } from './list-missing-seo.dto';
@@ -35,6 +41,32 @@ function parseGenerateIds(value: unknown): number[] | 'all_missing' {
   return [];
 }
 
+function isGenerateSeoIdsValue(value: unknown): value is number[] | 'all_missing' {
+  if (value === 'all_missing') {
+    return true;
+  }
+
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => Number.isInteger(entry) && entry > 0)
+  );
+}
+
+function IsGenerateSeoIds(validationOptions?: ValidationOptions) {
+  return ValidateBy(
+    {
+      name: 'isGenerateSeoIds',
+      validator: {
+        validate: (value: unknown) => isGenerateSeoIdsValue(value),
+        defaultMessage: () =>
+          'ids must be a non-empty array of positive integers or "all_missing"',
+      },
+    },
+    validationOptions,
+  );
+}
+
 export class GenerateSeoDto {
   @ApiProperty({ enum: SeoEntityType })
   @IsEnum(SeoEntityType)
@@ -44,6 +76,7 @@ export class GenerateSeoDto {
     description: 'Entity IDs to generate, or the string "all_missing".',
   })
   @Transform(({ value }) => parseGenerateIds(value))
+  @IsGenerateSeoIds()
   ids: number[] | 'all_missing';
 
   @ApiPropertyOptional({
