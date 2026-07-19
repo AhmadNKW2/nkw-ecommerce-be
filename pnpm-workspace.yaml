@@ -1,11 +1,7 @@
-packages:
-  - .
-
+# pnpm 11+ reads settings from this file (package.json "pnpm" field is ignored).
 overrides:
   file-type: '>=21.3.2'
   ajv: '>=8.18.0'
-
-confirmModulesPurge: false
 
 allowBuilds:
   '@nestjs/core': true

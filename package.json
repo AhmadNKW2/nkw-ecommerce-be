@@ -5,6 +5,7 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "packageManager": "pnpm@11.14.0",
   "scripts": {
     "build": "nest build",
     "migrate:drop-category-tags": "node remove-category-tags-columns.js",
@@ -116,5 +117,19 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@scarf/scarf",
+      "bcrypt",
+      "msgpackr-extract",
+      "sharp",
+      "unrs-resolver"
+    ],
+    "overrides": {
+      "file-type": ">=21.3.2",
+      "ajv": ">=8.18.0"
+    }
   }
 }
