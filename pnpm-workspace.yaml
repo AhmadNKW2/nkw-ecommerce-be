@@ -5,10 +5,13 @@ overrides:
   file-type: '>=21.3.2'
   ajv: '>=8.18.0'
 
-onlyBuiltDependencies:
-  - '@nestjs/core'
-  - '@scarf/scarf'
-  - bcrypt
-  - msgpackr-extract
-  - sharp
-  - unrs-resolver
+confirmModulesPurge: false
+
+allowBuilds:
+  '@nestjs/core': true
+  '@scarf/scarf': true
+  bcrypt: true
+  msgpackr-extract: true
+  sharp: true
+  unrs-resolver: true
+  protobufjs: true
