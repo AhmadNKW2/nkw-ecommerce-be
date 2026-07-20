@@ -174,6 +174,19 @@ export class VendorsService implements OnModuleInit {
     ];
   }
 
+  private areVendorCategoryIdListsEqual(
+    left: number[],
+    right: number[],
+  ): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    const sortedLeft = [...left].sort((a, b) => a - b);
+    const sortedRight = [...right].sort((a, b) => a - b);
+    return sortedLeft.every((value, index) => value === sortedRight[index]);
+  }
+
   private normalizeVendorCategoryTreePayload(
     nodes: ReplaceVendorCategoryTreeNodeDto[],
     pathPrefix = 'categories',
@@ -872,6 +885,11 @@ export class VendorsService implements OnModuleInit {
       vendorCategoryId,
     );
 
+    const previousCategoryIds = this.normalizeVendorCategoryIds(
+      vendorCategory.categories?.map((category) => category.id),
+    );
+    const previousTitle = vendorCategory.title;
+
     const nextCategoryIds = this.normalizeVendorCategoryIds(
       updateVendorCategoryDto.category_ids ??
         vendorCategory.categories?.map((category) => category.id),
@@ -896,6 +914,23 @@ export class VendorsService implements OnModuleInit {
 
     await this.vendorCategoryRepository.save(vendorCategory);
     await this.syncVendorCategoryMappings(vendorCategoryId, nextCategoryIds);
+
+    const categoryIdsChanged = !this.areVendorCategoryIdListsEqual(
+      previousCategoryIds,
+      nextCategoryIds,
+    );
+    const titleChanged = previousTitle.trim() !== vendorCategory.title;
+
+    if (categoryIdsChanged || titleChanged) {
+      await this.productsService.syncProductsForVendorCategoryChange({
+        vendorId,
+        vendorCategoryId,
+        vendorCategoryTitle: vendorCategory.title,
+        categoryIds: nextCategoryIds,
+        updateCategoryAssignments: categoryIdsChanged,
+        updateOriginalVendorCategoryNames: categoryIdsChanged || titleChanged,
+      });
+    }
 
     return this.findOneVendorCategory(vendorId, vendorCategoryId);
   }

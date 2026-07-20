@@ -28,7 +28,8 @@ export function createProductPriceRulesTableDefinition() {
         name: 'price_condition',
         type: 'varchar',
         length: '20',
-        default: `'between'`,
+        isNullable: true,
+        default: null,
       },
       {
         name: 'adjustment_type',

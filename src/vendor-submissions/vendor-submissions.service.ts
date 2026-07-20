@@ -833,16 +833,35 @@ export class VendorSubmissionsService {
   /**
    * Permanently remove a vendor submission and its related catalog requests.
    * Does not delete a materialized product if one already exists.
+   * Safe when the product was already deleted (dangling product_id).
    */
   async remove(id: number): Promise<{ deleted: true; id: number }> {
-    const submission = await this.submissionRepo.findOne({ where: { id } });
-    if (!submission) {
-      throw new NotFoundException('Submission not found');
-    }
+    await this.submissionRepo.manager.transaction(async (manager) => {
+      const submissionRepo = manager.getRepository(VendorProductSubmission);
+      const catalogRequestRepo = manager.getRepository(CatalogRequest);
+      const submissionMediaRepo = manager.getRepository(
+        VendorProductSubmissionMedia,
+      );
 
-    await this.catalogRequestRepo.delete({ submission_id: id });
-    await this.submissionMediaRepo.delete({ submission_id: id });
-    await this.submissionRepo.delete(id);
+      const submission = await submissionRepo.findOne({ where: { id } });
+      if (!submission) {
+        throw new NotFoundException('Submission not found');
+      }
+
+      // Clear reverse pointers first so catalog_request deletes cannot fail
+      // if those columns are (or become) FK-constrained. product_id is only a
+      // soft pointer — nulling it also covers already-deleted products.
+      await submissionRepo.update(id, {
+        brand_request_id: null,
+        category_request_id: null,
+        specs_request_id: null,
+        product_id: null,
+      });
+
+      await catalogRequestRepo.delete({ submission_id: id });
+      await submissionMediaRepo.delete({ submission_id: id });
+      await submissionRepo.delete(id);
+    });
 
     this.logger.log(`Deleted vendor submission #${id}`);
     return { deleted: true, id };

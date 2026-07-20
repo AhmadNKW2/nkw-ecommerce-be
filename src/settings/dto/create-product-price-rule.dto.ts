@@ -46,13 +46,14 @@ export class CreateProductPriceRuleDto {
 
   @ApiPropertyOptional({
     enum: ['any', 'more_than', 'less_than', 'between'],
+    nullable: true,
     example: 'between',
     description:
-      'Product price condition. between uses min/max, more_than uses min, less_than uses max.',
+      'Product price condition. Null/any means any product price. between uses min/max, more_than uses min, less_than uses max.',
   })
   @IsEnum(['any', 'more_than', 'less_than', 'between'])
   @IsOptional()
-  price_condition?: 'any' | 'more_than' | 'less_than' | 'between';
+  price_condition?: 'any' | 'more_than' | 'less_than' | 'between' | null;
 
   @ApiPropertyOptional({
     enum: ['increase', 'decrease'],

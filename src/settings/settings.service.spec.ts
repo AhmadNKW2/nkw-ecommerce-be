@@ -314,8 +314,8 @@ describe('SettingsService', () => {
       originalVendorSalePrice: 80.42,
     });
 
-    expect(result.price).toBe(100);
-    expect(result.salePrice).toBe(80.5);
+    expect(result.price).toBe(100.21);
+    expect(result.salePrice).toBe(80.42);
     expect(result.appliedPriceRule).toBeNull();
     expect(result.appliedSalePriceRule).toBeNull();
   });

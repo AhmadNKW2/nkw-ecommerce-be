@@ -9,9 +9,12 @@ import {
   Patch,
   Post,
   Query,
+  Sse,
   UseGuards,
+  MessageEvent,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { Observable } from 'rxjs';
 import { Roles, UserRole } from '../common/decorators/roles.decorator';
 import { RequireAdminAccess } from '../common/decorators/admin-access.decorator';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -131,6 +134,40 @@ export class SettingsController {
   @RequireAdminAccess('settings')
   getProductPriceRules() {
     return this.settingsService.getProductPriceRules();
+  }
+
+  @Get('pricing-rules/jobs/:jobId')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
+  getProductPricingJob(@Param('jobId') jobId: string) {
+    return this.settingsService.getProductPricingJob(jobId);
+  }
+
+  @Sse('pricing-rules/jobs/:jobId/stream')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
+  streamProductPricingJob(
+    @Param('jobId') jobId: string,
+  ): Observable<MessageEvent> {
+    return this.settingsService.streamProductPricingJob(jobId);
+  }
+
+  @Post('pricing-rules/jobs/:jobId/cancel')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
+  cancelProductPricingJob(@Param('jobId') jobId: string) {
+    return this.settingsService.cancelProductPricingJob(jobId);
+  }
+
+  @Post('pricing-rules/verify')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @RequireAdminAccess('settings')
+  verifyAndFixProductPricing() {
+    return this.settingsService.startProductPricingVerifyAndFixJob();
   }
 
   @Post('pricing-rules')

@@ -4,6 +4,9 @@ describe('VendorsService vendor categories', () => {
   let service: VendorsService;
   let vendorRepository: { findOne: jest.Mock; find: jest.Mock };
   let categoriesRepository: { find: jest.Mock };
+  let productsService: {
+    syncProductsForVendorCategoryChange: jest.Mock;
+  };
   let transactionVendorCategoryRepository: {
     delete: jest.Mock;
     create: jest.Mock;
@@ -29,6 +32,11 @@ describe('VendorsService vendor categories', () => {
     };
     categoriesRepository = {
       find: jest.fn(),
+    };
+    productsService = {
+      syncProductsForVendorCategoryChange: jest
+        .fn()
+        .mockResolvedValue({ updated: 0 }),
     };
 
     const relationBuilder = {
@@ -88,7 +96,7 @@ describe('VendorsService vendor categories', () => {
       {} as never,
       categoriesRepository as never,
       {} as never,
-      {} as never,
+      productsService as never,
       vendorCategoryRepository as never,
       {
         createQueryRunner: jest.fn().mockReturnValue({
@@ -423,5 +431,46 @@ describe('VendorsService vendor categories', () => {
     });
     expect(result[0].reference_link).toBe('/shared-link');
     expect(result[0].children[0].reference_link).toBe('/shared-link');
+  });
+
+  it('cascades mapped category changes to products for that vendor category', async () => {
+    vendorRepository.findOne.mockResolvedValue({ id: 5, name_en: 'Vendor 5' });
+    categoriesRepository.find.mockResolvedValue([{ id: 20 }]);
+    vendorCategoryRepository.findOne.mockResolvedValue({
+      id: 44,
+      title: 'Displays',
+      reference_link: '/displays',
+      vendor_id: 5,
+      parent_id: null,
+      sort_order: 0,
+      categories: [{ id: 9 }],
+    });
+    vendorCategoryRepository.save.mockImplementation(async (value) => value);
+    vendorCategoryRepository.find.mockResolvedValue([
+      {
+        id: 44,
+        title: 'Displays',
+        reference_link: '/displays',
+        vendor_id: 5,
+        parent_id: null,
+        sort_order: 0,
+        created_at: new Date('2026-05-04T00:00:00.000Z'),
+        updated_at: new Date('2026-05-04T00:00:00.000Z'),
+        categories: [{ id: 20, name_en: 'Monitors' }],
+      },
+    ]);
+
+    await service.updateVendorCategory(5, 44, {
+      category_ids: [20],
+    });
+
+    expect(productsService.syncProductsForVendorCategoryChange).toHaveBeenCalledWith({
+      vendorId: 5,
+      vendorCategoryId: 44,
+      vendorCategoryTitle: 'Displays',
+      categoryIds: [20],
+      updateCategoryAssignments: true,
+      updateOriginalVendorCategoryNames: true,
+    });
   });
 });

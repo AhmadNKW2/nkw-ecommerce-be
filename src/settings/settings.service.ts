@@ -3,11 +3,15 @@ import {
   ConflictException,
   Inject,
   Injectable,
+  Logger,
+  MessageEvent,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
 import type { Cache } from 'cache-manager';
 import { InjectRepository } from '@nestjs/typeorm';
+import { Observable, interval } from 'rxjs';
+import { map, startWith, takeWhile } from 'rxjs/operators';
 import { DataSource, Repository, TableColumn } from 'typeorm';
 import {
   Product,
@@ -29,7 +33,6 @@ import {
   normalizeCategoryIds,
   normalizeProductPriceRuleShape,
   ProductPricingContext,
-  roundManagedProductPrice,
   toAppliedProductPriceRule,
 } from './product-pricing.util';
 import { createProductPriceRulesTableDefinition } from './product-price-rule.table';
@@ -42,8 +45,27 @@ import { createProductFieldTogglesTableDefinition } from './product-field-toggle
 import { createSeoSettingsTableDefinition } from './seo-settings.table';
 import { createSitePopupSettingsTableDefinition } from './site-popup-settings.table';
 
+type ProductPricingJobMode = 'reprice' | 'verify_and_fix';
+
+type ProductPricingJob = {
+  status: 'running' | 'done' | 'failed' | 'cancelled';
+  mode: ProductPricingJobMode;
+  startedAt: Date;
+  finishedAt?: Date;
+  progress: number;
+  total: number;
+  changedCount: number;
+  unchangedCount: number;
+  skippedCount: number;
+  mismatchedCount: number;
+  cancellationRequested: boolean;
+  currentProductId?: number | null;
+  error?: string;
+};
+
 @Injectable()
 export class SettingsService implements OnModuleInit {
+  private readonly logger = new Logger(SettingsService.name);
   private static readonly SEO_SETTINGS_CACHE_KEY = 'settings:seo:v2-shipping-rules';
   /** Legacy Redis keys from older deploys — always clear these on write. */
   private static readonly SEO_SETTINGS_LEGACY_CACHE_KEYS = [
@@ -59,6 +81,7 @@ export class SettingsService implements OnModuleInit {
 
   private schemaInitialized = false;
   private schemaInitPromise: Promise<void> | null = null;
+  private readonly productPricingJobs = new Map<string, ProductPricingJob>();
 
   constructor(
     @InjectRepository(SeoSettings)
@@ -290,9 +313,12 @@ export class SettingsService implements OnModuleInit {
 
     const rule = this.productPriceRuleRepository.create(candidate);
     const savedRule = await this.productPriceRuleRepository.save(rule);
-    await this.repriceAllProductsByActiveRules();
+    const repriceJob = this.startProductPricingJob('reprice');
 
-    return savedRule;
+    return {
+      ...savedRule,
+      reprice_job_id: repriceJob.job_id,
+    };
   }
 
   async updateProductPriceRule(id: number, dto: UpdateProductPriceRuleDto) {
@@ -316,7 +342,9 @@ export class SettingsService implements OnModuleInit {
           ? dto.category_ids
           : existingRule.category_ids,
       price_condition:
-        dto.price_condition ?? existingRule.price_condition ?? 'between',
+        dto.price_condition !== undefined
+          ? dto.price_condition
+          : existingRule.price_condition,
       adjustment_type:
         dto.adjustment_type ?? existingRule.adjustment_type ?? 'decrease',
       min_product_price:
@@ -336,9 +364,12 @@ export class SettingsService implements OnModuleInit {
     Object.assign(existingRule, candidate);
 
     const savedRule = await this.productPriceRuleRepository.save(existingRule);
-    await this.repriceAllProductsByActiveRules();
+    const repriceJob = this.startProductPricingJob('reprice');
 
-    return savedRule;
+    return {
+      ...savedRule,
+      reprice_job_id: repriceJob.job_id,
+    };
   }
 
   async deleteProductPriceRule(id: number) {
@@ -350,9 +381,12 @@ export class SettingsService implements OnModuleInit {
       throw new NotFoundException('Product price rule not found');
     }
 
-    await this.repriceAllProductsByActiveRules();
+    const repriceJob = this.startProductPricingJob('reprice');
 
-    return { message: 'Product price rule deleted successfully' };
+    return {
+      message: 'Product price rule deleted successfully',
+      reprice_job_id: repriceJob.job_id,
+    };
   }
 
   async calculateManagedProductPrices(params: {
@@ -373,6 +407,21 @@ export class SettingsService implements OnModuleInit {
           order: { id: 'ASC' },
         })).map((rule) => normalizeProductPriceRuleShape(rule));
 
+    return this.calculateManagedProductPricesWithRules(params, activeRules);
+  }
+
+  private calculateManagedProductPricesWithRules(
+    params: {
+      originalVendorPrice: number;
+      originalVendorSalePrice: number | null;
+      fixedPercentage?: number;
+      fixedAdjustmentType?: 'increase' | 'decrease';
+      vendorId?: number | null;
+      brandId?: number | null;
+      categoryIds?: number[];
+    },
+    activeRules: ReturnType<typeof normalizeProductPriceRuleShape>[],
+  ) {
     const pricingContext: ProductPricingContext = {
       vendorId: params.vendorId ?? null,
       brandId: params.brandId ?? null,
@@ -383,8 +432,21 @@ export class SettingsService implements OnModuleInit {
     const matchedPriceRule = params.fixedPercentage
       ? null
       : findBestMatchingProductPriceRule(activeRules, pricingContext);
-    // No matching rule and no fixed percentage means the price stays at the
-    // original vendor price (no hidden default adjustment).
+
+    // No matching rule: keep catalog prices equal to original vendor prices.
+    if (!params.fixedPercentage && !matchedPriceRule) {
+      return {
+        price: params.originalVendorPrice,
+        salePrice:
+          params.originalVendorSalePrice === null ||
+          params.originalVendorSalePrice === undefined
+            ? null
+            : params.originalVendorSalePrice,
+        appliedPriceRule: null,
+        appliedSalePriceRule: null,
+      };
+    }
+
     const price =
       params.fixedPercentage !== undefined
         ? calculateManagedPrice(
@@ -392,13 +454,11 @@ export class SettingsService implements OnModuleInit {
             params.fixedPercentage,
             params.fixedAdjustmentType ?? 'decrease',
           )
-        : matchedPriceRule
-          ? calculateManagedPrice(
-              params.originalVendorPrice,
-              matchedPriceRule.percentage,
-              matchedPriceRule.adjustment_type ?? 'decrease',
-            )
-          : roundManagedProductPrice(params.originalVendorPrice);
+        : calculateManagedPrice(
+            params.originalVendorPrice,
+            matchedPriceRule!.percentage,
+            matchedPriceRule!.adjustment_type ?? 'decrease',
+          );
 
     let salePrice: number | null = null;
     let matchedSaleRule: AppliedProductPriceRule | null = null;
@@ -414,13 +474,11 @@ export class SettingsService implements OnModuleInit {
               params.fixedPercentage,
               params.fixedAdjustmentType ?? 'decrease',
             )
-          : matchedPriceRule
-            ? calculateManagedPrice(
-                params.originalVendorSalePrice,
-                matchedPriceRule.percentage,
-                matchedPriceRule.adjustment_type ?? 'decrease',
-              )
-            : roundManagedProductPrice(params.originalVendorSalePrice);
+          : calculateManagedPrice(
+              params.originalVendorSalePrice,
+              matchedPriceRule!.percentage,
+              matchedPriceRule!.adjustment_type ?? 'decrease',
+            );
       salePrice = ensureSalePriceBelowPrice(price, salePrice);
       matchedSaleRule = matchedPriceRule
         ? toAppliedProductPriceRule(matchedPriceRule)
@@ -437,58 +495,282 @@ export class SettingsService implements OnModuleInit {
     };
   }
 
-  async repriceAllProductsByActiveRules() {
+  startProductPricingVerifyAndFixJob() {
+    return this.startProductPricingJob('verify_and_fix');
+  }
+
+  getProductPricingJob(jobId: string) {
+    const job = this.productPricingJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException('Product pricing job not found');
+    }
+
+    const remaining = Math.max(0, job.total - job.progress);
+
+    return {
+      job_id: jobId,
+      status: job.status,
+      mode: job.mode,
+      started_at: job.startedAt,
+      finished_at: job.finishedAt ?? null,
+      progress: job.progress,
+      total: job.total,
+      remaining,
+      changed_count: job.changedCount,
+      unchanged_count: job.unchangedCount,
+      skipped_count: job.skippedCount,
+      mismatched_count: job.mismatchedCount,
+      current_product_id: job.currentProductId ?? null,
+      error: job.error ?? null,
+      duration_seconds: job.finishedAt
+        ? Math.round(
+            (job.finishedAt.getTime() - job.startedAt.getTime()) / 1000,
+          )
+        : Math.round((Date.now() - job.startedAt.getTime()) / 1000),
+      message:
+        job.status === 'running'
+          ? `Processing products: ${job.progress}/${job.total} (${remaining} left)`
+          : job.status === 'done'
+            ? job.mode === 'verify_and_fix'
+              ? `Verified ${job.total} products. Fixed ${job.changedCount}, already correct ${job.unchangedCount}, skipped ${job.skippedCount}.`
+              : `Repriced ${job.changedCount} products. Unchanged ${job.unchangedCount}, skipped ${job.skippedCount}.`
+            : job.error ?? `Job ${job.status}`,
+    };
+  }
+
+  streamProductPricingJob(jobId: string): Observable<MessageEvent> {
+    this.getProductPricingJob(jobId);
+
+    return interval(1000).pipe(
+      startWith(0),
+      map(() => ({ data: this.getProductPricingJob(jobId) }) as MessageEvent),
+      takeWhile((event) => {
+        const payload = event.data as { status?: string } | undefined;
+        return payload?.status === 'running';
+      }, true),
+    );
+  }
+
+  cancelProductPricingJob(jobId: string) {
+    const job = this.productPricingJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException('Product pricing job not found');
+    }
+
+    if (job.status !== 'running') {
+      return {
+        job_id: jobId,
+        status: job.status,
+        message: 'Job is not active.',
+      };
+    }
+
+    job.cancellationRequested = true;
+    job.status = 'cancelled';
+    job.finishedAt = new Date();
+
+    return {
+      job_id: jobId,
+      status: 'cancelled' as const,
+      message: 'Product pricing job cancelled.',
+    };
+  }
+
+  private startProductPricingJob(mode: ProductPricingJobMode) {
+    for (const [existingJobId, existingJob] of this.productPricingJobs) {
+      if (existingJob.status === 'running') {
+        throw new ConflictException(
+          `A product pricing job is already running (${existingJobId}). Wait for it to finish or cancel it.`,
+        );
+      }
+    }
+
+    const jobId = `pricing-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    this.productPricingJobs.set(jobId, {
+      status: 'running',
+      mode,
+      startedAt: new Date(),
+      progress: 0,
+      total: 0,
+      changedCount: 0,
+      unchangedCount: 0,
+      skippedCount: 0,
+      mismatchedCount: 0,
+      cancellationRequested: false,
+      currentProductId: null,
+    });
+    setTimeout(() => this.productPricingJobs.delete(jobId), 24 * 60 * 60 * 1000).unref?.();
+
+    void this.runProductPricingJob(jobId).catch((error: unknown) => {
+      const job = this.productPricingJobs.get(jobId);
+      if (!job || job.status !== 'running') {
+        return;
+      }
+
+      job.status = 'failed';
+      job.finishedAt = new Date();
+      job.error =
+        error instanceof Error ? error.message : 'Product pricing job failed';
+      this.logger.error(
+        `Product pricing job ${jobId} failed: ${job.error}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    });
+
+    return {
+      job_id: jobId,
+      status: 'running' as const,
+      mode,
+      started_at: new Date(),
+    };
+  }
+
+  private pricesMatch(
+    left: number | null | undefined,
+    right: number | null | undefined,
+  ): boolean {
+    if (
+      (left === null || left === undefined) &&
+      (right === null || right === undefined)
+    ) {
+      return true;
+    }
+
+    if (
+      left === null ||
+      left === undefined ||
+      right === null ||
+      right === undefined
+    ) {
+      return false;
+    }
+
+    return Math.abs(Number(left) - Number(right)) < 0.005;
+  }
+
+  private async runProductPricingJob(jobId: string): Promise<void> {
+    const job = this.productPricingJobs.get(jobId);
+    if (!job) {
+      return;
+    }
+
     await this.ensureSchemaReady();
 
-    const updatedCount = await this.dataSource.transaction(async (manager) => {
-      const productRepository = manager.getRepository(Product);
-      const products = await productRepository
-        .createQueryBuilder('product')
-        .leftJoinAndSelect('product.productCategories', 'productCategories')
-        .select([
-          'product.id',
-          'product.vendor_id',
-          'product.brand_id',
-          'product.category_id',
-          'product.original_vendor_price',
-          'product.original_vendor_sale_price',
-          'productCategories.category_id',
-        ])
-        .getMany();
+    const activeRules = (
+      await this.productPriceRuleRepository.find({
+        where: { is_active: true },
+        order: { id: 'ASC' },
+      })
+    ).map((rule) => normalizeProductPriceRuleShape(rule));
 
-      for (const product of products) {
-        const categoryIds = this.resolveProductCategoryIds(product);
-        const originalVendorPrice = Number(product.original_vendor_price ?? 0);
-        const originalVendorSalePrice =
-          product.original_vendor_sale_price === null ||
-          product.original_vendor_sale_price === undefined
-            ? null
-            : Number(product.original_vendor_sale_price);
+    const products = await this.productsRepository
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.productCategories', 'productCategories')
+      .select([
+        'product.id',
+        'product.vendor_id',
+        'product.brand_id',
+        'product.category_id',
+        'product.price',
+        'product.sale_price',
+        'product.original_vendor_price',
+        'product.original_vendor_sale_price',
+        'productCategories.category_id',
+      ])
+      .getMany();
 
-        if (!Number.isFinite(originalVendorPrice) || originalVendorPrice <= 0) {
-          continue;
-        }
+    job.total = products.length;
+    job.progress = 0;
 
-        const nextPricing = await this.calculateManagedProductPrices({
+    for (const product of products) {
+      if (job.cancellationRequested || job.status === 'cancelled') {
+        job.status = 'cancelled';
+        job.finishedAt = new Date();
+        return;
+      }
+
+      job.currentProductId = product.id;
+
+      const categoryIds = this.resolveProductCategoryIds(product);
+      const originalVendorPrice = Number(product.original_vendor_price ?? 0);
+      const originalVendorSalePrice =
+        product.original_vendor_sale_price === null ||
+        product.original_vendor_sale_price === undefined
+          ? null
+          : Number(product.original_vendor_sale_price);
+
+      if (!Number.isFinite(originalVendorPrice) || originalVendorPrice <= 0) {
+        job.skippedCount += 1;
+        job.progress += 1;
+        continue;
+      }
+
+      const nextPricing = this.calculateManagedProductPricesWithRules(
+        {
           originalVendorPrice,
           originalVendorSalePrice,
           vendorId: product.vendor_id ?? null,
           brandId: product.brand_id ?? null,
           categoryIds,
-        });
+        },
+        activeRules,
+      );
 
-        await productRepository.update(product.id, {
-          price: nextPricing.price,
-          sale_price: nextPricing.salePrice,
-        });
+      const currentPrice =
+        product.price === null || product.price === undefined
+          ? null
+          : Number(product.price);
+      const currentSalePrice =
+        product.sale_price === null || product.sale_price === undefined
+          ? null
+          : Number(product.sale_price);
+
+      const isMismatch =
+        !this.pricesMatch(currentPrice, nextPricing.price) ||
+        !this.pricesMatch(currentSalePrice, nextPricing.salePrice);
+
+      if (!isMismatch) {
+        job.unchangedCount += 1;
+        job.progress += 1;
+        continue;
       }
 
-      return products.length;
-    });
+      job.mismatchedCount += 1;
+
+      await this.productsRepository.update(product.id, {
+        price: nextPricing.price,
+        sale_price: nextPricing.salePrice,
+      });
+
+      job.changedCount += 1;
+      job.progress += 1;
+    }
+
+    job.currentProductId = null;
+    job.status = 'done';
+    job.finishedAt = new Date();
+  }
+
+  /** @deprecated Prefer startProductPricingJob('reprice') for async progress. */
+  async repriceAllProductsByActiveRules() {
+    const started = this.startProductPricingJob('reprice');
+
+    const waitForCompletion = async () => {
+      for (;;) {
+        const status = this.getProductPricingJob(started.job_id);
+        if (status.status !== 'running') {
+          return status;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    };
+
+    const finalStatus = await waitForCompletion();
 
     return {
-      updated_count: updatedCount,
-      message: 'Product prices were recalculated from active pricing rules.',
+      updated_count: finalStatus.changed_count,
+      message: finalStatus.message,
+      job_id: started.job_id,
     };
   }
 
@@ -1205,9 +1487,37 @@ export class SettingsService implements OnModuleInit {
             name: 'price_condition',
             type: 'varchar',
             length: '20',
-            default: `'between'`,
+            isNullable: true,
+            default: null,
           }),
         );
+      } else {
+        const priceConditionNullable = await queryRunner.query(`
+          SELECT is_nullable
+          FROM information_schema.columns
+          WHERE table_name = 'product_price_rules'
+            AND column_name = 'price_condition'
+          LIMIT 1
+        `);
+
+        if (priceConditionNullable?.[0]?.is_nullable === 'NO') {
+          await queryRunner.query(`
+            ALTER TABLE product_price_rules
+            ALTER COLUMN price_condition DROP DEFAULT,
+            ALTER COLUMN price_condition DROP NOT NULL
+          `);
+        }
+
+        await queryRunner.query(`
+          UPDATE product_price_rules
+          SET price_condition = NULL
+          WHERE price_condition = 'any'
+             OR (
+               price_condition = 'between'
+               AND min_product_price IS NULL
+               AND max_product_price IS NULL
+             )
+        `);
       }
 
       if (
@@ -1477,7 +1787,7 @@ export class SettingsService implements OnModuleInit {
     vendor_ids?: number[] | null;
     brand_ids?: number[] | null;
     category_ids?: number[] | null;
-    price_condition?: 'any' | 'more_than' | 'less_than' | 'between';
+    price_condition?: 'any' | 'more_than' | 'less_than' | 'between' | null;
     adjustment_type?: 'increase' | 'decrease';
     min_product_price?: number | null;
     max_product_price?: number | null;
@@ -1498,7 +1808,7 @@ export class SettingsService implements OnModuleInit {
       vendor_ids: input.vendor_ids,
       brand_ids: input.brand_ids,
       category_ids: normalizeCategoryIds(input.category_ids),
-      price_condition: input.price_condition ?? 'between',
+      price_condition: input.price_condition ?? null,
       adjustment_type: input.adjustment_type ?? 'decrease',
     });
 

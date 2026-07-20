@@ -321,6 +321,181 @@ export class ProductsService {
     await this.syncProductsToTypesense(rows.map((row) => row.product_id));
   }
 
+  /**
+   * When a vendor category's mapped platform categories (or title) change,
+   * cascade to products that still reference that vendor category as their
+   * original source category.
+   */
+  async syncProductsForVendorCategoryChange(params: {
+    vendorId: number;
+    vendorCategoryId: number;
+    vendorCategoryTitle: string;
+    categoryIds: number[];
+    updateCategoryAssignments: boolean;
+    updateOriginalVendorCategoryNames: boolean;
+  }): Promise<{ updated: number }> {
+    const {
+      vendorId,
+      vendorCategoryId,
+      vendorCategoryTitle,
+      categoryIds,
+      updateCategoryAssignments,
+      updateOriginalVendorCategoryNames,
+    } = params;
+
+    if (!updateCategoryAssignments && !updateOriginalVendorCategoryNames) {
+      return { updated: 0 };
+    }
+
+    const normalizedCategoryIds = [
+      ...new Set(
+        categoryIds.filter(
+          (categoryId) => Number.isInteger(categoryId) && categoryId > 0,
+        ),
+      ),
+    ];
+    const trimmedTitle = vendorCategoryTitle.trim();
+
+    if (updateCategoryAssignments && normalizedCategoryIds.length > 0) {
+      const categories = await this.categoriesRepository.find({
+        where: {
+          id: In(normalizedCategoryIds),
+          status: CategoryStatus.ACTIVE,
+        },
+        select: { id: true },
+      });
+      if (categories.length !== normalizedCategoryIds.length) {
+        throw new BadRequestException(
+          'One or more mapped categories not found or are archived',
+        );
+      }
+    }
+
+    const products = await this.productsRepository
+      .createQueryBuilder('product')
+      .where('product.vendor_id = :vendorId', { vendorId })
+      .andWhere('product.deleted_at IS NULL')
+      .andWhere(
+        `(
+          product.original_vendor_category_id = :vendorCategoryId
+          OR EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(
+              COALESCE(product.original_vendor_categories, '[]'::jsonb)
+            ) AS original_vendor_category
+            WHERE (original_vendor_category->>'id') ~ '^[0-9]+$'
+              AND CAST(original_vendor_category->>'id' AS integer) = :vendorCategoryId
+          )
+        )`,
+        { vendorCategoryId },
+      )
+      .getMany();
+
+    if (products.length === 0) {
+      return { updated: 0 };
+    }
+
+    const productIds = products.map((product) => product.id);
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      if (updateCategoryAssignments) {
+        await queryRunner.manager.delete(ProductCategory, {
+          product_id: In(productIds),
+        });
+
+        if (normalizedCategoryIds.length > 0) {
+          const productCategories = productIds.flatMap((productId) =>
+            normalizedCategoryIds.map((categoryId) =>
+              this.productCategoriesRepository.create({
+                product_id: productId,
+                category_id: categoryId,
+              }),
+            ),
+          );
+          await queryRunner.manager.save(ProductCategory, productCategories);
+        }
+      }
+
+      for (const product of products) {
+        // TypeORM update() expects QueryDeepPartialEntity, not Partial<Product>
+        // (nested relations make Partial<Product> incompatible).
+        const changes: Record<string, unknown> = {};
+
+        if (updateCategoryAssignments) {
+          changes.category_id =
+            normalizedCategoryIds.length > 0 ? normalizedCategoryIds[0] : null;
+        }
+
+        if (updateOriginalVendorCategoryNames && trimmedTitle) {
+          const nextOriginalVendorCategories = (
+            product.original_vendor_categories ?? []
+          ).map((entry) => {
+            if (Number(entry?.id) === vendorCategoryId) {
+              return { ...entry, id: vendorCategoryId, name: trimmedTitle };
+            }
+            return entry;
+          });
+
+          const hasVendorCategoryEntry = nextOriginalVendorCategories.some(
+            (entry) => Number(entry?.id) === vendorCategoryId,
+          );
+          if (!hasVendorCategoryEntry) {
+            nextOriginalVendorCategories.unshift({
+              id: vendorCategoryId,
+              name: trimmedTitle,
+            });
+          }
+
+          changes.original_vendor_categories = nextOriginalVendorCategories;
+          if (product.original_vendor_category_id === vendorCategoryId) {
+            changes.original_vendor_category_name = trimmedTitle;
+          } else if (
+            product.original_vendor_category_id == null &&
+            nextOriginalVendorCategories[0]?.id === vendorCategoryId
+          ) {
+            changes.original_vendor_category_id = vendorCategoryId;
+            changes.original_vendor_category_name = trimmedTitle;
+          }
+        }
+
+        if (updateCategoryAssignments) {
+          const managedPricing = await this.computeManagedPricingFromOriginalInput(
+            {
+              vendor_id: product.vendor_id ?? null,
+              brand_id: product.brand_id ?? null,
+              categoryIds: normalizedCategoryIds,
+              original_vendor_price: product.original_vendor_price ?? null,
+              original_vendor_sale_price:
+                product.original_vendor_sale_price ?? null,
+            },
+          );
+
+          if (managedPricing) {
+            changes.price = managedPricing.price;
+            changes.sale_price = managedPricing.sale_price;
+          }
+        }
+
+        if (Object.keys(changes).length > 0) {
+          await queryRunner.manager.update(Product, product.id, changes);
+        }
+      }
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.syncProductsToTypesense(productIds);
+    return { updated: products.length };
+  }
+
   private async shouldShowSalePricing(): Promise<boolean> {
     try {
       const settings = await this.settingsService.getSeoSettings();
@@ -3584,6 +3759,35 @@ export class ProductsService {
   }
 
   /**
+   * Clear vendor-submission links before a product row is removed so
+   * submissions are never left pointing at a missing product_id.
+   */
+  private async detachVendorSubmissionsForProducts(
+    productIds: number[],
+    manager: EntityManager | DataSource = this.dataSource,
+  ): Promise<void> {
+    const ids = [...new Set(productIds.filter((id) => Number.isInteger(id) && id > 0))];
+    if (ids.length === 0) {
+      return;
+    }
+
+    await manager.query(
+      `
+        UPDATE vendor_product_submissions
+        SET
+          product_id = NULL,
+          status = CASE
+            WHEN status = 'materialized' THEN 'ready'
+            ELSE status
+          END,
+          updated_at = NOW()
+        WHERE product_id = ANY($1::int[])
+      `,
+      [ids],
+    );
+  }
+
+  /**
    * Permanently delete a product (only if archived or in review)
    * This is irreversible
    */
@@ -3608,6 +3812,7 @@ export class ProductsService {
 
     // Remove all cart items referencing this product before deletion
     await this.cartItemsRepository.delete({ product_id: id });
+    await this.detachVendorSubmissionsForProducts([id]);
 
     await this.productsRepository.remove(product);
     await this.deleteProductFromTypesense(id);
@@ -3834,6 +4039,10 @@ export class ProductsService {
         await queryRunner.manager.delete(CartItem, {
           product_id: In(productIds),
         });
+        await this.detachVendorSubmissionsForProducts(
+          productIds,
+          queryRunner.manager,
+        );
         await queryRunner.manager.remove(Product, products);
       }
 

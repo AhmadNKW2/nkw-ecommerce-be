@@ -30,6 +30,7 @@ import { VendorStatus } from '../vendors/entities/vendor.entity';
 import { R2StorageService } from '../common/services/r2-storage.service';
 import { Attribute } from '../attributes/entities/attribute.entity';
 import { Specification } from '../specifications/entities/specification.entity';
+import { VendorCategory } from '../vendors/entities/vendor-category.entity';
 import {
   getNormalizedProductChanges,
   ProductChangesDto,
@@ -39,6 +40,23 @@ import {
   hydrateProductMedia,
   hydrateProductsMedia,
 } from '../products/utils/product-media.util';
+
+export interface CategoryVendorCategoryItem {
+  id: number;
+  title: string;
+  reference_link: string;
+  parent_id: number | null;
+  parent_title: string | null;
+  sort_order: number;
+}
+
+export interface CategoryVendorCategoriesGroup {
+  vendor_id: number;
+  vendor_name_en: string;
+  vendor_name_ar: string;
+  vendor_slug: string | null;
+  vendor_categories: CategoryVendorCategoryItem[];
+}
 
 @Injectable()
 export class CategoriesService {
@@ -57,6 +75,8 @@ export class CategoriesService {
     private attributesRepository: Repository<Attribute>,
     @InjectRepository(Specification)
     private specificationsRepository: Repository<Specification>,
+    @InjectRepository(VendorCategory)
+    private vendorCategoriesRepository: Repository<VendorCategory>,
     private r2StorageService: R2StorageService,
     private productsService: ProductsService,
   ) {}
@@ -313,6 +333,64 @@ export class CategoriesService {
       ...filterDto,
       category_id: categoryId,
     });
+  }
+
+  async findVendorCategoriesByCategory(
+    categoryId: number,
+  ): Promise<CategoryVendorCategoriesGroup[]> {
+    const categoryExists = await this.categoriesRepository.exists({
+      where: { id: categoryId },
+    });
+
+    if (!categoryExists) {
+      throw new NotFoundException('Category not found');
+    }
+
+    const vendorCategories = await this.vendorCategoriesRepository
+      .createQueryBuilder('vendorCategory')
+      .innerJoin(
+        'vendorCategory.categories',
+        'mappedCategory',
+        'mappedCategory.id = :categoryId',
+        { categoryId },
+      )
+      .leftJoinAndSelect('vendorCategory.vendor', 'vendor')
+      .leftJoinAndSelect('vendorCategory.parent', 'parent')
+      .orderBy('vendor.name_en', 'ASC')
+      .addOrderBy('vendorCategory.sort_order', 'ASC')
+      .addOrderBy('vendorCategory.id', 'ASC')
+      .getMany();
+
+    const groupsByVendorId = new Map<number, CategoryVendorCategoriesGroup>();
+
+    for (const vendorCategory of vendorCategories) {
+      const vendorId = vendorCategory.vendor_id;
+      const existingGroup = groupsByVendorId.get(vendorId);
+
+      const item: CategoryVendorCategoryItem = {
+        id: vendorCategory.id,
+        title: vendorCategory.title,
+        reference_link: vendorCategory.reference_link,
+        parent_id: vendorCategory.parent_id,
+        parent_title: vendorCategory.parent?.title ?? null,
+        sort_order: vendorCategory.sort_order,
+      };
+
+      if (existingGroup) {
+        existingGroup.vendor_categories.push(item);
+        continue;
+      }
+
+      groupsByVendorId.set(vendorId, {
+        vendor_id: vendorId,
+        vendor_name_en: vendorCategory.vendor?.name_en ?? '',
+        vendor_name_ar: vendorCategory.vendor?.name_ar ?? '',
+        vendor_slug: vendorCategory.vendor?.slug ?? null,
+        vendor_categories: [item],
+      });
+    }
+
+    return Array.from(groupsByVendorId.values());
   }
 
   async findOneCategoryUrl(id: number): Promise<CategoryUrl> {

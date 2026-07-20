@@ -293,6 +293,23 @@ export class CategoriesController {
     return this.categoriesService.findCategoryUrlsByCategory(id, filterDto);
   }
 
+  @Get(':id/vendor-categories')
+  @UseGuards(AuthGuard('jwt'), RolesGuard)
+  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @RequireAdminAccess('categories')
+  @ApiOperation({
+    summary:
+      'List vendor categories mapped to this platform category, grouped by vendor',
+  })
+  @ApiParam({ name: 'id', example: 9, description: 'Category id' })
+  @ApiNotFoundResponse({
+    description: 'Category not found.',
+    type: ApiErrorResponseDto,
+  })
+  findVendorCategoriesByCategory(@Param('id', ParseIntPipe) id: number) {
+    return this.categoriesService.findVendorCategoriesByCategory(id);
+  }
+
   @Get(':id')
   @UseGuards(OptionalJwtAuthGuard)
   findOne(

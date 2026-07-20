@@ -4,7 +4,7 @@ import { ProductPriceRule } from './entities/product-price-rule.entity';
 export const MIN_PRODUCT_PRICE_RULE_PERCENTAGE = 1;
 export const PRODUCT_PRICE_ROUNDING_STEP = 0.5;
 
-export type ProductPriceCondition = 'any' | 'more_than' | 'less_than' | 'between';
+export type ProductPriceCondition = 'any' | 'more_than' | 'less_than' | 'between' | null;
 export type ProductPriceAdjustmentType = 'increase' | 'decrease';
 
 export type ProductPriceRuleShape = Pick<
@@ -96,6 +96,16 @@ function normalizeOptionalProductPrice(
   return Number.isFinite(normalized) ? normalized : null;
 }
 
+function normalizePriceCondition(
+  value: ProductPriceCondition | undefined,
+): ProductPriceCondition {
+  if (value === undefined || value === null || value === 'any') {
+    return null;
+  }
+
+  return value;
+}
+
 export function assertProductPriceRuleValues(params: {
   min_product_price?: number | null;
   max_product_price?: number | null;
@@ -103,7 +113,7 @@ export function assertProductPriceRuleValues(params: {
   price_condition?: ProductPriceCondition;
   adjustment_type?: ProductPriceAdjustmentType;
 }) {
-  const priceCondition = params.price_condition ?? 'between';
+  const priceCondition = normalizePriceCondition(params.price_condition);
   const minProductPrice = normalizeOptionalProductPrice(params.min_product_price);
   const maxProductPrice = normalizeOptionalProductPrice(params.max_product_price);
 
@@ -129,13 +139,24 @@ export function assertProductPriceRuleValues(params: {
     );
   }
 
-  if (
-    priceCondition === 'less_than' &&
-    maxProductPrice === null &&
-    minProductPrice === null
-  ) {
+  if (priceCondition === 'more_than' && minProductPrice === null) {
+    throw new BadRequestException(
+      'more_than rules require a minimum product price threshold.',
+    );
+  }
+
+  if (priceCondition === 'less_than' && maxProductPrice === null) {
     throw new BadRequestException(
       'less_than rules require a maximum product price threshold.',
+    );
+  }
+
+  if (
+    priceCondition === 'between' &&
+    (minProductPrice === null || maxProductPrice === null)
+  ) {
+    throw new BadRequestException(
+      'between rules require both minimum and maximum product price thresholds.',
     );
   }
 
@@ -154,16 +175,24 @@ export function normalizeProductPriceRuleShape(
     percentage: number;
   },
 ): ProductPriceRuleShape {
+  const priceCondition = normalizePriceCondition(rule.price_condition);
+
   return {
     id: rule.id ?? 0,
-    min_product_price: normalizeOptionalProductPrice(rule.min_product_price),
-    max_product_price: normalizeOptionalProductPrice(rule.max_product_price),
+    min_product_price:
+      priceCondition === 'more_than' || priceCondition === 'between'
+        ? normalizeOptionalProductPrice(rule.min_product_price)
+        : null,
+    max_product_price:
+      priceCondition === 'less_than' || priceCondition === 'between'
+        ? normalizeOptionalProductPrice(rule.max_product_price)
+        : null,
     percentage: Number(rule.percentage),
     is_active: rule.is_active ?? true,
     vendor_ids: normalizeVendorIds(rule.vendor_ids),
     brand_ids: normalizeBrandIds(rule.brand_ids),
     category_ids: normalizeCategoryIds(rule.category_ids),
-    price_condition: rule.price_condition ?? 'between',
+    price_condition: priceCondition,
     adjustment_type: rule.adjustment_type ?? 'decrease',
   };
 }
@@ -186,14 +215,11 @@ function doesProductPriceMatch(
   rule: ProductPriceRuleShape,
   originalPrice: number,
 ): boolean {
-  const priceCondition = rule.price_condition ?? 'between';
+  const priceCondition = normalizePriceCondition(rule.price_condition);
   const minProductPrice = rule.min_product_price;
   const maxProductPrice = rule.max_product_price;
 
-  if (
-    priceCondition === 'any' ||
-    (minProductPrice === null && maxProductPrice === null)
-  ) {
+  if (priceCondition === null) {
     return true;
   }
 
@@ -204,9 +230,16 @@ function doesProductPriceMatch(
       return maxProductPrice !== null && originalPrice < maxProductPrice;
     case 'between':
     default: {
-      const minBound = minProductPrice ?? Number.NEGATIVE_INFINITY;
-      const maxBound = maxProductPrice ?? Number.POSITIVE_INFINITY;
-      return originalPrice >= minBound && originalPrice <= maxBound;
+      // Legacy rows stored "any product price" as between with empty bounds.
+      if (minProductPrice === null && maxProductPrice === null) {
+        return true;
+      }
+
+      if (minProductPrice === null || maxProductPrice === null) {
+        return false;
+      }
+
+      return originalPrice >= minProductPrice && originalPrice <= maxProductPrice;
     }
   }
 }
@@ -271,7 +304,7 @@ export function getProductPriceRuleSpecificityScore(
     score += 10_000 * categoryIds.length;
   }
 
-  const priceCondition = rule.price_condition ?? 'between';
+  const priceCondition = normalizePriceCondition(rule.price_condition);
 
   switch (priceCondition) {
     case 'between': {
@@ -290,7 +323,7 @@ export function getProductPriceRuleSpecificityScore(
     case 'less_than':
       score += 500;
       break;
-    case 'any':
+    case null:
     default:
       break;
   }
@@ -338,7 +371,7 @@ export function toAppliedProductPriceRule(
     id: rule.id,
     percentage: rule.percentage,
     adjustment_type: rule.adjustment_type ?? 'decrease',
-    price_condition: rule.price_condition ?? 'between',
+    price_condition: normalizePriceCondition(rule.price_condition),
     vendor_ids: normalizeVendorIds(rule.vendor_ids),
     brand_ids: normalizeBrandIds(rule.brand_ids),
     category_ids: normalizeCategoryIds(rule.category_ids),
@@ -424,7 +457,10 @@ export function doScopedProductPriceRulesConflict(
     return false;
   }
 
-  if ((left.price_condition ?? 'between') !== (right.price_condition ?? 'between')) {
+  if (
+    normalizePriceCondition(left.price_condition) !==
+    normalizePriceCondition(right.price_condition)
+  ) {
     return false;
   }
 

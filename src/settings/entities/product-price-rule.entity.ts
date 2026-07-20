@@ -44,9 +44,10 @@ export class ProductPriceRule {
   @Column({
     type: 'varchar',
     length: 20,
-    default: 'between',
+    nullable: true,
+    default: null,
   })
-  price_condition: 'any' | 'more_than' | 'less_than' | 'between';
+  price_condition: 'any' | 'more_than' | 'less_than' | 'between' | null;
 
   @Column({
     type: 'varchar',

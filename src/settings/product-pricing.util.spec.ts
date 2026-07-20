@@ -16,7 +16,7 @@ describe('product-pricing.util', () => {
       vendor_ids: null,
       brand_ids: null,
       category_ids: null,
-      price_condition: 'between',
+      price_condition: null,
       adjustment_type: 'increase',
       ...overrides,
     });
@@ -98,9 +98,10 @@ describe('product-pricing.util', () => {
     expect(matched?.id).toBe(4);
   });
 
-  it('matches all products when min and max product prices are empty', () => {
+  it('matches all products when price condition is null', () => {
     const rule = baseRule({
       id: 5,
+      price_condition: null,
       min_product_price: null,
       max_product_price: null,
       percentage: 8,
@@ -114,6 +115,24 @@ describe('product-pricing.util', () => {
     });
 
     expect(matched?.id).toBe(5);
+  });
+
+  it('treats legacy any condition as any product price', () => {
+    const rule = baseRule({
+      id: 6,
+      price_condition: 'any',
+      percentage: 8,
+    });
+
+    const matched = findBestMatchingProductPriceRule([rule], {
+      vendorId: null,
+      brandId: null,
+      categoryIds: [],
+      originalPrice: 12,
+    });
+
+    expect(matched?.id).toBe(6);
+    expect(matched?.price_condition).toBeNull();
   });
 
   it('rounds managed prices to .00 or .50 endings', () => {
