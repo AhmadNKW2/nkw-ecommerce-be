@@ -736,28 +736,6 @@ export class CategoriesService {
     return mainCategories;
   }
 
-  private async getDescendantIds(id: number): Promise<number[]> {
-    const children = await this.categoriesRepository.find({
-      where: { parent_id: id },
-      select: {
-        id: true
-      },
-    });
-    const childIds = children.map((c) => c.id);
-
-    if (childIds.length === 0) return [];
-
-    const grandchildren = await this.categoriesRepository.find({
-      where: { parent_id: In(childIds) },
-      select: {
-        id: true
-      },
-    });
-    const grandChildIds = grandchildren.map((c) => c.id);
-
-    return [...childIds, ...grandChildIds];
-  }
-
   async findOne(
     id: number,
     productFilter?: FilterProductDto,
@@ -824,13 +802,12 @@ export class CategoriesService {
       throw new NotFoundException('Category not found');
     }
 
-    const descendantIds = await this.getDescendantIds(category.id);
-    const category_ids = [category.id, ...descendantIds];
-
+    // Admin category page should only show products assigned directly to this
+    // category — not products that belong only to its subcategories.
     const productsResult = await this.productsService.findAll({
       ...productFilter,
       categoryId: undefined,
-      category_ids: category_ids,
+      category_ids: [category.id],
       limit: productFilter?.limit ?? 100,
     });
     (category as any).products = productsResult.data;
@@ -857,13 +834,12 @@ export class CategoriesService {
       throw new NotFoundException(`Category with slug ${slug} not found`);
     }
 
-    const descendantIds = await this.getDescendantIds(category.id);
-    const category_ids = [category.id, ...descendantIds];
-
+    // Admin category page should only show products assigned directly to this
+    // category — not products that belong only to its subcategories.
     const productsResult = await this.productsService.findAll({
       ...productFilter,
       categoryId: undefined,
-      category_ids: category_ids,
+      category_ids: [category.id],
       limit: productFilter?.limit ?? 100,
     });
     (category as any).products = productsResult.data;
