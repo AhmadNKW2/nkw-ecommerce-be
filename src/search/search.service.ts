@@ -1809,6 +1809,16 @@ export class SearchService implements OnModuleInit {
       return next;
     }
 
+    // Admin requests (`is_admin=true`) filter by the exact selected category only.
+    // Storefront search still expands to include products in descendant categories.
+    if (next.is_admin === true) {
+      return {
+        ...next,
+        category_id: undefined,
+        category_ids: categoryIds,
+      };
+    }
+
     const expandedCategoryIds =
       await this.expandCategoryIdsWithDescendants(categoryIds);
 

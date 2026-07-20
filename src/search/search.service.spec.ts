@@ -160,6 +160,52 @@ describe('SearchService — SEARCHABLE_STATUSES and query_by wiring', () => {
     expect(params.filter_by).toContain('is_out_of_stock:=false');
   });
 
+  it('expands category filters to descendants for public search', async () => {
+    const { service, typesenseSearch } = makeService(
+      { hits: [], found: 0 },
+      [
+        { id: 10, parent_id: null },
+        { id: 11, parent_id: 10 },
+        { id: 12, parent_id: 11 },
+      ] as any,
+    );
+
+    await service.search(
+      { q: '*', category_ids: '10' } as unknown as SearchQueryDto,
+      false,
+      false,
+    );
+
+    const params = typesenseSearch.mock.calls[0][0];
+    expect(params.filter_by).toMatch(/category_ids:=\[(?:10,11,12|10,12,11|11,10,12|11,12,10|12,10,11|12,11,10)\]/);
+  });
+
+  it('does not expand category filters to descendants for admin search', async () => {
+    const { service, typesenseSearch } = makeService(
+      { hits: [], found: 0 },
+      [
+        { id: 10, parent_id: null },
+        { id: 11, parent_id: 10 },
+        { id: 12, parent_id: 11 },
+      ] as any,
+    );
+
+    await service.search(
+      {
+        q: '*',
+        category_ids: '10',
+        is_admin: true,
+      } as unknown as SearchQueryDto,
+      true,
+      true,
+    );
+
+    const params = typesenseSearch.mock.calls[0][0];
+    expect(params.filter_by).toContain('category_ids:=[10]');
+    expect(params.filter_by).not.toMatch(/category_ids:=\[10,11/);
+    expect(params.filter_by).not.toMatch(/category_ids:=\[10,12/);
+  });
+
   it('requires matches across different attribute groups while allowing values within one group', async () => {
     const { service, typesenseSearch } = makeService();
     const dto = {
