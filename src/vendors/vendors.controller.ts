@@ -519,7 +519,10 @@ export class VendorsController {
 
   // Get products for this vendor
   @Get(':id/products')
-  getProducts(@Param('id') id: string) {
-    return this.vendorsService.getProducts(+id);
+  getProducts(
+    @Param('id') id: string,
+    @Query() filterDto: FilterProductDto,
+  ) {
+    return this.vendorsService.getProducts(+id, filterDto);
   }
 }

@@ -93,11 +93,17 @@ export class FilterProductDto {
   @Min(1)
   page?: number = 1;
 
+  /**
+   * Intentionally no class default. Nest ValidationPipe applies field defaults
+   * even when the query omits `limit`, which broke admin category/brand/vendor
+   * detail pages that fall back with `productFilter?.limit ?? …`.
+   * List endpoints still default to 10 inside ProductsService.findAll.
+   */
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
-  limit?: number = 10;
+  limit?: number;
 
   // ─── Sorting ─────────────────────────────────────────
   @IsOptional()

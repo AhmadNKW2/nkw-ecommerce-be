@@ -407,8 +407,11 @@ export class CategoriesController {
 
   // Get products in this category
   @Get(':id/products')
-  getProducts(@Param('id') id: number) {
-    return this.categoriesService.getProducts(id);
+  getProducts(
+    @Param('id') id: number,
+    @Query() filterDto: FilterProductDto,
+  ) {
+    return this.categoriesService.getProducts(id, filterDto);
   }
 
 }

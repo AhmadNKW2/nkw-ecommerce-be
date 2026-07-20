@@ -732,15 +732,7 @@ export class VendorsService implements OnModuleInit {
   ): Promise<Vendor> {
     const vendor = await this.ensureVendorExists(id);
 
-    const productsResult = await this.productsService.findAll({
-      ...productFilter,
-      vendor_ids: [id],
-      vendorId: undefined,
-      vendor_id: undefined,
-      limit: productFilter?.limit ?? 100,
-    });
-    (vendor as any).products = productsResult.data;
-    (vendor as any).productsMeta = productsResult.meta;
+    await this.attachAssignedProductIds(vendor, productFilter);
     (vendor as any).vendor_categories = await this.findVendorCategoriesTree(id);
 
     return vendor;
@@ -758,20 +750,51 @@ export class VendorsService implements OnModuleInit {
       throw new NotFoundException(`Vendor with slug ${slug} not found`);
     }
 
-    const productsResult = await this.productsService.findAll({
-      ...productFilter,
-      vendor_ids: [vendor.id],
-      vendorId: undefined,
-      vendor_id: undefined,
-      limit: productFilter?.limit ?? 100,
-    });
-    (vendor as any).products = productsResult.data;
-    (vendor as any).productsMeta = productsResult.meta;
+    await this.attachAssignedProductIds(vendor, productFilter);
     (vendor as any).vendor_categories = await this.findVendorCategoriesTree(
       vendor.id,
     );
 
     return vendor;
+  }
+
+  private async attachAssignedProductIds(
+    vendor: Vendor,
+    productFilter?: FilterProductDto,
+  ): Promise<void> {
+    const idsResult = await this.productsService.findAll(
+      {
+        vendor_ids: [vendor.id],
+        vendorId: undefined,
+        vendor_id: undefined,
+        page: 1,
+        limit: 100000,
+        idsOnly: true,
+      },
+      true,
+    );
+
+    (vendor as any).product_ids = idsResult.data.map(
+      (row: { id: number }) => row.id,
+    );
+    (vendor as any).productsMeta = idsResult.meta;
+    (vendor as any).products = [];
+
+    if (productFilter?.limit != null) {
+      const productsResult = await this.productsService.findAll(
+        {
+          ...productFilter,
+          vendor_ids: [vendor.id],
+          vendorId: undefined,
+          vendor_id: undefined,
+          limit: productFilter.limit,
+          page: productFilter.page ?? 1,
+        },
+        true,
+      );
+      (vendor as any).products = productsResult.data;
+      (vendor as any).productsMeta = productsResult.meta;
+    }
   }
 
   async createVendorCategory(
@@ -1360,7 +1383,8 @@ export class VendorsService implements OnModuleInit {
    */
   async getProducts(
     vendorId: number,
-  ): Promise<{ vendor: Vendor; products: Product[] }> {
+    productFilter?: FilterProductDto,
+  ): Promise<{ vendor: Vendor; products: Product[]; meta: any }> {
     const vendor = await this.vendorRepository.findOne({
       where: { id: vendorId },
     });
@@ -1369,23 +1393,22 @@ export class VendorsService implements OnModuleInit {
       throw new NotFoundException('Vendor not found');
     }
 
-    const products = await this.productsRepository.find({
-      where: { vendor_id: vendorId, status: ProductStatus.ACTIVE },
-      relations: {
-        productMedia: {
-          media: true
-        },
-
-        productCategories: {
-          category: true
-        }
+    const productsResult = await this.productsService.findAll(
+      {
+        ...productFilter,
+        vendor_ids: [vendorId],
+        vendorId: undefined,
+        vendor_id: undefined,
+        page: productFilter?.page ?? 1,
+        limit: productFilter?.limit ?? 10,
       },
-      order: { created_at: 'DESC' },
-    });
+      true,
+    );
 
     return {
       vendor,
-      products,
+      products: productsResult.data,
+      meta: productsResult.meta,
     };
   }
 

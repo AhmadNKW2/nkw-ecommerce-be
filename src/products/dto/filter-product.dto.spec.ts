@@ -94,4 +94,10 @@ describe('FilterProductDto', () => {
     expect(result.has_duplicate_reference_link).toBe(false);
     expect(result.has_no_reference_link).toBe(true);
   });
+
+  it('does not invent a default limit when the query omits it', async () => {
+    const result = await transformQuery({ is_admin: 'true' });
+
+    expect(result.limit).toBeUndefined();
+  });
 });

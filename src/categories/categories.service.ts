@@ -802,16 +802,10 @@ export class CategoriesService {
       throw new NotFoundException('Category not found');
     }
 
-    // Admin category page should only show products assigned directly to this
-    // category — not products that belong only to its subcategories.
-    const productsResult = await this.productsService.findAll({
-      ...productFilter,
-      categoryId: undefined,
-      category_ids: [category.id],
-      limit: productFilter?.limit ?? 100,
-    });
-    (category as any).products = productsResult.data;
-    (category as any).productsMeta = productsResult.meta;
+    // Admin edit UI loads product rows via paginated /products (or
+    // /categories/:id/products). Detail only needs the full ID set for
+    // add/remove diffs — idsOnly keeps this cheap.
+    await this.attachAssignedProductIds(category, productFilter);
     await this.attachAttributesToCategories([category]);
     await this.attachSpecificationsToCategories([category]);
 
@@ -834,20 +828,54 @@ export class CategoriesService {
       throw new NotFoundException(`Category with slug ${slug} not found`);
     }
 
-    // Admin category page should only show products assigned directly to this
-    // category — not products that belong only to its subcategories.
-    const productsResult = await this.productsService.findAll({
-      ...productFilter,
-      categoryId: undefined,
-      category_ids: [category.id],
-      limit: productFilter?.limit ?? 100,
-    });
-    (category as any).products = productsResult.data;
-    (category as any).productsMeta = productsResult.meta;
+    await this.attachAssignedProductIds(category, productFilter);
     await this.attachAttributesToCategories([category]);
     await this.attachSpecificationsToCategories([category]);
 
     return category;
+  }
+
+  /**
+   * Attach assigned product IDs (and optional first page of products when the
+   * client explicitly requests pagination) without hydrating the full catalog.
+   */
+  private async attachAssignedProductIds(
+    category: Category,
+    productFilter?: FilterProductDto,
+  ): Promise<void> {
+    const idsResult = await this.productsService.findAll(
+      {
+        categoryId: undefined,
+        category_ids: [category.id],
+        page: 1,
+        limit: 100000,
+        idsOnly: true,
+      },
+      true,
+    );
+
+    (category as any).product_ids = idsResult.data.map(
+      (row: { id: number }) => row.id,
+    );
+    (category as any).productsMeta = idsResult.meta;
+    (category as any).products = [];
+
+    // Optional: return a product page only when the client asks for limit.
+    // (FilterProductDto defaults page=1, so do not key off page alone.)
+    if (productFilter?.limit != null) {
+      const productsResult = await this.productsService.findAll(
+        {
+          ...productFilter,
+          categoryId: undefined,
+          category_ids: [category.id],
+          limit: productFilter.limit,
+          page: productFilter.page ?? 1,
+        },
+        true,
+      );
+      (category as any).products = productsResult.data;
+      (category as any).productsMeta = productsResult.meta;
+    }
   }
 
   async update(
@@ -1803,7 +1831,8 @@ export class CategoriesService {
    */
   async getProducts(
     categoryId: number,
-  ): Promise<{ category: Category; products: Product[] }> {
+    productFilter?: FilterProductDto,
+  ): Promise<{ category: Category; products: Product[]; meta: any }> {
     const category = await this.categoriesRepository.findOne({
       where: { id: categoryId },
       relations: {
@@ -1815,29 +1844,21 @@ export class CategoriesService {
       throw new NotFoundException('Category not found');
     }
 
-    // Get products via junction table
-    const productCategories = await this.productCategoriesRepository.find({
-      where: { category_id: categoryId },
-      relations: {
-        product: {
-          vendor: true,
-
-          productMedia: {
-            media: true
-          }
-        }
+    const productsResult = await this.productsService.findAll(
+      {
+        ...productFilter,
+        categoryId: undefined,
+        category_ids: [categoryId],
+        page: productFilter?.page ?? 1,
+        limit: productFilter?.limit ?? 10,
       },
-    });
-
-    const products = productCategories
-      .map((pc) => pc.product)
-      .filter((p) => p && p.status === ProductStatus.ACTIVE);
-
-    hydrateProductsMedia(products, true);
+      true,
+    );
 
     return {
       category,
-      products,
+      products: productsResult.data,
+      meta: productsResult.meta,
     };
   }
 

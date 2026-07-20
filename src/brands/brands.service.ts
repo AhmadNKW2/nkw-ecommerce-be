@@ -216,15 +216,7 @@ export class BrandsService {
       throw new NotFoundException('Brand not found');
     }
 
-    const productsResult = await this.productsService.findAll({
-      ...productFilter,
-      brand_ids: [id],
-      brandId: undefined,
-      limit: productFilter?.limit ?? 100,
-    });
-    (brand as any).products = productsResult.data;
-    (brand as any).productsMeta = productsResult.meta;
-
+    await this.attachAssignedProductIds(brand, productFilter);
     return brand;
   }
 
@@ -239,16 +231,45 @@ export class BrandsService {
       throw new NotFoundException(`Brand with slug ${slug} not found`);
     }
 
-    const productsResult = await this.productsService.findAll({
-      ...productFilter,
-      brand_ids: [brand.id],
-      brandId: undefined,
-      limit: productFilter?.limit ?? 100,
-    });
-    (brand as any).products = productsResult.data;
-    (brand as any).productsMeta = productsResult.meta;
-
+    await this.attachAssignedProductIds(brand, productFilter);
     return brand;
+  }
+
+  private async attachAssignedProductIds(
+    brand: Brand,
+    productFilter?: FilterProductDto,
+  ): Promise<void> {
+    const idsResult = await this.productsService.findAll(
+      {
+        brand_ids: [brand.id],
+        brandId: undefined,
+        page: 1,
+        limit: 100000,
+        idsOnly: true,
+      },
+      true,
+    );
+
+    (brand as any).product_ids = idsResult.data.map(
+      (row: { id: number }) => row.id,
+    );
+    (brand as any).productsMeta = idsResult.meta;
+    (brand as any).products = [];
+
+    if (productFilter?.limit != null) {
+      const productsResult = await this.productsService.findAll(
+        {
+          ...productFilter,
+          brand_ids: [brand.id],
+          brandId: undefined,
+          limit: productFilter.limit,
+          page: productFilter.page ?? 1,
+        },
+        true,
+      );
+      (brand as any).products = productsResult.data;
+      (brand as any).productsMeta = productsResult.meta;
+    }
   }
 
   async update(
