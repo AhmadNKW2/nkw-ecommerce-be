@@ -565,6 +565,25 @@ describe('SearchService — relevance ranking (sort_by, query_by_weights, priori
     });
   });
 
+  it('does not re-run text search while hydrating Typesense result IDs', () => {
+    const { service } = makeService();
+
+    expect(
+      (service as any).buildHydrationFilterDto(
+        [101, 102, 103],
+        { q: 'HPE', in_stock: true, visible: true },
+        true,
+      ),
+    ).toMatchObject({
+      ids: [101, 102, 103],
+      search: undefined,
+      sku: undefined,
+      in_stock: true,
+      visible: true,
+      randomBrowse: false,
+    });
+  });
+
   it('sends is_out_of_stock:=true to Typesense for admin out-of-stock filter', async () => {
     const { service, typesenseSearch } = makeService();
 

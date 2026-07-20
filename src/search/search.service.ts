@@ -1671,9 +1671,14 @@ export class SearchService implements OnModuleInit {
 
   /**
    * Typesense chooses the candidate IDs, then admin search hydrates full product
-   * records from Postgres. Reapply the request filters during hydration so a
-   * briefly stale Typesense document cannot display a product that no longer
-   * matches its current stock, visibility, price, or other filter state.
+   * records from Postgres. Reapply structured filters (stock, visibility, price,
+   * etc.) during hydration so a briefly stale Typesense document cannot display
+   * a product that no longer matches those filters.
+   *
+   * Do NOT re-run text `search`/`sku` here: Typesense already selected these IDs
+   * with its own query fields and fuzzy matching. Re-applying Postgres ILIKE
+   * drops legitimate hits (e.g. brand/category matches) and makes the table
+   * show fewer rows than meta.total.
    */
   private buildHydrationFilterDto(
     productIds: number[],
@@ -1684,6 +1689,8 @@ export class SearchService implements OnModuleInit {
 
     return {
       ...filters,
+      search: undefined,
+      sku: undefined,
       page: 1,
       limit: Math.max(productIds.length, 1),
       ids: productIds,
