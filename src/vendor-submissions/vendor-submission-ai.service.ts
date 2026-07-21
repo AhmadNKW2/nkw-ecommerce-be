@@ -91,15 +91,14 @@ export class VendorSubmissionAiService {
   private getStage1Model(): string {
     return (
       process.env.VENDOR_SUBMISSION_STAGE1_MODEL?.trim() ||
-      process.env.OPENAI_MODEL_MINI?.trim() ||
-      'gpt-5.4-mini'
+      process.env.OPENAI_MODEL?.trim() ||
+      'gpt-5.6-terra'
     );
   }
 
   private getStage2Model(): string {
     return (
       process.env.VENDOR_SUBMISSION_STAGE2_MODEL?.trim() ||
-      process.env.PRODUCT_IMPORT_OPENAI_MODEL?.trim() ||
       process.env.OPENAI_MODEL?.trim() ||
       'gpt-5.6-terra'
     );

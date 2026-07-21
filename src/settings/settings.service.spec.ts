@@ -47,6 +47,9 @@ describe('SettingsService', () => {
     set: jest.Mock;
     del: jest.Mock;
   };
+  let productsService: {
+    syncProductsToTypesense: jest.Mock;
+  };
   let dataSource: {
     createQueryRunner: jest.Mock;
     transaction: jest.Mock;
@@ -100,6 +103,10 @@ describe('SettingsService', () => {
       del: jest.fn().mockResolvedValue(undefined),
     };
 
+    productsService = {
+      syncProductsToTypesense: jest.fn().mockResolvedValue(undefined),
+    };
+
     transactionProductRepository = {
       createQueryBuilder: jest.fn(),
       update: jest.fn().mockResolvedValue(undefined),
@@ -122,6 +129,7 @@ describe('SettingsService', () => {
       sitePopupSettingsRepository as never,
       dataSource as unknown as DataSource,
       cacheManager as never,
+      productsService as never,
     );
   });
 
@@ -277,6 +285,9 @@ describe('SettingsService', () => {
       message:
         'Existing product prices were repriced successfully from their current catalog before-sale and after-sale values.',
     });
+    expect(productsService.syncProductsToTypesense).toHaveBeenCalledWith([
+      10, 11,
+    ]);
   });
 
   it('applies the rule selected by original price to price and sale price', async () => {

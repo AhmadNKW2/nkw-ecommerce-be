@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Product } from '../products/entities/product.entity';
 import { Category } from '../categories/entities/category.entity';
 import { Brand } from '../brands/entities/brand.entity';
 import { Vendor } from '../vendors/entities/vendor.entity';
+import { ProductsModule } from '../products/products.module';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
 import { ProductFieldToggles } from './entities/product-field-toggles.entity';
 import { SitePopupSettings } from './entities/site-popup-settings.entity';
@@ -24,6 +25,7 @@ import { SeoGenerationService } from './seo-generation.service';
       Brand,
       Vendor,
     ]),
+    forwardRef(() => ProductsModule),
   ],
   controllers: [SettingsController],
   providers: [SettingsService, SeoGenerationService],

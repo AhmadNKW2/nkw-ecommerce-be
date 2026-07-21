@@ -1282,9 +1282,8 @@ export class SeoGenerationService {
 
     const model =
       process.env.SEO_OPENAI_MODEL?.trim() ||
-      process.env.PRODUCT_IMPORT_OPENAI_MODEL?.trim() ||
       process.env.OPENAI_MODEL?.trim() ||
-      'gpt-4.1-mini';
+      'gpt-5.6-terra';
 
     const systemPrompt = searchInternet
       ? this.buildResearchSystemPrompt(item.type)

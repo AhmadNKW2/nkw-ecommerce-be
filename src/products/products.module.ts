@@ -55,7 +55,7 @@ import { SettingsModule } from '../settings/settings.module';
     AttributesModule,
     SpecificationsModule,
     MediaModule,
-    SettingsModule,
+    forwardRef(() => SettingsModule),
     forwardRef(() => BrandsModule),
     forwardRef(() => SearchModule),
   ],

@@ -1,5 +1,5 @@
 {
-  "total": 176,
+  "total": 159,
   "products": [
     {
       "product_id": 1304,
@@ -587,36 +587,6 @@
       ]
     },
     {
-      "product_id": 1343,
-      "categories": [
-        {
-          "category_id": 11,
-          "name_en": "Mice",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 1344,
-      "categories": [
-        {
-          "category_id": 11,
-          "name_en": "Mice",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 1345,
       "categories": [
         {
@@ -642,11 +612,6 @@
         {
           "category_id": 13,
           "name_en": "Mousepads",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -698,11 +663,6 @@
           "category_id": 13,
           "name_en": "Mousepads",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -752,21 +712,6 @@
       ]
     },
     {
-      "product_id": 1392,
-      "categories": [
-        {
-          "category_id": 63,
-          "name_en": "Laptops",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 1411,
       "categories": [
         {
@@ -787,11 +732,6 @@
         {
           "category_id": 13,
           "name_en": "Mousepads",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -883,11 +823,6 @@
           "category_id": 13,
           "name_en": "Mousepads",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -903,11 +838,6 @@
           "category_id": 13,
           "name_en": "Mousepads",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -922,11 +852,6 @@
         {
           "category_id": 13,
           "name_en": "Mousepads",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -963,11 +888,6 @@
           "category_id": 18,
           "name_en": "Headsets Accessories",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -982,11 +902,6 @@
         {
           "category_id": 18,
           "name_en": "Headsets Accessories",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1018,11 +933,6 @@
           "category_id": 18,
           "name_en": "Headsets Accessories",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -1037,11 +947,6 @@
         {
           "category_id": 18,
           "name_en": "Headsets Accessories",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1058,11 +963,6 @@
           "category_id": 18,
           "name_en": "Headsets Accessories",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -1077,11 +977,6 @@
         {
           "category_id": 18,
           "name_en": "Headsets Accessories",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1098,11 +993,6 @@
           "category_id": 18,
           "name_en": "Headsets Accessories",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -1118,11 +1008,6 @@
           "category_id": 85,
           "name_en": "Gaming Desks",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -1137,11 +1022,6 @@
         {
           "category_id": 85,
           "name_en": "Gaming Desks",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1207,21 +1087,6 @@
       ]
     },
     {
-      "product_id": 1607,
-      "categories": [
-        {
-          "category_id": 80,
-          "name_en": "Gaming Controllers",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 1654,
       "categories": [
         {
@@ -1237,21 +1102,6 @@
       ]
     },
     {
-      "product_id": 1656,
-      "categories": [
-        {
-          "category_id": 11,
-          "name_en": "Mice",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 1659,
       "categories": [
         {
@@ -1262,11 +1112,6 @@
         {
           "category_id": 85,
           "name_en": "Gaming Desks",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1317,36 +1162,6 @@
       ]
     },
     {
-      "product_id": 1681,
-      "categories": [
-        {
-          "category_id": 14,
-          "name_en": "Led Strip Lights",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 1694,
-      "categories": [
-        {
-          "category_id": 11,
-          "name_en": "Mice",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 1696,
       "categories": [
         {
@@ -1357,11 +1172,6 @@
         {
           "category_id": 85,
           "name_en": "Gaming Desks",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1407,21 +1217,6 @@
         {
           "category_id": 46,
           "name_en": "Motherboards",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 1719,
-      "categories": [
-        {
-          "category_id": 14,
-          "name_en": "Led Strip Lights",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1497,21 +1292,6 @@
         {
           "category_id": 46,
           "name_en": "Motherboards",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 1750,
-      "categories": [
-        {
-          "category_id": 14,
-          "name_en": "Led Strip Lights",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -1997,36 +1777,6 @@
       ]
     },
     {
-      "product_id": 2051,
-      "categories": [
-        {
-          "category_id": 8,
-          "name_en": "Cable & Converters",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 2054,
-      "categories": [
-        {
-          "category_id": 8,
-          "name_en": "Cable & Converters",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 2055,
       "categories": [
         {
@@ -2102,21 +1852,6 @@
       ]
     },
     {
-      "product_id": 2112,
-      "categories": [
-        {
-          "category_id": 8,
-          "name_en": "Cable & Converters",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 2144,
       "categories": [
         {
@@ -2157,36 +1892,6 @@
         {
           "category_id": 40,
           "name_en": "Network Cables",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 2212,
-      "categories": [
-        {
-          "category_id": 23,
-          "name_en": "Laptop Bags",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 2259,
-      "categories": [
-        {
-          "category_id": 72,
-          "name_en": "Tablets",
-          "type": "parent"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]
@@ -2512,36 +2217,6 @@
       ]
     },
     {
-      "product_id": 4675,
-      "categories": [
-        {
-          "category_id": 14,
-          "name_en": "Led Strip Lights",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 4676,
-      "categories": [
-        {
-          "category_id": 14,
-          "name_en": "Led Strip Lights",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
       "product_id": 4682,
       "categories": [
         {
@@ -2718,11 +2393,6 @@
           "category_id": 84,
           "name_en": "Office Chairs",
           "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
-          "type": "leaf"
         }
       ]
     },
@@ -2737,21 +2407,6 @@
         {
           "category_id": 84,
           "name_en": "Office Chairs",
-          "type": "leaf"
-        }
-      ]
-    },
-    {
-      "product_id": 4874,
-      "categories": [
-        {
-          "category_id": 80,
-          "name_en": "Gaming Controllers",
-          "type": "leaf"
-        },
-        {
-          "category_id": 35,
-          "name_en": "Others",
           "type": "leaf"
         }
       ]

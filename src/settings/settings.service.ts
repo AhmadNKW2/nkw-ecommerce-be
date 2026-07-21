@@ -1,6 +1,7 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   ConflictException,
+  forwardRef,
   Inject,
   Injectable,
   Logger,
@@ -18,6 +19,7 @@ import {
   ProductDimensionUnit,
   ProductWeightUnit,
 } from '../products/entities/product.entity';
+import { ProductsService } from '../products/products.service';
 import { CreateProductPriceRuleDto } from './dto/create-product-price-rule.dto';
 import { UpdateProductPriceRuleDto } from './dto/update-product-price-rule.dto';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
@@ -96,6 +98,8 @@ export class SettingsService implements OnModuleInit {
     private readonly sitePopupSettingsRepository: Repository<SitePopupSettings>,
     private readonly dataSource: DataSource,
     @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+    @Inject(forwardRef(() => ProductsService))
+    private readonly productsService: ProductsService,
   ) {}
 
   async onModuleInit() {
@@ -682,8 +686,11 @@ export class SettingsService implements OnModuleInit {
     job.total = products.length;
     job.progress = 0;
 
+    const changedProductIds: number[] = [];
+
     for (const product of products) {
       if (job.cancellationRequested || job.status === 'cancelled') {
+        await this.syncRepricedProductsToTypesense(changedProductIds);
         job.status = 'cancelled';
         job.finishedAt = new Date();
         return;
@@ -742,13 +749,29 @@ export class SettingsService implements OnModuleInit {
         sale_price: nextPricing.salePrice,
       });
 
+      changedProductIds.push(product.id);
       job.changedCount += 1;
       job.progress += 1;
     }
 
+    await this.syncRepricedProductsToTypesense(changedProductIds);
+
     job.currentProductId = null;
     job.status = 'done';
     job.finishedAt = new Date();
+  }
+
+  private async syncRepricedProductsToTypesense(
+    productIds: number[],
+  ): Promise<void> {
+    if (productIds.length === 0) {
+      return;
+    }
+
+    this.logger.log(
+      `Syncing ${productIds.length} repriced product(s) to Typesense`,
+    );
+    await this.productsService.syncProductsToTypesense(productIds);
   }
 
   /** @deprecated Prefer startProductPricingJob('reprice') for async progress. */
@@ -777,45 +800,52 @@ export class SettingsService implements OnModuleInit {
   async repriceExistingProductsByFixedPercentage() {
     await this.ensureSchemaReady();
 
-    const updatedCount = await this.dataSource.transaction(async (manager) => {
-      const productRepository = manager.getRepository(Product);
-      const products = await productRepository
-        .createQueryBuilder('product')
-        .select([
-          'product.id',
-          'product.price',
-          'product.sale_price',
-          'product.original_vendor_price',
-          'product.original_vendor_sale_price',
-        ])
-        .getMany();
+    const updatedProductIds = await this.dataSource.transaction(
+      async (manager) => {
+        const productRepository = manager.getRepository(Product);
+        const products = await productRepository
+          .createQueryBuilder('product')
+          .select([
+            'product.id',
+            'product.price',
+            'product.sale_price',
+            'product.original_vendor_price',
+            'product.original_vendor_sale_price',
+          ])
+          .getMany();
 
-      for (const product of products) {
-        const { originalVendorPrice, originalVendorSalePrice } =
-          this.resolveVendorOriginalPricesFromCurrentCatalog({
-            price: product.price ?? null,
-            salePrice: product.sale_price ?? null,
+        const productIds: number[] = [];
+
+        for (const product of products) {
+          const { originalVendorPrice, originalVendorSalePrice } =
+            this.resolveVendorOriginalPricesFromCurrentCatalog({
+              price: product.price ?? null,
+              salePrice: product.sale_price ?? null,
+            });
+          const nextPricing = await this.calculateManagedProductPrices({
+            originalVendorPrice,
+            originalVendorSalePrice,
+            fixedPercentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
+            fixedAdjustmentType: 'decrease',
           });
-        const nextPricing = await this.calculateManagedProductPrices({
-          originalVendorPrice,
-          originalVendorSalePrice,
-          fixedPercentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
-          fixedAdjustmentType: 'decrease',
-        });
 
-        await productRepository.update(product.id, {
-          original_vendor_price: originalVendorPrice,
-          original_vendor_sale_price: originalVendorSalePrice,
-          price: nextPricing.price,
-          sale_price: nextPricing.salePrice,
-        });
-      }
+          await productRepository.update(product.id, {
+            original_vendor_price: originalVendorPrice,
+            original_vendor_sale_price: originalVendorSalePrice,
+            price: nextPricing.price,
+            sale_price: nextPricing.salePrice,
+          });
+          productIds.push(product.id);
+        }
 
-      return products.length;
-    });
+        return productIds;
+      },
+    );
+
+    await this.syncRepricedProductsToTypesense(updatedProductIds);
 
     return {
-      updated_count: updatedCount,
+      updated_count: updatedProductIds.length,
       percentage: MIN_PRODUCT_PRICE_RULE_PERCENTAGE,
       message:
         'Existing product prices were repriced successfully from their current catalog before-sale and after-sale values.',

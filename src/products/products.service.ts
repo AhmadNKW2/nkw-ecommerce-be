@@ -1,4 +1,6 @@
 import {
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
   BadRequestException,
@@ -211,6 +213,7 @@ export class ProductsService {
     private cartItemsRepository: Repository<CartItem>,
     private dataSource: DataSource,
     private readonly tagsService: TagsService,
+    @Inject(forwardRef(() => SettingsService))
     private readonly settingsService: SettingsService,
     private readonly typesenseService: TypesenseService,
     private readonly searchCacheService: SearchCacheService,
