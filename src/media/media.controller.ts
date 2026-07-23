@@ -41,7 +41,6 @@ export class MediaController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(
     UserRole.ADMIN,
-    UserRole.CATALOG_MANAGER,
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )
@@ -72,7 +71,6 @@ export class MediaController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(
     UserRole.ADMIN,
-    UserRole.CATALOG_MANAGER,
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )
@@ -129,7 +127,6 @@ export class MediaController {
   @UseGuards(AuthGuard('jwt'), RolesGuard)
   @Roles(
     UserRole.ADMIN,
-    UserRole.CATALOG_MANAGER,
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )

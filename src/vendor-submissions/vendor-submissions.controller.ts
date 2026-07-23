@@ -27,7 +27,6 @@ import { VendorSubmissionsService } from './vendor-submissions.service';
 const SUBMISSION_ROLES = [
   UserRole.ADMIN,
   UserRole.CONSTANT_TOKEN_ADMIN,
-  UserRole.CATALOG_MANAGER,
   UserRole.VENDOR_ADMIN,
   UserRole.STORE_ADMIN,
 ] as const;
@@ -90,7 +89,7 @@ export class VendorSubmissionsController {
   }
 
   @Post(':id/run-ai')
-  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN)
   @RequireAdminAccess('products')
   @ApiOperation({
     summary: 'Re-run Stage 2 enrichment after category specs/attributes are set',
@@ -101,7 +100,7 @@ export class VendorSubmissionsController {
   }
 
   @Post(':id/materialize')
-  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN)
   @RequireAdminAccess('products')
   @ApiOperation({ summary: 'Create a real product from a ready submission' })
   materialize(@Param('id', ParseIntPipe) id: number, @Req() req: any) {
@@ -110,7 +109,7 @@ export class VendorSubmissionsController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN)
   @RequireAdminAccess('products')
   @ApiOperation({
     summary: 'Permanently delete a vendor product submission and related requests',

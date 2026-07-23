@@ -5,7 +5,6 @@ import {
   AdminAccess,
   AdminAccessKey,
   DEFAULT_ADMIN_ACCESS,
-  DEFAULT_CATALOG_MANAGER_ACCESS,
   DEFAULT_VENDOR_PORTAL_ACCESS,
 } from '../admin-access.constants';
 
@@ -17,7 +16,6 @@ type UserWithAccess = {
 const ADMIN_STAFF_ROLES: ReadonlySet<UserRole> = new Set([
   UserRole.ADMIN,
   UserRole.CONSTANT_TOKEN_ADMIN,
-  UserRole.CATALOG_MANAGER,
   UserRole.VENDOR_ADMIN,
   UserRole.STORE_ADMIN,
 ]);
@@ -30,10 +28,6 @@ export function isAdminStaffRole(role: UserRole | string | undefined | null): bo
 }
 
 function getDefaultAccessForRole(role: UserRole): AdminAccess {
-  if (role === UserRole.CATALOG_MANAGER) {
-    return { ...DEFAULT_CATALOG_MANAGER_ACCESS };
-  }
-
   if (role === UserRole.VENDOR_ADMIN || role === UserRole.STORE_ADMIN) {
     return { ...DEFAULT_VENDOR_PORTAL_ACCESS };
   }
@@ -88,19 +82,11 @@ export function hasAdminAccess(
 export function assertAdminAccess(
   user: UserWithAccess | null | undefined,
   key: AdminAccessKey,
-  options?: { catalogManagerBypass?: boolean },
 ): void {
   if (!user) {
     throw new ForbiddenException(
       "You don't have permission to perform this action",
     );
-  }
-
-  if (
-    options?.catalogManagerBypass &&
-    user.role === UserRole.CATALOG_MANAGER
-  ) {
-    return;
   }
 
   if (!hasAdminAccess(user, key)) {

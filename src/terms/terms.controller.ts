@@ -24,7 +24,7 @@ import { Observable } from 'rxjs';
 
 @Controller('terms')
 @UseGuards(AuthGuard('jwt'), RolesGuard)
-@Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+@Roles(UserRole.ADMIN)
 export class TermsController {
   constructor(private readonly termsService: TermsService) {}
 
@@ -55,51 +55,51 @@ export class TermsController {
   }
 
   @Post('generate')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   startTermsGeneration(@Body() dto: GenerateTermsDto) {
     return this.termsService.startTermsGeneration(dto);
   }
 
   @Post('clear-concepts')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   clearAllConcepts() {
     return this.termsService.clearAllConcepts();
   }
 
   // Backward compatibility with previous frontend route.
   @Post('clear')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   clearAllTermsLegacy() {
     return this.termsService.clearAllConcepts();
   }
 
   @Get('jobs/:jobId')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   getTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.getTermsGenerationJob(jobId);
   }
 
   @Sse('jobs/:jobId/stream')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   streamTermsGenerationJob(@Param('jobId') jobId: string): Observable<MessageEvent> {
     this.termsService.getTermsGenerationJob(jobId);
     return this.termsService.streamTermsGenerationJob(jobId);
   }
 
   @Post('jobs/:jobId/cancel')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   cancelTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.cancelTermsGenerationJob(jobId);
   }
 
   @Post('jobs/:jobId/pause')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   pauseTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.pauseTermsGenerationJob(jobId);
   }
 
   @Post('jobs/:jobId/resume')
-  @RequireAdminAccess('settings', { catalogManagerBypass: true })
+  @RequireAdminAccess('concepts')
   resumeTermsGenerationJob(@Param('jobId') jobId: string) {
     return this.termsService.resumeTermsGenerationJob(jobId);
   }

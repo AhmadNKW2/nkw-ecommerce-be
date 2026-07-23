@@ -14,7 +14,7 @@ export class UserSummaryResponseDto {
   @ApiProperty({ example: 'Khalid' })
   lastName: string;
 
-  @ApiProperty({ enum: UserRole, example: UserRole.CATALOG_MANAGER })
+  @ApiProperty({ enum: UserRole, example: UserRole.ADMIN })
   role: UserRole;
 
   @ApiProperty({ example: true })

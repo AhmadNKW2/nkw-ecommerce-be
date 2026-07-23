@@ -7,7 +7,10 @@ import {
   isAdminStaffRole,
   resolveAdminAccess,
 } from './admin-access.util';
-import { DEFAULT_ADMIN_ACCESS } from '../admin-access.constants';
+import {
+  CATALOG_PRESET_ACCESS,
+  DEFAULT_ADMIN_ACCESS,
+} from '../admin-access.constants';
 
 describe('admin-access.util', () => {
   it('resolves explicit adminAccess over role defaults', () => {
@@ -38,15 +41,16 @@ describe('admin-access.util', () => {
     expect(() => assertAdminAccess(user, 'products')).not.toThrow();
   });
 
-  it('allows catalog manager bypass when requested', () => {
+  it('keeps catalog preset restrictions for admin with catalog access', () => {
     const user = {
-      role: UserRole.CATALOG_MANAGER,
-      adminAccess: null,
+      role: UserRole.ADMIN,
+      adminAccess: { ...CATALOG_PRESET_ACCESS },
     };
 
-    expect(() =>
-      assertAdminAccess(user, 'settings', { catalogManagerBypass: true }),
-    ).not.toThrow();
+    expect(hasAdminAccess(user, 'concepts')).toBe(true);
+    expect(hasAdminAccess(user, 'settings')).toBe(false);
+    expect(hasAdminAccess(user, 'admins')).toBe(false);
+    expect(() => assertAdminAccess(user, 'concepts')).not.toThrow();
     expect(() => assertAdminAccess(user, 'settings')).toThrow(ForbiddenException);
   });
 
@@ -66,7 +70,7 @@ describe('admin-access.util', () => {
     expect(() =>
       assertUsersManagementAccess(customersOnly, [UserRole.ADMIN]),
     ).toThrow(ForbiddenException);
-    expect(isAdminStaffRole(UserRole.CATALOG_MANAGER)).toBe(true);
+    expect(isAdminStaffRole(UserRole.ADMIN)).toBe(true);
     expect(isAdminStaffRole(UserRole.USER)).toBe(false);
   });
 });

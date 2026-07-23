@@ -56,9 +56,7 @@ import { R2StorageService } from '../common/services/r2-storage.service';
 import { ApiErrorResponseDto } from '../common/swagger/api-response.dto';
 
 const CATEGORY_URL_MANAGER_ROLES = [
-  UserRole.ADMIN,
-  UserRole.CATALOG_MANAGER,
-  UserRole.CONSTANT_TOKEN_ADMIN,
+  UserRole.ADMIN,  UserRole.CONSTANT_TOKEN_ADMIN,
 ] as const;
 
 @ApiTags('Categories')
@@ -82,7 +80,7 @@ export class CategoriesController {
   // Admin only routes
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   @UseInterceptors(
     FileInterceptor('image', {
@@ -114,7 +112,7 @@ export class CategoriesController {
 
   @Patch(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   @UseInterceptors(
     FileInterceptor('image', {
@@ -153,7 +151,7 @@ export class CategoriesController {
   // Get archived categories (trash view) - includes archived products and subcategories
   @Get('archive/list')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('archived')
   findArchived(@Body() filterDto?: FilterCategoryDto) {
     return this.categoriesService.findArchived(filterDto);
@@ -295,7 +293,7 @@ export class CategoriesController {
 
   @Get(':id/vendor-categories')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   @ApiOperation({
     summary:
@@ -343,7 +341,7 @@ export class CategoriesController {
   // Archive a category (soft delete)
   @Post(':id/archive')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   archive(@Param('id') id: number, @Request() req) {
     return this.categoriesService.archive(id, req.user.id);
@@ -352,7 +350,7 @@ export class CategoriesController {
   // Restore a category from archive
   @Post(':id/restore')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('archived')
   restore(@Param('id') id: number, @Body() restoreDto: RestoreCategoryDto) {
     return this.categoriesService.restore(id, restoreDto);
@@ -373,7 +371,7 @@ export class CategoriesController {
   // Reorder categories
   @Put('reorder')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   reorder(@Body() dto: ReorderCategoriesDto) {
     return this.categoriesService.reorder(dto.categories);
@@ -384,7 +382,7 @@ export class CategoriesController {
   // Assign products to this category
   @Post(':id/products')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   assignProducts(
     @Param('id') id: number,
@@ -396,7 +394,7 @@ export class CategoriesController {
   // Remove products from this category
   @Delete(':id/products')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('categories')
   removeProducts(
     @Param('id') id: number,

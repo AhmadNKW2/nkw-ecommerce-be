@@ -55,7 +55,7 @@ export class FilterUserDto {
   @ApiPropertyOptional({
     enum: UserRole,
     isArray: true,
-    example: [UserRole.ADMIN, UserRole.CATALOG_MANAGER],
+    example: [UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN],
     description: 'Filter users by one or more roles.',
   })
   @IsOptional()

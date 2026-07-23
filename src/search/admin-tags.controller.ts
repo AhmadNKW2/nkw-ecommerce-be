@@ -24,7 +24,7 @@ class CreateTagDto {
 }
 
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+@Roles(UserRole.ADMIN)
 @RequireAdminAccess('settings')
 @Controller('admin/tags')
 export class AdminTagsController {

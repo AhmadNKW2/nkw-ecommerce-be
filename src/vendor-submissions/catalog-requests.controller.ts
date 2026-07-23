@@ -24,7 +24,7 @@ import {
 @ApiTags('catalog-requests')
 @Controller('catalog-requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN, UserRole.CATALOG_MANAGER)
+@Roles(UserRole.ADMIN, UserRole.CONSTANT_TOKEN_ADMIN)
 @RequireAdminAccess('catalog_requests')
 export class CatalogRequestsController {
   constructor(

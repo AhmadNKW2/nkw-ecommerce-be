@@ -28,7 +28,7 @@ export class SpecificationsController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('specifications')
   create(@Body() createSpecificationDto: CreateSpecificationDto) {
     return this.specificationsService.create(createSpecificationDto);
@@ -45,7 +45,7 @@ export class SpecificationsController {
 
   @Put('reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('specifications')
   reorderSpecifications(@Body() reorderDto: ReorderSpecificationsDto) {
     return this.specificationsService.reorderSpecifications(reorderDto);
@@ -58,7 +58,7 @@ export class SpecificationsController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('specifications')
   update(
     @Param('id') id: string,
@@ -77,7 +77,7 @@ export class SpecificationsController {
 
   @Post(':id/values')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('specifications')
   addValue(
     @Param('id') id: string,
@@ -94,7 +94,7 @@ export class SpecificationsController {
 
   @Put(':id/values/reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('specifications')
   reorderSpecificationValues(
     @Param('id') id: string,
@@ -105,7 +105,7 @@ export class SpecificationsController {
 
   @Patch('values/:valueId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('specifications')
   updateValue(
     @Param('valueId') valueId: string,

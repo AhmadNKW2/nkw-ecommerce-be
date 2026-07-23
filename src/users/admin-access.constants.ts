@@ -76,7 +76,8 @@ export const DEFAULT_ADMIN_ACCESS: AdminAccess = {
   ...ALL_PRODUCT_FORM_STEPS_ON,
 };
 
-export const DEFAULT_CATALOG_MANAGER_ACCESS: AdminAccess = {
+/** Permission preset for restricted catalog staff (role remains admin). */
+export const CATALOG_PRESET_ACCESS: AdminAccess = {
   products: true,
   product_pricing: false,
   categories: true,

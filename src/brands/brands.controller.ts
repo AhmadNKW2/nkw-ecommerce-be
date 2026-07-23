@@ -42,7 +42,7 @@ export class BrandsController {
 
   @Post()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('brands')
   @UseInterceptors(
     FileInterceptor('logo', {
@@ -74,7 +74,7 @@ export class BrandsController {
 
   @Get('archive/list')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('archived')
   findArchived() {
     return this.brandsService.findArchived();
@@ -110,7 +110,7 @@ export class BrandsController {
 
   @Patch(':id')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('brands')
   @UseInterceptors(
     FileInterceptor('logo', {
@@ -138,7 +138,7 @@ export class BrandsController {
 
   @Post(':id/archive')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('brands')
   archive(@Param('id') id: string, @Req() req: any) {
     return this.brandsService.archive(+id, req.user.id);
@@ -146,7 +146,7 @@ export class BrandsController {
 
   @Post(':id/restore')
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('archived')
   restore(@Param('id') id: string, @Body() restoreDto?: RestoreBrandDto) {
     return this.brandsService.restore(+id, restoreDto);

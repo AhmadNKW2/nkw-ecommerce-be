@@ -80,14 +80,14 @@ export class UsersController {
           product_ids: [101, 205],
         },
       },
-      catalog_manager: {
-        summary: 'Catalog manager',
+      catalog_preset: {
+        summary: 'Admin with catalog permission preset',
         value: {
           email: 'catalog@example.com',
           firstName: 'Maha',
           lastName: 'Salem',
           password: 'StrongPass123',
-          role: UserRole.CATALOG_MANAGER,
+          role: UserRole.ADMIN,
           image: 'https://cdn.example.com/users/catalog-manager.jpg',
         },
       },
@@ -114,10 +114,10 @@ export class UsersController {
     return this.usersService.sanitizeUser(user);
   }
 
-  // Get all users with filtering (Admin & Catalog Manager)
+  // Get all users with filtering (staff with admins/customers access)
   @Get()
   @UseGuards(AuthGuard('jwt'), RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'List users' })
   @ApiWrappedResponse({
     status: 200,
@@ -171,7 +171,7 @@ export class UsersController {
       activate_user: {
         summary: 'Activate and promote a user',
         value: {
-          role: UserRole.CATALOG_MANAGER,
+          role: UserRole.ADMIN,
           isActive: true,
           phone: '+966511111111',
         },

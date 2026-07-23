@@ -3,7 +3,6 @@ import { UserRole } from '../decorators/roles.decorator';
 export function isCatalogAdminUser(user?: { role?: string } | null): boolean {
   return (
     user?.role === UserRole.ADMIN ||
-    user?.role === UserRole.CATALOG_MANAGER ||
     user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
     user?.role === UserRole.VENDOR_ADMIN ||
     user?.role === UserRole.STORE_ADMIN ||

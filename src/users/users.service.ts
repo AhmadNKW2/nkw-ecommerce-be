@@ -26,6 +26,7 @@ import {
   resolveAdminAccess,
 } from './utils/admin-access.util';
 import type { AdminAccess } from './admin-access.constants';
+import { CATALOG_PRESET_ACCESS } from './admin-access.constants';
 
 type SanitizedUser = Omit<User, 'password'> & {
   adminAccess: AdminAccess;
@@ -54,6 +55,7 @@ export class UsersService implements OnModuleInit {
     await this.ensureConstantAccessTokenColumn();
     await this.ensureVendorIdColumn();
     await this.ensureUserRoleEnumValues();
+    await this.migrateCatalogManagerRolesToAdmin();
   }
 
   private async ensureUserRoleEnumValues(): Promise<void> {
@@ -172,13 +174,44 @@ export class UsersService implements OnModuleInit {
     }
   }
 
+  /**
+   * DB cleanup: anyone still stored as catalog_manager becomes admin,
+   * keeping the same effective permissions they already had
+   * (explicit admin_access if set, otherwise the old catalog defaults).
+   */
+  private async migrateCatalogManagerRolesToAdmin(): Promise<void> {
+    try {
+      const rows: Array<{ id: number; admin_access: unknown }> =
+        await this.dataSource.query(
+          `SELECT id, admin_access FROM users WHERE role::text = 'catalog_manager'`,
+        );
+
+      if (!rows.length) {
+        return;
+      }
+
+      for (const row of rows) {
+        // Same effective access they had as catalog_manager before the role was removed.
+        const access =
+          normalizeAdminAccess(row.admin_access, CATALOG_PRESET_ACCESS) ?? {
+            ...CATALOG_PRESET_ACCESS,
+          };
+        await this.dataSource.query(
+          `UPDATE users SET role = 'admin', admin_access = $1::jsonb WHERE id = $2`,
+          [JSON.stringify(access), row.id],
+        );
+      }
+    } catch {
+      // Role column / enum may differ in some environments; ignore quietly.
+    }
+  }
+
   private buildStoredAdminAccess(
     role: UserRole,
     adminAccess?: Partial<AdminAccess> | null,
   ): AdminAccess | null {
     if (
       role !== UserRole.ADMIN &&
-      role !== UserRole.CATALOG_MANAGER &&
       role !== UserRole.CONSTANT_TOKEN_ADMIN &&
       role !== UserRole.VENDOR_ADMIN &&
       role !== UserRole.STORE_ADMIN

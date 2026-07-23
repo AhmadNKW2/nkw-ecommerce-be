@@ -48,7 +48,6 @@ export class AnalyticsController {
   @Roles(
     UserRole.ADMIN,
     UserRole.CONSTANT_TOKEN_ADMIN,
-    UserRole.CATALOG_MANAGER,
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )
@@ -64,7 +63,6 @@ export class AnalyticsController {
   @Roles(
     UserRole.ADMIN,
     UserRole.CONSTANT_TOKEN_ADMIN,
-    UserRole.CATALOG_MANAGER,
     UserRole.VENDOR_ADMIN,
     UserRole.STORE_ADMIN,
   )

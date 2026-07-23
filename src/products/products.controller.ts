@@ -69,7 +69,6 @@ class AddProductTagDto {
 
 const PRODUCTS_MANAGER_ROLES = [
   UserRole.ADMIN,
-  UserRole.CATALOG_MANAGER,
   UserRole.CONSTANT_TOKEN_ADMIN,
   UserRole.VENDOR_ADMIN,
   UserRole.STORE_ADMIN,
@@ -86,7 +85,6 @@ function assertNotVendorPortalAdminTools(user?: { role?: string } | null) {
 function isProductsAdminUser(user?: { role?: string } | null): boolean {
   return (
     user?.role === UserRole.ADMIN ||
-    user?.role === UserRole.CATALOG_MANAGER ||
     user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
     user?.role === 'products_api' ||
     isSimplifiedProductCreator(user)
@@ -586,7 +584,6 @@ export class ProductsController {
     assertNotVendorPortalAdminTools(req.user);
     const isAdmin =
       req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
       req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
       req.user?.role === 'products_api';
     return this.productsService.findOneByReferenceLink(
@@ -634,7 +631,6 @@ export class ProductsController {
   findOneBySlug(@Param('slug') slug: string, @Req() req: any) {
     const isAdmin =
       req.user?.role === UserRole.ADMIN ||
-      req.user?.role === UserRole.CATALOG_MANAGER ||
       req.user?.role === UserRole.CONSTANT_TOKEN_ADMIN ||
       req.user?.role === 'products_api';
     return this.productsService.findOneBySlug(slug, isAdmin);

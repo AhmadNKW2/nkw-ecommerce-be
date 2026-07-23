@@ -66,7 +66,7 @@ export class VendorsController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   @UseInterceptors(
     FileInterceptor('logo', {
@@ -98,7 +98,7 @@ export class VendorsController {
 
   @Get('archive/list')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('archived')
   findArchived() {
     return this.vendorsService.findArchived();
@@ -106,7 +106,7 @@ export class VendorsController {
 
   @Post(':id/categories')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   createCategory(
     @Param('id', ParseIntPipe) id: number,
@@ -225,7 +225,7 @@ export class VendorsController {
 
   @Put(':id/categories/tree')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   @ApiExtraModels(ReplaceVendorCategoriesTreeDto)
   @ApiOperation({
@@ -373,7 +373,7 @@ export class VendorsController {
 
   @Patch(':id/categories/:categoryId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   updateCategory(
     @Param('id', ParseIntPipe) id: number,
@@ -389,7 +389,7 @@ export class VendorsController {
 
   @Delete(':id/categories/:categoryId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   removeCategory(
     @Param('id', ParseIntPipe) id: number,
@@ -428,7 +428,7 @@ export class VendorsController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   @UseInterceptors(
     FileInterceptor('logo', {
@@ -458,7 +458,7 @@ export class VendorsController {
 
   @Post(':id/archive')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   archive(@Param('id') id: string, @Req() req: any) {
     return this.vendorsService.archive(+id, req.user.id);
@@ -466,7 +466,7 @@ export class VendorsController {
 
   @Post(':id/restore')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('archived')
   restore(@Param('id') id: string, @Body() restoreDto?: RestoreVendorDto) {
     return this.vendorsService.restore(+id, restoreDto);
@@ -485,7 +485,7 @@ export class VendorsController {
 
   @Put('reorder')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   reorder(@Body() dto: ReorderVendorsDto) {
     return this.vendorsService.reorder(dto);
@@ -496,7 +496,7 @@ export class VendorsController {
   // Assign products to this vendor
   @Post(':id/products')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   assignProducts(
     @Param('id') id: string,
@@ -508,7 +508,7 @@ export class VendorsController {
   // Remove products from this vendor
   @Delete(':id/products')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRole.ADMIN, UserRole.CATALOG_MANAGER)
+  @Roles(UserRole.ADMIN)
   @RequireAdminAccess('vendors')
   removeProducts(
     @Param('id') id: string,

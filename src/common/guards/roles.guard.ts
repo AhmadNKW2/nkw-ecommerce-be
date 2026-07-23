@@ -30,7 +30,6 @@ export class RolesGuard implements CanActivate {
       role === 'products_api'
     ) {
       effectiveRoles.add(UserRole.ADMIN);
-      effectiveRoles.add(UserRole.CATALOG_MANAGER);
       effectiveRoles.add(UserRole.CONSTANT_TOKEN_ADMIN);
     }
 
@@ -65,13 +64,6 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException(
         "You don't have permission to perform this action",
       );
-    }
-
-    if (
-      requirement.catalogManagerBypass &&
-      user.role === UserRole.CATALOG_MANAGER
-    ) {
-      return true;
     }
 
     if (!hasAdminAccess(user, requirement.key)) {

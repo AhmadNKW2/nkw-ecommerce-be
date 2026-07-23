@@ -9,7 +9,6 @@ import {
   ADMIN_ACCESS_KEY,
   AdminAccessRequirement,
 } from '../decorators/admin-access.decorator';
-import { UserRole } from '../decorators/roles.decorator';
 import { hasAdminAccess } from '../../users/utils/admin-access.util';
 
 @Injectable()
@@ -31,13 +30,6 @@ export class AdminAccessGuard implements CanActivate {
       throw new ForbiddenException(
         "You don't have permission to perform this action",
       );
-    }
-
-    if (
-      requirement.catalogManagerBypass &&
-      user.role === UserRole.CATALOG_MANAGER
-    ) {
-      return true;
     }
 
     if (!hasAdminAccess(user, requirement.key)) {
