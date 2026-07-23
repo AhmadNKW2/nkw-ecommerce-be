@@ -2,7 +2,8 @@ import { BadRequestException } from '@nestjs/common';
 import { ProductPriceRule } from './entities/product-price-rule.entity';
 
 export const MIN_PRODUCT_PRICE_RULE_PERCENTAGE = 1;
-export const PRODUCT_PRICE_ROUNDING_STEP = 0.5;
+/** Whole-dinar step used when forcing sale price below list price. */
+export const PRODUCT_PRICE_ROUNDING_STEP = 1;
 
 export type ProductPriceCondition = 'any' | 'more_than' | 'less_than' | 'between' | null;
 export type ProductPriceAdjustmentType = 'increase' | 'decrease';
@@ -46,7 +47,17 @@ export function roundManagedProductPrice(value: number): number {
     return 0;
   }
 
-  return Math.max(0, Number((Math.round(value * 2) / 2).toFixed(2)));
+  const whole = Math.trunc(value);
+  // Compare at 6 decimal places so 100.000001 is detected despite float noise.
+  const fractionMicros = Math.round(value * 1_000_000) - whole * 1_000_000;
+
+  // Any point from 0.000001 and above → add 1 and settle on .00
+  // e.g. 0.01 → 1.00, 100.21 → 101.00, 100.00 → 100.00
+  if (fractionMicros >= 1) {
+    return whole + 1;
+  }
+
+  return whole;
 }
 
 export function normalizeIdList(

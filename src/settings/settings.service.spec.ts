@@ -270,13 +270,13 @@ describe('SettingsService', () => {
     expect(transactionProductRepository.update).toHaveBeenNthCalledWith(1, 10, {
       original_vendor_price: 33,
       original_vendor_sale_price: 29.99,
-      price: 32.5,
-      sale_price: 29.5,
+      price: 33,
+      sale_price: 30,
     });
     expect(transactionProductRepository.update).toHaveBeenNthCalledWith(2, 11, {
       original_vendor_price: 12.49,
       original_vendor_sale_price: null,
-      price: 12.5,
+      price: 13,
       sale_price: null,
     });
     expect(result).toEqual({
@@ -317,7 +317,7 @@ describe('SettingsService', () => {
     expect(result.appliedSalePriceRule?.id).toBe(8);
   });
 
-  it('keeps original prices when no pricing rule matches', async () => {
+  it('rounds catalog prices to whole .00 even when no pricing rule matches', async () => {
     productPriceRuleRepository.find.mockResolvedValue([]);
 
     const result = await service.calculateManagedProductPrices({
@@ -325,8 +325,8 @@ describe('SettingsService', () => {
       originalVendorSalePrice: 80.42,
     });
 
-    expect(result.price).toBe(100.21);
-    expect(result.salePrice).toBe(80.42);
+    expect(result.price).toBe(101);
+    expect(result.salePrice).toBe(81);
     expect(result.appliedPriceRule).toBeNull();
     expect(result.appliedSalePriceRule).toBeNull();
   });

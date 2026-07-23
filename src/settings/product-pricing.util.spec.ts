@@ -77,7 +77,7 @@ describe('product-pricing.util', () => {
     );
 
     expect(matched?.id).toBe(3);
-    expect(calculateManagedPrice(50, matched!.percentage, matched!.adjustment_type)).toBe(57.5);
+    expect(calculateManagedPrice(50, matched!.percentage, matched!.adjustment_type)).toBe(58);
   });
 
   it('supports more_than price condition', () => {
@@ -135,10 +135,20 @@ describe('product-pricing.util', () => {
     expect(matched?.price_condition).toBeNull();
   });
 
-  it('rounds managed prices to .00 or .50 endings', () => {
-    expect(roundManagedProductPrice(100.52)).toBe(100.5);
+  it('adds 1 and settles on .00 when any fractional point exists', () => {
+    expect(roundManagedProductPrice(0.000001)).toBe(1);
+    expect(roundManagedProductPrice(0.01)).toBe(1);
+    expect(roundManagedProductPrice(0.5)).toBe(1);
+    expect(roundManagedProductPrice(0.999)).toBe(1);
+    expect(roundManagedProductPrice(1)).toBe(1);
+    expect(roundManagedProductPrice(100)).toBe(100);
+    expect(roundManagedProductPrice(100.000001)).toBe(101);
+    expect(roundManagedProductPrice(100.21)).toBe(101);
+    expect(roundManagedProductPrice(100.42)).toBe(101);
+    expect(roundManagedProductPrice(100.5)).toBe(101);
+    expect(roundManagedProductPrice(100.52)).toBe(101);
     expect(roundManagedProductPrice(100.99)).toBe(101);
-    expect(roundManagedProductPrice(100.42)).toBe(100.5);
-    expect(roundManagedProductPrice(100.21)).toBe(100);
+    expect(calculateManagedPrice(0.001, 10, 'increase')).toBe(1);
+    expect(calculateManagedPrice(100.21, 10, 'increase')).toBe(111);
   });
 });

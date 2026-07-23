@@ -35,6 +35,7 @@ import {
   normalizeCategoryIds,
   normalizeProductPriceRuleShape,
   ProductPricingContext,
+  roundManagedProductPrice,
   toAppliedProductPriceRule,
 } from './product-pricing.util';
 import { createProductPriceRulesTableDefinition } from './product-price-rule.table';
@@ -437,15 +438,18 @@ export class SettingsService implements OnModuleInit {
       ? null
       : findBestMatchingProductPriceRule(activeRules, pricingContext);
 
-    // No matching rule: keep catalog prices equal to original vendor prices.
+    // No matching rule: still apply catalog roundness (fraction → +1 .00).
     if (!params.fixedPercentage && !matchedPriceRule) {
+      const price = roundManagedProductPrice(params.originalVendorPrice);
+      const rawSalePrice =
+        params.originalVendorSalePrice === null ||
+        params.originalVendorSalePrice === undefined
+          ? null
+          : roundManagedProductPrice(params.originalVendorSalePrice);
+
       return {
-        price: params.originalVendorPrice,
-        salePrice:
-          params.originalVendorSalePrice === null ||
-          params.originalVendorSalePrice === undefined
-            ? null
-            : params.originalVendorSalePrice,
+        price,
+        salePrice: ensureSalePriceBelowPrice(price, rawSalePrice),
         appliedPriceRule: null,
         appliedSalePriceRule: null,
       };

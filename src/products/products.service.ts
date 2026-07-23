@@ -40,6 +40,10 @@ import { TagsService } from '../search/tags.service';
 import { Tag } from '../search/entities/tag.entity';
 import { isStorefrontAvailableProduct } from './utils/storefront-product-availability.util';
 import { SettingsService } from '../settings/settings.service';
+import {
+  ensureSalePriceBelowPrice,
+  roundManagedProductPrice,
+} from '../settings/product-pricing.util';
 import { TypesenseService } from '../typesense/typesense.service';
 import { SearchCacheService } from '../search/search-cache.service';
 import {
@@ -1960,6 +1964,20 @@ export class ProductsService {
           original_vendor_price: originalVendorPriceForRule,
           original_vendor_sale_price: originalVendorSalePriceForRule,
         });
+      const catalogPrice = roundManagedProductPrice(
+        managedPricingFromRule?.price ?? dto.price ?? 0,
+      );
+      const rawCatalogSalePrice =
+        managedPricingFromRule !== null
+          ? managedPricingFromRule.sale_price
+          : dto.sale_price ?? null;
+      const catalogSalePrice =
+        rawCatalogSalePrice === null || rawCatalogSalePrice === undefined
+          ? null
+          : ensureSalePriceBelowPrice(
+              catalogPrice,
+              roundManagedProductPrice(Number(rawCatalogSalePrice)),
+            );
 
       // 1. Create basic product (primary category is first in the list)
       const product = this.productsRepository.create({
@@ -1987,8 +2005,8 @@ export class ProductsService {
         visible: dto.visible ?? true,
         created_by: userId ?? null,
         cost: dto.cost ?? 0,
-        price: managedPricingFromRule?.price ?? dto.price ?? 0,
-        sale_price: managedPricingFromRule?.sale_price ?? dto.sale_price ?? null,
+        price: catalogPrice,
+        sale_price: catalogSalePrice,
         original_vendor_price:
           dto.original_vendor_price ??
           dto.original_price ??
@@ -3466,6 +3484,26 @@ export class ProductsService {
         ) {
           // Clearing the original sale price also removes the managed sale price.
           basicInfoChanges.sale_price = null;
+        }
+      }
+
+      // Catalog price/sale always use whole-.00 roundness (fraction → +1).
+      if (basicInfoChanges.price !== undefined) {
+        basicInfoChanges.price = roundManagedProductPrice(
+          Number(basicInfoChanges.price),
+        );
+      }
+      if (basicInfoChanges.sale_price !== undefined) {
+        if (basicInfoChanges.sale_price === null) {
+          basicInfoChanges.sale_price = null;
+        } else {
+          const listPrice = Number(
+            basicInfoChanges.price ?? existingProduct.price ?? 0,
+          );
+          basicInfoChanges.sale_price = ensureSalePriceBelowPrice(
+            listPrice,
+            roundManagedProductPrice(Number(basicInfoChanges.sale_price)),
+          );
         }
       }
 

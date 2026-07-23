@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config({ path: 'c:/Projects/ordonsooq/ordonsooq-be/.env' });
 
 const APPLY = process.argv.includes('--apply');
-const ROUNDING_STEP = 0.5;
+const ROUNDING_STEP = 1;
 const NUMERIC_TOLERANCE = 0.000001;
 
 const client = new pg.Client({
@@ -164,7 +164,20 @@ function specificityScore(rule) {
 }
 
 function roundManagedPrice(value) {
-  return Math.max(0, Number((Math.round(value * 2) / 2).toFixed(2)));
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+
+  const whole = Math.trunc(value);
+  // Compare at 6 decimal places so 100.000001 is detected despite float noise.
+  const fractionMicros = Math.round(value * 1_000_000) - whole * 1_000_000;
+
+  // Any point from 0.000001 and above → add 1 and settle on .00
+  if (fractionMicros >= 1) {
+    return whole + 1;
+  }
+
+  return whole;
 }
 
 function calculateManagedPrice(sourcePrice, rule) {
